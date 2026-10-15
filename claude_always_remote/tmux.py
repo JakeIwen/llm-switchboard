@@ -86,6 +86,11 @@ class Tmux:
         result = self._run(args, check=False)
         return result.stdout if result.returncode == 0 else ""
 
+    def send_line(self, window_id: str, text: str) -> None:
+        """Type text into the pane literally, then press Enter."""
+        self._run(["send-keys", "-t", window_id, "-l", text])
+        self._run(["send-keys", "-t", window_id, "Enter"])
+
     def kill_server(self) -> None:
         self._run(["kill-server"], check=False)
 

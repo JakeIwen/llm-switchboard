@@ -15,31 +15,53 @@ import socket
 import time
 
 from .catalog import session_rows
+from .conversation import recent_messages
 from .live_registry import live_processes
-from .session_id import is_session_id
+from .session_actions import Conflict, SessionActions
+from .session_id import is_session_id, short_id
 from .store import Store
 from .supervisor import Supervisor
 from .tmux import Tmux
 from .transcripts import TranscriptIndex
+from .trash import Trash
 
 log = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
-_ACTION_RE = re.compile(r"^/api/sessions/([^/]+)/(enable|disable|restart|name|screen)$")
+_ACTION_RE = re.compile(r"^/api/sessions/([^/]+)/([a-z]+)$")
+_GET_ACTIONS = {"screen", "messages"}
+_POST_ACTIONS = {"enable", "disable", "restart", "name", "rename", "delete", "restore"}
 _MAX_BODY = 16 * 1024
 
 
 class App:
-    def __init__(self, store: Store, index: TranscriptIndex, supervisor: Supervisor, tmux: Tmux, registry=live_processes):
+    def __init__(self, store: Store, index: TranscriptIndex, supervisor: Supervisor, tmux: Tmux, trash: Trash,
+                 registry=live_processes, actions: SessionActions | None = None):
         self.store = store
         self.index = index
         self.supervisor = supervisor
         self.tmux = tmux
+        self.trash = trash
         self.registry = registry
+        self.actions = actions or SessionActions(store, index, supervisor, tmux, trash, registry=registry)
 
     def list_sessions(self) -> dict:
         rows = session_rows(self.index.all(), self.store.load(), self.registry(), self.supervisor.snapshot())
         return {"host": socket.gethostname(), "now": time.time(), "sessions": rows}
+
+    def list_trash(self) -> dict:
+        items = [
+            {"id": i.session_id, "short_id": short_id(i.session_id), "title": i.title,
+             "project": i.project, "deleted_at": i.deleted_at}
+            for i in self.trash.items()
+        ]
+        return {"trash": items}
+
+    def messages(self, sid: str) -> dict:
+        transcript = self.index.get(sid)
+        if transcript is None:
+            raise LookupError("no transcript with that session id")
+        return {"messages": recent_messages(transcript.path)}
 
     def screen(self, sid: str) -> dict:
         status = self.supervisor.snapshot().get(sid)
@@ -66,6 +88,12 @@ class App:
         elif action == "restart":
             self.supervisor.request_restart(sid)
             return {"ok": True}
+        elif action == "rename":
+            return self.actions.rename(sid, body.get("title"))
+        elif action == "delete":
+            return self.actions.delete(sid)
+        elif action == "restore":
+            return self.actions.restore(sid)
         else:
             raise ValueError(f"unknown action {action}")
         self.supervisor.wake()
@@ -81,14 +109,20 @@ def make_handler(app: App):
                 return self._send_file(STATIC_DIR / "index.html", "text/html; charset=utf-8")
             if self.path == "/api/sessions":
                 return self._send_json(app.list_sessions())
+            if self.path == "/api/trash":
+                return self._send_json(app.list_trash())
             match = _ACTION_RE.match(self.path)
-            if match and match.group(2) == "screen" and is_session_id(match.group(1)):
-                return self._send_json(app.screen(match.group(1)))
+            if match and match.group(2) in _GET_ACTIONS and is_session_id(match.group(1)):
+                sid, action = match.groups()
+                try:
+                    return self._send_json(app.screen(sid) if action == "screen" else app.messages(sid))
+                except LookupError as e:
+                    return self._send_json({"error": str(e)}, HTTPStatus.NOT_FOUND)
             self._send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
 
         def do_POST(self):
             match = _ACTION_RE.match(self.path)
-            if not match or match.group(2) == "screen":
+            if not match or match.group(2) not in _POST_ACTIONS:
                 return self._send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
             sid, action = match.groups()
             if not is_session_id(sid):
@@ -100,6 +134,8 @@ def make_handler(app: App):
                 result = app.act(sid, action, body)
             except LookupError as e:
                 return self._send_json({"error": str(e)}, HTTPStatus.NOT_FOUND)
+            except Conflict as e:
+                return self._send_json({"error": str(e)}, HTTPStatus.CONFLICT)
             except ValueError as e:
                 return self._send_json({"error": str(e)}, HTTPStatus.BAD_REQUEST)
             log.info("%s %s from %s", action, sid[:8], self.client_address[0])

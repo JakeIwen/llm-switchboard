@@ -13,6 +13,11 @@ LAUNCH_FUNCTION = "claudepd"
 
 
 def pane_command(session_id: str, cwd: str, rc_name: str) -> str:
-    claude = f"{LAUNCH_FUNCTION} --resume {shlex.quote(session_id)} --remote-control {shlex.quote(rc_name)}"
-    inner = f"cd -- {shlex.quote(cwd)} && {claude}" if cwd else claude
+    inner = f"{resume_command(session_id, cwd)} --remote-control {shlex.quote(rc_name)}"
     return f"exec bash -lic {shlex.quote(inner)}"
+
+
+def resume_command(session_id: str, cwd: str) -> str:
+    """What to type in a shell to open the session by hand."""
+    claude = f"{LAUNCH_FUNCTION} --resume {shlex.quote(session_id)}"
+    return f"cd -- {shlex.quote(cwd)} && {claude}" if cwd else claude

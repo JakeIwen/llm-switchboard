@@ -23,6 +23,24 @@ claude.ai/code. A small web page on the Pi picks which sessions those are.
   them.
 - Enabled sessions are stored in `~/.config/claude-always-remote/sessions.json`.
 
+## Picker
+
+Toggle a session to keep it running. Folder chips filter the list. Expand a
+session for:
+
+- **Open in Claude**: its claude.ai/code link (from its last Remote Control connection)
+- **Recent messages**: the last few prompts and replies
+- **Terminal screen** and **Restart** (kept-running sessions)
+- **Rename**: types `/rename` into a running kept session (when idle), or
+  appends Claude Code's own `custom-title` record to a closed one
+- **Delete**: stops it if kept running, then moves the transcript (and its
+  companion folder) to `~/.local/share/claude-always-remote/trash/`, with
+  Undo and a "Recently deleted" list; entries expire after 30 days
+- Copyable resume and attach commands
+
+Rename and delete are refused while the session is open in another claude
+process (like an SSH terminal), the same rule as `clauderm`/`claudeclean`.
+
 ## Install
 
 ```

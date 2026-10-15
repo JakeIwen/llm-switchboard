@@ -53,6 +53,12 @@ class Store:
     def set_name(self, session_id: str, name: str) -> Entry:
         return self._update(session_id, name=name.strip())
 
+    def remove(self, session_id: str) -> None:
+        with self._locked():
+            entries = self.load()
+            if entries.pop(session_id, None) is not None:
+                self._write(entries)
+
     def _update(self, session_id: str, **changes) -> Entry:
         if not is_session_id(session_id):
             raise ValueError(f"not a session id: {session_id!r}")

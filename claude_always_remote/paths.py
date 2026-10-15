@@ -12,6 +12,7 @@ LIVE_REGISTRY_DIR = CLAUDE_DIR / "sessions"
 
 STATE_DIR = Path(os.environ.get("XDG_CONFIG_HOME") or HOME / ".config") / "claude-always-remote"
 STORE_FILE = STATE_DIR / "sessions.json"
+TRASH_DIR = Path(os.environ.get("XDG_DATA_HOME") or HOME / ".local" / "share") / "claude-always-remote" / "trash"
 
 # A dedicated tmux server keeps these windows apart from any tmux the user runs.
 TMUX_SOCKET = "claude-always-remote"

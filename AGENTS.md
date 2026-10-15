@@ -20,6 +20,9 @@ running; the supervisor adopts their windows).
 | `claude_always_remote/screen.py` | Reading a captured Claude Code screen: `/rc` indicator, blocking prompts |
 | `claude_always_remote/connectivity.py` | API reachability gate |
 | `claude_always_remote/supervisor.py` | Reconcile loop, `State` enum, backoff |
+| `claude_always_remote/session_actions.py` | Rename / delete / restore, aware of running processes (`Conflict` → 409) |
+| `claude_always_remote/trash.py` | Deleted transcripts, kept 30 days for restore |
+| `claude_always_remote/conversation.py` | Recent prompts and replies from a transcript's tail |
 | `claude_always_remote/catalog.py` | Row shape shared by the web API and CLI |
 | `claude_always_remote/web.py` | HTTP API and static page |
 | `claude_always_remote/cli.py` | argparse entry point |
@@ -32,5 +35,7 @@ running; the supervisor adopts their windows).
   CLI edit the store and call `wake()` / `request_restart()`.
 - Sessions must launch through the `claudepd` bash function, never a copy
   of its flags: Remote Control depends on its settings.
+- Never edit a transcript another claude process has open; a running
+  process owns its title (rename it by typing `/rename` into our window).
 - State names are the `State` enum in `supervisor.py`; the page's `STATE`
   table mirrors them for labels.

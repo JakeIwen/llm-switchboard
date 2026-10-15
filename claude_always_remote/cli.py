@@ -19,6 +19,7 @@ from .store import Store
 from .supervisor import Supervisor
 from .tmux import Tmux
 from .transcripts import TranscriptIndex
+from .trash import Trash
 from .web import App, make_server
 
 
@@ -68,7 +69,7 @@ def _serve(args) -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     store, index, tmux = Store(), TranscriptIndex(), Tmux()
     supervisor = Supervisor(store, index, tmux, Connectivity(), interval_s=args.interval)
-    server = make_server(App(store, index, supervisor, tmux), args.host, args.port)
+    server = make_server(App(store, index, supervisor, tmux, Trash()), args.host, args.port)
     stop = threading.Event()
 
     def shutdown(*_):

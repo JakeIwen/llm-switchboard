@@ -32,6 +32,7 @@ class FakeTmux:
         self.screens: dict[str, str] = {}
         self.started = []
         self.killed = []
+        self.sent = []
         self._n = 0
 
     def windows(self):
@@ -50,6 +51,9 @@ class FakeTmux:
 
     def capture(self, window_id, history=0):
         return self.screens.get(window_id, "")
+
+    def send_line(self, window_id, text):
+        self.sent.append((window_id, text))
 
     def window_for(self, sid):
         return next(w for w in self.wins.values() if w.session_id == sid)

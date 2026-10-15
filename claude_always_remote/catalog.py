@@ -3,6 +3,7 @@ enabled, whether it's open anywhere, and what the supervisor is doing with it.""
 
 from dataclasses import asdict
 
+from .launcher import resume_command
 from .live_registry import LiveProcess
 from .session_id import short_id
 from .store import Entry
@@ -35,6 +36,8 @@ def _row(sid: str, t: Transcript | None, entry: Entry | None, live: list[LivePro
         "project": t.project if t else "",
         "mtime": t.mtime if t else None,
         "size": t.size if t else None,
+        "remote_url": t.remote_url if t else "",
+        "resume_cmd": resume_command(sid, t.cwd if t else ""),
         "enabled": bool(entry and entry.enabled),
         "rc_name": entry.name if entry else "",
         "open_elsewhere": [{"pid": p.pid, "status": p.status} for p in open_elsewhere],

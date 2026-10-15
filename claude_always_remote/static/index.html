@@ -98,6 +98,27 @@ pre {
 .empty, .err { color: var(--muted); padding: 24px 4px; text-align: center; }
 .err { color: var(--bad); }
 .hint { color: var(--muted); font-size: 12px; }
+.actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.btn.danger { color: var(--bad); }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+a.btn { text-decoration: none; display: inline-block; }
+.cmdline { display: flex; gap: 6px; align-items: stretch; }
+.cmdline .cmd { flex: 1; min-width: 0; }
+.cmdline .btn { padding: 4px 10px; font-size: 13px; }
+.msgs { display: flex; flex-direction: column; gap: 6px; max-height: 420px; overflow-y: auto; }
+.msg { padding: 8px 10px; border-radius: 10px; font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; max-width: 92%; }
+.msg.user { align-self: flex-end; background: color-mix(in srgb, var(--accent) 16%, var(--surface)); }
+.msg.assistant { align-self: flex-start; background: var(--surface-2); }
+.trash { margin-top: 20px; }
+.trash summary { cursor: pointer; color: var(--muted); font-size: 14px; }
+.trash .card { margin-top: 8px; display: flex; gap: 10px; align-items: center; justify-content: space-between; }
+.toast {
+  position: fixed; left: 50%; bottom: calc(16px + env(safe-area-inset-bottom)); transform: translateX(-50%);
+  background: var(--text); color: var(--bg); padding: 10px 14px; border-radius: 12px; display: flex; gap: 12px;
+  align-items: center; max-width: calc(100% - 32px); box-shadow: 0 6px 24px rgba(0,0,0,.25); font-size: 14px; z-index: 10;
+}
+.toast[hidden] { display: none; }
+.toast button { border: 0; background: none; color: var(--accent); font: inherit; font-weight: 700; cursor: pointer; padding: 0; }
 </style>
 </head>
 <body>
@@ -116,8 +137,10 @@ pre {
   </div>
   <div class="dirs" id="dirs" aria-label="Filter by folder"></div>
   <div class="list" id="list"></div>
+  <details class="trash" id="trash" hidden><summary id="trash-sum"></summary><div id="trash-list"></div></details>
   <p class="hint">Enabled sessions are resumed through <code>claudepd … --remote-control</code> in tmux, relaunched if they exit, and started again at boot.</p>
 </div>
+<div class="toast" id="toast" hidden><span id="toast-msg"></span><button id="toast-undo" type="button">Undo</button></div>
 <script>
 const STATE = {
   running:   ["Remote Control on", "b-ok"],
@@ -139,7 +162,8 @@ function setDir(d) {
 }
 const UNKNOWN_DIR = "(unknown folder)";
 const dirOf = (s) => s.project || UNKNOWN_DIR;
-const expanded = new Set(), screens = new Map();
+const expanded = new Set(), screens = new Map(), peeks = new Map();
+let trash = [];
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 
@@ -163,7 +187,7 @@ async function api(path, body) {
 
 async function refresh() {
   try {
-    data = await api("/api/sessions");
+    [data, { trash }] = await Promise.all([api("/api/sessions"), api("/api/trash")]);
     render();
   } catch (e) {
     $("list").innerHTML = `<div class="err">Can't reach the service: ${esc(e.message)}</div>`;
@@ -214,27 +238,60 @@ function badges(s) {
   return out.length ? `<div class="badges">${out.join("")}</div>` : "";
 }
 
+function copyButton(text) {
+  return `<button class="btn" data-act="copy" data-text="${esc(text)}">Copy</button>`;
+}
+
+function messagesBlock(id) {
+  const m = peeks.get(id);
+  if (m === undefined) return "";
+  if (typeof m === "string") return `<div class="hint">${esc(m)}</div>`;
+  if (!m.length) return `<div class="hint">No messages yet.</div>`;
+  return `<div class="msgs">${m.map((x) => `<div class="msg ${x.role}">${esc(x.text)}</div>`).join("")}</div>`;
+}
+
 function panel(s) {
   const st = s.status || {};
   const screen = screens.get(s.id);
+  const elsewhere = s.open_elsewhere.length ? `Open in another claude process (pid ${s.open_elsewhere[0].pid}); close it to rename or delete.` : "";
+  const lock = elsewhere ? `disabled title="${esc(elsewhere)}"` : "";
   const exit = st.last_exit ? `<div class="hint">Last exit: status ${esc(st.last_exit.status)} after ${Math.round(st.last_exit.ran_s)}s, ${age(st.last_exit.at)} · launches: ${st.launches}</div>` : "";
+  const attach = `claude-always-remote attach ${s.short_id}`;
   return `<div class="panel">
+    <div class="actions">
+      ${s.remote_url ? `<a class="btn" href="${esc(s.remote_url)}" target="_blank" rel="noopener">Open in Claude ↗</a>` : ""}
+      <button class="btn" data-act="peek" data-id="${s.id}">${peeks.has(s.id) ? "Refresh messages" : "Recent messages"}</button>
+      ${s.enabled ? `<button class="btn" data-act="screen" data-id="${s.id}">${screen !== undefined ? "Refresh screen" : "Terminal screen"}</button>` : ""}
+      ${s.enabled ? `<button class="btn" data-act="restart" data-id="${s.id}">Restart</button>` : ""}
+      <button class="btn danger" data-act="delete" data-id="${s.id}" ${lock}>Delete</button>
+    </div>
+    ${elsewhere ? `<div class="hint">${esc(elsewhere)}</div>` : ""}
+    ${messagesBlock(s.id)}
+    ${screen !== undefined ? `<pre>${esc(screen || "(nothing to show)")}</pre>` : ""}
+    <div>
+      <label for="title-${s.id}">Title</label>
+      <div class="line">
+        <input type="text" id="title-${s.id}" value="${esc(s.title)}" maxlength="120">
+        <button class="btn" data-act="rename" data-id="${s.id}" ${lock}>Rename</button>
+      </div>
+    </div>
     <div>
       <label for="name-${s.id}">Remote Control name (blank = session title; applies on next launch)</label>
       <div class="line">
-        <input type="text" id="name-${s.id}" value="${esc(s.rc_name)}" placeholder="${esc(st.rc_name || s.title)}">
+        <input type="text" id="name-${s.id}" value="${esc(s.rc_name)}" placeholder="${esc(st.rc_name || s.title)}" maxlength="120">
         <button class="btn" data-act="name" data-id="${s.id}">Save</button>
-        ${s.enabled ? `<button class="btn" data-act="restart" data-id="${s.id}">Restart</button>` : ""}
       </div>
     </div>
     ${exit}
     <div>
-      <label>Attach from an SSH shell on the Pi</label>
-      <div class="cmd">claude-always-remote attach ${esc(s.short_id)}</div>
+      <label>Resume in a shell on the Pi</label>
+      <div class="cmdline"><div class="cmd">${esc(s.resume_cmd)}</div>${copyButton(s.resume_cmd)}</div>
     </div>
-    <div class="line"><button class="btn" data-act="screen" data-id="${s.id}">${screen ? "Refresh screen" : "Show screen"}</button>
-      <span class="hint">${s.cwd ? esc(s.cwd) : ""} · <code>${esc(s.id)}</code></span></div>
-    ${screen !== undefined ? `<pre>${esc(screen || "(nothing to show)")}</pre>` : ""}
+    ${s.enabled ? `<div>
+      <label>Attach to its tmux window (detach: Ctrl-b d)</label>
+      <div class="cmdline"><div class="cmd">${esc(attach)}</div>${copyButton(attach)}</div>
+    </div>` : ""}
+    <div class="hint">${s.cwd ? esc(s.cwd) + " · " : ""}<code>${esc(s.id)}</code></div>
   </div>`;
 }
 
@@ -267,6 +324,44 @@ function render() {
   renderDirs();
   const rows = visible();
   $("list").innerHTML = rows.length ? rows.map(card).join("") : `<div class="empty">No sessions match.</div>`;
+  renderTrash();
+}
+
+function renderTrash() {
+  $("trash").hidden = !trash.length;
+  $("trash-sum").textContent = `Recently deleted (${trash.length}) · kept 30 days`;
+  $("trash-list").innerHTML = trash.map((t) => `<div class="card">
+    <div class="main"><div class="title">${esc(t.title)}</div>
+      <div class="meta"><span>${esc(t.project)}</span><span>deleted ${age(t.deleted_at)}</span><code>${esc(t.short_id)}</code></div></div>
+    <button class="btn" data-restore="${t.id}">Restore</button></div>`).join("");
+}
+
+let toastTimer = null;
+function toast(msg, undo) {
+  $("toast-msg").textContent = msg;
+  $("toast-undo").hidden = !undo;
+  $("toast-undo").onclick = () => { $("toast").hidden = true; undo(); };
+  $("toast").hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { $("toast").hidden = true; }, undo ? 10000 : 4000);
+}
+
+async function copyText(text) {
+  // navigator.clipboard needs a secure (https) page; plain http on the LAN falls back to execCommand.
+  try { await navigator.clipboard.writeText(text); return true; } catch {}
+  const ta = document.createElement("textarea");
+  ta.value = text; ta.setAttribute("readonly", ""); ta.style.position = "fixed"; ta.style.opacity = "0";
+  document.body.appendChild(ta); ta.select(); ta.setSelectionRange(0, text.length);
+  let ok = false;
+  try { ok = document.execCommand("copy"); } catch {}
+  ta.remove();
+  return ok;
+}
+
+async function restore(id) {
+  try { await api(`/api/sessions/${id}/restore`, {}); toast("Restored."); }
+  catch (e) { toast(`Restore failed: ${e.message}`); }
+  refresh();
 }
 
 async function loadScreen(id) {
@@ -299,7 +394,34 @@ $("list").addEventListener("click", async (ev) => {
   } else if (el.dataset.act === "name") {
     await act(id, "name", { name: $("name-" + id).value });
     document.activeElement.blur();
+  } else if (el.dataset.act === "rename") {
+    const title = $("title-" + id).value.trim();
+    document.activeElement.blur();
+    if (!title || title === s.title) return;
+    if (await act(id, "rename", { title })) toast(`Renamed to “${title}”.`);
+  } else if (el.dataset.act === "copy") {
+    toast((await copyText(el.dataset.text)) ? "Copied." : "Couldn't copy; select the text instead.");
+  } else if (el.dataset.act === "peek") {
+    try { peeks.set(id, (await api(`/api/sessions/${id}/messages`)).messages); }
+    catch (e) { peeks.set(id, "Couldn't load messages: " + e.message); }
+    render();
+  } else if (el.dataset.act === "delete") {
+    const msg = s.enabled
+      ? `Stop “${s.title}” and delete it?\n\nIt stops being kept running. The transcript goes to Recently deleted for 30 days.`
+      : `Delete “${s.title}”?\n\nThe transcript goes to Recently deleted for 30 days.`;
+    if (s.status && s.status.busy && !confirm("This session is working on a turn right now. Continue?")) return;
+    if (!confirm(msg)) return;
+    el.disabled = true; el.textContent = "Deleting…";
+    if (await act(id, "delete")) {
+      expanded.delete(id);
+      toast(`Deleted “${s.title}”.`, () => restore(id));
+    }
   }
+});
+
+$("trash-list").addEventListener("click", (ev) => {
+  const el = ev.target.closest("[data-restore]");
+  if (el) restore(el.dataset.restore);
 });
 
 $("list").addEventListener("change", async (ev) => {
@@ -314,9 +436,11 @@ $("list").addEventListener("change", async (ev) => {
 });
 
 async function act(id, action, body = {}) {
+  let ok = true;
   try { await api(`/api/sessions/${id}/${action}`, body); }
-  catch (e) { alert(`${action} failed: ${e.message}`); }
+  catch (e) { ok = false; alert(`${action} failed: ${e.message}`); }
   setTimeout(refresh, 600);
+  return ok;
 }
 
 for (const [btn, f] of [["f-all", "all"], ["f-on", "on"], ["f-open", "open"]]) {

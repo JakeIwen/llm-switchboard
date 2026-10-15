@@ -22,6 +22,10 @@ _USER = b'"type":"user"'
 _CUSTOM_TITLE = b'"type":"custom-title"'
 _AI_TITLE = b'"type":"ai-title"'
 _SUMMARY = b'"type":"summary"'
+_BRIDGE = b'"type":"bridge-session"'
+# A Remote Control bridge id "cse_X" is the claude.ai session "session_X".
+_BRIDGE_PREFIX = "cse_"
+REMOTE_URL_BASE = "https://claude.ai/code/session_"
 
 
 @dataclass(frozen=True)
@@ -33,6 +37,8 @@ class Transcript:
     first_prompt: str
     mtime: float
     size: int
+    # claude.ai link from the last Remote Control connection, if there was one.
+    remote_url: str = ""
 
     @property
     def project(self) -> str:
@@ -46,7 +52,7 @@ class Transcript:
 def summarize(path: Path) -> Transcript | None:
     """Read one transcript. Returns None for files with no conversation in them."""
     stat = path.stat()
-    cwd = first_prompt = custom_title = ai_title = summary = ""
+    cwd = first_prompt = custom_title = ai_title = summary = bridge_id = ""
     with open(path, "rb") as f:
         for line in f:
             if not cwd and _CWD in line:
@@ -57,8 +63,10 @@ def summarize(path: Path) -> Transcript | None:
                 ai_title = str(_loads(line).get("aiTitle") or ai_title)
             elif _SUMMARY in line:
                 summary = str(_loads(line).get("summary") or summary)
+            elif _BRIDGE in line:
+                bridge_id = str(_loads(line).get("bridgeSessionId") or bridge_id)
             elif not first_prompt and _USER in line:
-                first_prompt = _prompt_text(_loads(line))
+                first_prompt = prompt_text(_loads(line))
     title = custom_title or ai_title or summary or first_prompt
     if not title:
         return None
@@ -70,7 +78,14 @@ def summarize(path: Path) -> Transcript | None:
         first_prompt=_one_line(first_prompt),
         mtime=stat.st_mtime,
         size=stat.st_size,
+        remote_url=_remote_url(bridge_id),
     )
+
+
+def _remote_url(bridge_id: str) -> str:
+    if not bridge_id.startswith(_BRIDGE_PREFIX):
+        return ""
+    return REMOTE_URL_BASE + bridge_id[len(_BRIDGE_PREFIX):]
 
 
 def _loads(line: bytes) -> dict:
@@ -81,7 +96,7 @@ def _loads(line: bytes) -> dict:
     return value if isinstance(value, dict) else {}
 
 
-def _prompt_text(record: dict) -> str:
+def prompt_text(record: dict) -> str:
     """The text the user typed, or "" for tool results, meta records and slash-command echoes."""
     if record.get("isMeta"):
         return ""

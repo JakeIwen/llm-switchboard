@@ -8,6 +8,7 @@ from pathlib import Path
 
 from claude_always_remote.store import Store
 from claude_always_remote.supervisor import Supervisor
+from claude_always_remote.trash import Trash
 from claude_always_remote.web import App, make_server
 
 from fakes import SID, SID2, Clock, FakeConnectivity, FakeIndex, FakeTmux, transcript
@@ -21,7 +22,7 @@ class WebTest(unittest.TestCase):
         index = FakeIndex(transcript())
         self.tmux = FakeTmux()
         self.sup = Supervisor(self.store, index, self.tmux, FakeConnectivity(), registry=lambda: [], clock=Clock())
-        server = make_server(App(self.store, index, self.sup, self.tmux, registry=lambda: []), "127.0.0.1", 0)
+        server = make_server(App(self.store, index, self.sup, self.tmux, Trash(Path(tmp.name) / "trash"), registry=lambda: []), "127.0.0.1", 0)
         self.base = f"http://127.0.0.1:{server.server_address[1]}"
         threading.Thread(target=server.serve_forever, daemon=True).start()
         self.addCleanup(server.server_close)
@@ -61,6 +62,17 @@ class WebTest(unittest.TestCase):
         self.tmux.screens[self.tmux.window_for(SID).window_id] = "hello screen"
         status, body = self.call(f"/api/sessions/{SID}/screen")
         self.assertEqual(body, {"source": "live", "screen": "hello screen"})
+
+    def test_unknown_actions_are_not_found(self):
+        self.assertEqual(self.call(f"/api/sessions/{SID}/explode", {})[0], 404)
+        self.assertEqual(self.call(f"/api/sessions/{SID}/screen", {})[0], 404)
+
+    def test_rename_conflict_maps_to_409(self):
+        self.store.set_enabled(SID, True)
+        self.sup.reconcile()  # window up, but no idle claude process yet
+        status, body = self.call(f"/api/sessions/{SID}/rename", {"title": "new"})
+        self.assertEqual(status, 409)
+        self.assertIn("idle", body["error"])
 
     def test_serves_the_page(self):
         with urllib.request.urlopen(self.base + "/") as resp:
