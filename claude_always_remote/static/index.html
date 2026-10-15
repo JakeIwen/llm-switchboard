@@ -38,6 +38,16 @@ input[type=search], input[type=text] {
 .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--surface); }
 .seg button { border: 0; background: transparent; color: var(--muted); padding: 8px 12px; font: inherit; cursor: pointer; }
 .seg button.on { background: var(--surface-2); color: var(--text); font-weight: 600; }
+.dirs { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 12px; }
+.chip {
+  border: 1px solid var(--border); background: var(--surface); color: var(--text); font: inherit; font-size: 13px;
+  padding: 5px 10px; border-radius: 999px; cursor: pointer; max-width: 100%; overflow-wrap: anywhere; text-align: left;
+}
+.chip .n { color: var(--muted); margin-left: 4px; font-variant-numeric: tabular-nums; }
+.chip.on { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.chip.on .n { color: inherit; opacity: .8; }
+.chip.zero { opacity: .45; }
+.dirlink { border: 0; background: none; padding: 0; font: inherit; color: inherit; cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; }
 .list { display: flex; flex-direction: column; gap: 8px; }
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 12px 14px; }
 .card.enabled { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
@@ -104,6 +114,7 @@ pre {
       <button id="f-open" type="button">Open now</button>
     </div>
   </div>
+  <div class="dirs" id="dirs" aria-label="Filter by folder"></div>
   <div class="list" id="list"></div>
   <p class="hint">Enabled sessions are resumed through <code>claudepd … --remote-control</code> in tmux, relaunched if they exit, and started again at boot.</p>
 </div>
@@ -118,7 +129,16 @@ const STATE = {
   missing:   ["Transcript missing", "b-bad"],
   error:     ["Error", "b-bad"],
 };
-let data = null, filter = "all";
+let data = null, filter = "all", dir = null;
+// The chosen folder is a per-browser convenience; storage can be unavailable.
+try { dir = localStorage.getItem("car.dir"); } catch {}
+function setDir(d) {
+  dir = d;
+  try { d === null ? localStorage.removeItem("car.dir") : localStorage.setItem("car.dir", d); } catch {}
+  render();
+}
+const UNKNOWN_DIR = "(unknown folder)";
+const dirOf = (s) => s.project || UNKNOWN_DIR;
 const expanded = new Set(), screens = new Map();
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -150,14 +170,31 @@ async function refresh() {
   }
 }
 
-function visible() {
+// Every filter except the folder one, so folder counts reflect the search and tab.
+function matches(s) {
   const q = $("q").value.trim().toLowerCase();
-  return data.sessions.filter((s) => {
-    if (filter === "on" && !s.enabled) return false;
-    if (filter === "open" && !(s.enabled || s.open_elsewhere.length)) return false;
-    if (!q) return true;
-    return [s.title, s.first_prompt, s.project, s.id, s.rc_name].some((v) => (v || "").toLowerCase().includes(q));
-  });
+  if (filter === "on" && !s.enabled) return false;
+  if (filter === "open" && !(s.enabled || s.open_elsewhere.length)) return false;
+  if (!q) return true;
+  return [s.title, s.first_prompt, s.project, s.id, s.rc_name].some((v) => (v || "").toLowerCase().includes(q));
+}
+
+const visible = () => data.sessions.filter((s) => matches(s) && (dir === null || dirOf(s) === dir));
+
+function renderDirs() {
+  // Folders ordered by their most recent session.
+  const dirs = new Map();
+  for (const s of data.sessions) {
+    const d = dirs.get(dirOf(s)) || { latest: 0, n: 0 };
+    d.latest = Math.max(d.latest, s.mtime || 0);
+    if (matches(s)) d.n++;
+    dirs.set(dirOf(s), d);
+  }
+  if (dir !== null && !dirs.has(dir)) dirs.set(dir, { latest: 0, n: 0 });
+  const total = data.sessions.filter(matches).length;
+  const chip = (d, label, n) => `<button type="button" class="chip ${dir === d ? "on" : ""} ${n ? "" : "zero"}" data-dir="${esc(d ?? "")}" ${d === null ? "data-all" : ""}>${esc(label)}<span class="n">${n}</span></button>`;
+  const sorted = [...dirs].sort((a, b) => b[1].latest - a[1].latest);
+  $("dirs").innerHTML = chip(null, "All folders", total) + sorted.map(([d, v]) => chip(d, d, v.n)).join("");
 }
 
 function badges(s) {
@@ -212,7 +249,7 @@ function card(s) {
       </label>
       <div class="main">
         <div class="title">${esc(s.title)}</div>
-        <div class="meta"><span>${esc(s.project)}</span><span>${age(s.mtime)}</span><code>${esc(s.short_id)}</code><span>${size(s.size)}</span></div>
+        <div class="meta"><button type="button" class="dirlink" data-dir="${esc(dirOf(s))}" title="Show only this folder">${esc(dirOf(s))}</button><span>${age(s.mtime)}</span><code>${esc(s.short_id)}</code><span>${size(s.size)}</span></div>
         ${badges(s)}${detail}
       </div>
       <button class="more" data-act="expand" data-id="${s.id}" aria-label="Details">${expanded.has(s.id) ? "▴" : "▾"}</button>
@@ -227,6 +264,7 @@ function render() {
   const on = data.sessions.filter((s) => s.enabled);
   const rc = on.filter((s) => s.status && s.status.state === "running").length;
   $("summary").textContent = `${data.host} · ${on.length} kept running · ${rc} with Remote Control`;
+  renderDirs();
   const rows = visible();
   $("list").innerHTML = rows.length ? rows.map(card).join("") : `<div class="empty">No sessions match.</div>`;
 }
@@ -237,7 +275,16 @@ async function loadScreen(id) {
   render();
 }
 
+$("dirs").addEventListener("click", (ev) => {
+  const el = ev.target.closest("[data-dir]");
+  if (!el) return;
+  const d = el.hasAttribute("data-all") ? null : el.dataset.dir;
+  setDir(d === dir ? null : d);
+});
+
 $("list").addEventListener("click", async (ev) => {
+  const link = ev.target.closest(".dirlink");
+  if (link) return setDir(link.dataset.dir === dir ? null : link.dataset.dir);
   const el = ev.target.closest("[data-act]");
   if (!el || el.dataset.act === "toggle") return;
   const id = el.dataset.id, s = data.sessions.find((x) => x.id === id);
