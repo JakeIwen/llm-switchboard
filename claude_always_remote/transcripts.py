@@ -78,8 +78,8 @@ def summarize(path: Path) -> Transcript | None:
         session_id=path.stem,
         path=path,
         cwd=cwd,
-        title=_one_line(title),
-        first_prompt=_one_line(first_prompt),
+        title=one_line(title),
+        first_prompt=one_line(first_prompt),
         mtime=stat.st_mtime,
         size=stat.st_size,
         remote_url=_remote_url(bridge_id),
@@ -121,7 +121,7 @@ def prompt_text(record: dict) -> str:
     return "" if text.startswith("<") else text
 
 
-def _one_line(text: str) -> str:
+def one_line(text: str) -> str:
     text = " ".join(text.split())
     return text if len(text) <= _TITLE_LEN else text[: _TITLE_LEN - 1] + "…"
 

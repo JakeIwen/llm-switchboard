@@ -31,7 +31,7 @@ def recent_messages(path: Path, limit: int = 8) -> list[dict]:
             continue
         text = _text(record)
         if text:
-            messages.append({"role": record["type"], "text": _clip(text), "at": record.get("timestamp", "")})
+            messages.append({"role": record["type"], "text": clip_message(text), "at": record.get("timestamp", "")})
     return messages[-limit:]
 
 
@@ -46,5 +46,5 @@ def _text(record: dict) -> str:
     return "\n".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text").strip()
 
 
-def _clip(text: str) -> str:
+def clip_message(text: str) -> str:
     return text if len(text) <= _TEXT_LEN else text[: _TEXT_LEN - 1] + "…"
