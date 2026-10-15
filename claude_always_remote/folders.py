@@ -59,3 +59,15 @@ def new_session_folders(transcripts: list[Transcript], state_file: Path = CLAUDE
             blocked = ""
         folders.append(Folder(cwd=cwd, project=display_path(cwd), sessions=n, blocked=blocked))
     return sorted(folders, key=lambda f: (bool(f.blocked), -f.sessions, f.cwd))
+
+
+def existing_folder(cwd) -> str:
+    """A folder typed by the user, as an absolute path that exists."""
+    if not isinstance(cwd, str) or not cwd.strip():
+        raise ValueError("folder must be a non-empty path")
+    path = os.path.normpath(os.path.expanduser(cwd.strip()))
+    if not os.path.isabs(path):
+        raise ValueError("folder must be an absolute path (or start with ~)")
+    if not os.path.isdir(path):
+        raise ValueError(f"{path} is not an existing folder")
+    return path

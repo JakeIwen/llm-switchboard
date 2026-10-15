@@ -29,8 +29,10 @@ Sharing the socket would let its supervisor close the real windows.
 | `claude_always_remote/connectivity.py` | API reachability gate |
 | `claude_always_remote/supervisor.py` | Reconcile loop, `State` enum, backoff |
 | `claude_always_remote/session_actions.py` | Rename / create / delete / move / fork / restore, aware of running processes (`Conflict` → 409); per-folder unique names |
+| `claude_always_remote/conflict.py` | `Conflict`: an action the session's current state doesn't allow (→ 409) |
+| `claude_always_remote/names.py` | Cleaning names (`clean_title`) and keeping them unique per folder across every source (`Names`) |
 | `claude_always_remote/trash.py` | Deleted transcripts, kept 30 days for restore |
-| `claude_always_remote/folders.py` | Folders a new session may use (existing, trusted per `~/.claude.json`, never `~`) |
+| `claude_always_remote/folders.py` | Folders a new session may use (existing, trusted per `~/.claude.json`, never `~`); `existing_folder` for typed paths |
 | `claude_always_remote/notify.py` | Push notifications via `~/scripts/ntfy_send.sh` (`CLAUDE_ALWAYS_REMOTE_NOTIFY` overrides; empty disables) |
 | `claude_always_remote/relocate.py` | Moving or forking a transcript into a working folder (Claude Code's project-folder naming, line rewriting) |
 | `claude_always_remote/conversation.py` | Recent prompts and replies from a transcript's tail |
@@ -56,7 +58,7 @@ Sharing the socket would let its supervisor close the real windows.
 - Never edit a transcript another claude process has open; a running
   process owns its title (rename it by typing `/rename` into our window).
 - Session names are unique per folder (case and spacing ignored); every path
-  that sets or moves a name goes through `SessionActions._refuse_duplicate_name`.
+  that sets or moves a name goes through `Names.refuse_duplicate` (names.py).
 - State names are the `State` enum in `supervisor.py`; the page's `STATE`
   table in `app.js` mirrors them for labels.
 - The page polls every 4s; only rewrite DOM through `setHTML` (skips

@@ -12,36 +12,31 @@ transcript, so:
 - fork copies the conversation so far into a new session, leaving the
   original (running or not) as it is.
 
-No two sessions in one folder may share a name (case and spacing aside);
-Claude Code doesn't enforce that, so rename, create, move and fork do.
+Names stay unique per folder (see names.py).
 """
 
-import os
 import time
 import uuid
 
-from .folders import new_session_folders
+from .conflict import Conflict
+from .folders import existing_folder, new_session_folders
 from .live_registry import live_processes
+from .names import Names, claude_names, clean_title
 from .relocate import fork, relocate
 from .screen import blocking_prompt
 from .session_id import short_id
 from .store import Store
 from .supervisor import Supervisor
 from .tmux import Tmux
-from .transcripts import TranscriptIndex, custom_title_record, display_path
+from .transcripts import TranscriptIndex, custom_title_record
 from .trash import Trash
 
-MAX_TITLE_LEN = 120
 _STOP_TIMEOUT_S = 20
-
-
-class Conflict(Exception):
-    """The session's current state doesn't allow this right now."""
 
 
 class SessionActions:
     def __init__(self, store: Store, index: TranscriptIndex, supervisor: Supervisor, tmux: Tmux, trash: Trash,
-                 registry=live_processes, sleep=time.sleep, folders=new_session_folders):
+                 registry=live_processes, sleep=time.sleep, folders=new_session_folders, names: Names | None = None):
         self.store = store
         self.index = index
         self.supervisor = supervisor
@@ -50,21 +45,13 @@ class SessionActions:
         self.registry = registry
         self.sleep = sleep
         self.folders = folders
-
-    @staticmethod
-    def _clean_title(title) -> str:
-        if not isinstance(title, str) or not " ".join(title.split()):
-            raise ValueError("a name is required")
-        title = " ".join(title.split())
-        if len(title) > MAX_TITLE_LEN:
-            raise ValueError(f"the name must be at most {MAX_TITLE_LEN} characters")
-        return title
+        self.names = names or Names(claude_names(index, store))
 
     def rename(self, sid: str, title) -> dict:
-        title = self._clean_title(title)
+        title = clean_title(title)
         transcript = self._transcript(sid)
         self._refuse_if_open_elsewhere(sid, "rename")
-        self._refuse_duplicate_name(transcript.cwd, title, sid)
+        self.names.refuse_duplicate(transcript.cwd, title, sid)
         window = self._window(sid)
         if window is None:
             with open(transcript.path, "ab") as f:
@@ -78,13 +65,13 @@ class SessionActions:
 
     def create(self, cwd, title) -> dict:
         """Start a brand-new session in one of the offered folders, kept running."""
-        title = self._clean_title(title)
+        title = clean_title(title)
         folder = next((f for f in self.folders(self.index.all()) if f.cwd == cwd), None)
         if folder is None:
             raise ValueError("pick one of the listed folders")
         if folder.blocked:
             raise Conflict(folder.blocked)
-        self._refuse_duplicate_name(cwd, title)
+        self.names.refuse_duplicate(cwd, title)
         sid = str(uuid.uuid4())
         self.store.create(sid, cwd, title)
         self.supervisor.announce_when_ready(sid)
@@ -111,12 +98,12 @@ class SessionActions:
         return {"ok": True, "title": item.title, "trashed": True}
 
     def move(self, sid: str, cwd) -> dict:
-        new_cwd = _existing_folder(cwd)
+        new_cwd = existing_folder(cwd)
         transcript = self._transcript(sid)
         if new_cwd == transcript.cwd:
             return {"ok": True, "cwd": new_cwd, "moved": False}
         self._refuse_if_open_elsewhere(sid, "move")
-        self._refuse_duplicate_name(new_cwd, transcript.title, sid, "rename one of them first")
+        self.names.refuse_duplicate(new_cwd, transcript.title, sid, "rename one of them first")
         entry = self.store.load().get(sid)
         kept = bool(entry and entry.enabled)
         if kept:
@@ -135,10 +122,10 @@ class SessionActions:
 
     def fork(self, sid: str, cwd, title, keep: bool = False) -> dict:
         """Copy a conversation into a new session in cwd (default: the same folder)."""
-        title = self._clean_title(title)
+        title = clean_title(title)
         transcript = self._transcript(sid)
-        new_cwd = _existing_folder(cwd) if cwd else transcript.cwd
-        self._refuse_duplicate_name(new_cwd, title)
+        new_cwd = existing_folder(cwd) if cwd else transcript.cwd
+        self.names.refuse_duplicate(new_cwd, title)
         new_sid = str(uuid.uuid4())
         fork(transcript.path, sid, new_sid, transcript.cwd, new_cwd, title, self.index.projects_dir)
         if keep:
@@ -159,17 +146,6 @@ class SessionActions:
             raise LookupError("no transcript with that session id")
         return transcript
 
-    def _refuse_duplicate_name(self, cwd: str, title: str, sid: str | None = None,
-                               hint: str = "pick another name") -> None:
-        names = [(t.session_id, t.cwd, t.title) for t in self.index.all()]
-        # Created here and not yet on disk.
-        names += [(e.session_id, e.cwd, e.title) for e in self.store.load().values()
-                  if e.cwd and self.index.get(e.session_id) is None]
-        key = _name_key(title)
-        for other, other_cwd, other_title in names:
-            if other != sid and other_cwd == cwd and _name_key(other_title) == key:
-                raise Conflict(f"{display_path(cwd)} already has a session named “{other_title}”; {hint}.")
-
     def _refuse_if_open_elsewhere(self, sid: str, verb: str) -> None:
         others = [p for p in self.registry() if p.session_id == sid and p.managed_for != sid]
         if others:
@@ -185,17 +161,3 @@ class SessionActions:
                 raise Conflict(f"{short_id(sid)} didn't stop within {_STOP_TIMEOUT_S}s; try again.")
             self.sleep(0.5)
 
-
-def _name_key(title: str) -> str:
-    return " ".join(title.split()).casefold()
-
-
-def _existing_folder(cwd) -> str:
-    if not isinstance(cwd, str) or not cwd.strip():
-        raise ValueError("folder must be a non-empty path")
-    path = os.path.normpath(os.path.expanduser(cwd.strip()))
-    if not os.path.isabs(path):
-        raise ValueError("folder must be an absolute path (or start with ~)")
-    if not os.path.isdir(path):
-        raise ValueError(f"{path} is not an existing folder")
-    return path
