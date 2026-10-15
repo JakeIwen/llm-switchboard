@@ -17,6 +17,7 @@ running; the supervisor adopts their windows).
 | `claude_always_remote/live_registry.py` | Which claude processes are running (`~/.claude/sessions`, `/proc`) |
 | `claude_always_remote/tmux.py` | The dedicated tmux server and its windows |
 | `claude_always_remote/launcher.py` | The pane command (goes through `claudepd`) |
+| `claude_always_remote/screen.py` | Reading a captured Claude Code screen: `/rc` indicator, blocking prompts |
 | `claude_always_remote/connectivity.py` | API reachability gate |
 | `claude_always_remote/supervisor.py` | Reconcile loop, `State` enum, backoff |
 | `claude_always_remote/catalog.py` | Row shape shared by the web API and CLI |

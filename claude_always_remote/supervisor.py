@@ -17,6 +17,7 @@ from .connectivity import Connectivity
 from .launcher import pane_command
 from .live_registry import LiveProcess, live_processes
 from .paths import MANAGED_ENV_VAR
+from .screen import Rc, blocking_prompt, rc_indicator
 from .session_id import short_id
 from .store import Store
 from .tmux import Tmux, TmuxError
@@ -24,13 +25,6 @@ from .transcripts import TranscriptIndex
 
 log = logging.getLogger(__name__)
 
-# Shown in Claude Code's status line once Remote Control is connected.
-RC_MARKERS = ("/rc active", "/remote-control is active")
-# Prompts that block startup until someone answers them in the terminal.
-BLOCKING_PROMPTS = {
-    "trust this folder": "Folder trust prompt is waiting; attach to answer it.",
-    "Enter to confirm": "A prompt is waiting for input; attach to answer it.",
-}
 RC_GRACE_S = 45
 # A run at least this long counts as healthy and resets the backoff.
 STABLE_RUN_S = 300
@@ -217,17 +211,22 @@ class Supervisor:
         status.busy = bool(ours and ours.status == "busy")
         status.duplicate = bool(others)
         screen = self.tmux.capture(window.window_id)
-        status.rc_active = any(m in screen for m in RC_MARKERS)
-        prompt = next((msg for text, msg in BLOCKING_PROMPTS.items() if text in screen), None)
-        if status.rc_active and not prompt:
-            status.state, status.detail = State.RUNNING, "Remote Control active."
-        elif prompt:
+        rc = rc_indicator(screen)
+        prompt = blocking_prompt(screen)
+        status.rc_active = rc == Rc.ACTIVE
+        if prompt:
             status.state, status.detail = State.ATTENTION, prompt
+        elif rc == Rc.ACTIVE:
+            status.state, status.detail = State.RUNNING, "Remote Control active."
+        elif rc == Rc.FAILED:
+            status.state, status.detail = State.ATTENTION, "Remote Control failed to connect; try Restart."
+        elif rc in (Rc.CONNECTING, Rc.RECONNECTING):
+            status.state, status.detail = State.STARTING, f"Remote Control {rc.value}."
         elif now - status.started_at < RC_GRACE_S:
             status.state, status.detail = State.STARTING, "Launched; waiting for Remote Control."
         else:
             status.state = State.ATTENTION
-            status.detail = "Running, but Remote Control isn't showing as active. Check the screen."
+            status.detail = "Running, but no Remote Control indicator on its status line. Check the screen."
         if status.duplicate:
             status.detail += f" Also open in another claude process (pid {others[0].pid})."
 

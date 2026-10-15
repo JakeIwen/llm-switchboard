@@ -51,9 +51,9 @@ Ids can be any unique prefix.
 
 | State | Meaning |
 | --- | --- |
-| running | Window up and Claude Code shows `/rc active` |
-| starting | Launched in the last 45s, Remote Control not seen yet |
-| attention | Running, but a prompt is waiting (e.g. folder trust) or RC never came up; check the screen or attach |
+| running | Window up and the status line shows `/rc active` (a bare `/rc` while a turn runs) |
+| starting | Launched in the last 45s, or the status line shows `/rc connecting` / `/rc reconnecting` |
+| attention | Running, but a prompt is waiting (e.g. folder trust), `/rc failed`, or no indicator after 45s; check the screen or attach |
 | elsewhere | Open in another claude process; starts when that exits |
 | offline | API unreachable; waiting |
 | backoff | Exited; relaunch scheduled |
