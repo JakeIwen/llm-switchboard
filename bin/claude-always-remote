@@ -1,0 +1,4 @@
+#!/bin/bash
+# Runs the package from this checkout; install.sh links this into ~/.local/bin.
+repo=$(dirname "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")")
+PYTHONPATH="$repo${PYTHONPATH:+:$PYTHONPATH}" exec python3 -m claude_always_remote "$@"

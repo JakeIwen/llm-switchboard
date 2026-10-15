@@ -1,0 +1,201 @@
+"""Command line: run the service, or enable/disable/inspect sessions from a shell."""
+
+import argparse
+import json
+import logging
+import os
+import signal
+import sys
+import threading
+import time
+import urllib.error
+import urllib.request
+
+from .catalog import session_rows
+from .connectivity import Connectivity
+from .live_registry import live_processes
+from .paths import DEFAULT_HOST, DEFAULT_PORT
+from .store import Store
+from .supervisor import Supervisor
+from .tmux import Tmux
+from .transcripts import TranscriptIndex
+from .web import App, make_server
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parser().parse_args(argv)
+    return args.func(args)
+
+
+def _parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="claude-always-remote",
+        description="Keep chosen Claude Code sessions running in tmux with Remote Control on.",
+    )
+    p.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"web/API port (default {DEFAULT_PORT})")
+    sub = p.add_subparsers(required=True, metavar="command")
+
+    s = sub.add_parser("serve", help="run the supervisor and the picker web app (what the service runs)")
+    s.add_argument("--host", default=DEFAULT_HOST, help=f"address to listen on (default {DEFAULT_HOST})")
+    s.add_argument("--interval", type=float, default=5.0, help="seconds between supervisor passes")
+    s.set_defaults(func=_serve)
+
+    s = sub.add_parser("list", help="list sessions (enabled first)")
+    s.add_argument("-n", type=int, default=20, help="how many to show (default 20, 0 for all)")
+    s.set_defaults(func=_list)
+
+    s = sub.add_parser("status", help="show the enabled sessions and what the supervisor is doing")
+    s.set_defaults(func=_status)
+
+    for name, func, helptext in [
+        ("enable", _enable, "keep a session running with Remote Control"),
+        ("disable", _disable, "stop keeping a session running (closes its window)"),
+        ("restart", _restart, "relaunch an enabled session now"),
+        ("attach", _attach, "open an enabled session's tmux window in this terminal"),
+    ]:
+        s = sub.add_parser(name, help=helptext)
+        s.add_argument("session", help="session id, or a unique prefix of one")
+        if name == "enable":
+            s.add_argument("--name", help="Remote Control display name (default: the session's title)")
+        s.set_defaults(func=func)
+
+    s = sub.add_parser("stop-all", help="kill the tmux server and every session in it")
+    s.set_defaults(func=_stop_all)
+    return p
+
+
+def _serve(args) -> int:
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    store, index, tmux = Store(), TranscriptIndex(), Tmux()
+    supervisor = Supervisor(store, index, tmux, Connectivity(), interval_s=args.interval)
+    server = make_server(App(store, index, supervisor, tmux), args.host, args.port)
+    stop = threading.Event()
+
+    def shutdown(*_):
+        stop.set()
+        supervisor.wake()
+        threading.Thread(target=server.shutdown, daemon=True).start()
+
+    signal.signal(signal.SIGTERM, shutdown)
+    signal.signal(signal.SIGINT, shutdown)
+    worker = threading.Thread(target=supervisor.run_forever, args=(stop,), name="supervisor")
+    worker.start()
+    logging.info("picker on http://%s:%d", args.host, args.port)
+    server.serve_forever()
+    worker.join(timeout=10)
+    # The tmux server is left running on purpose: restarting this service
+    # must not interrupt the Claude sessions. `stop-all` closes them.
+    return 0
+
+
+def _list(args) -> int:
+    rows = _rows(args.port)
+    shown = rows if args.n == 0 else rows[: args.n]
+    for r in shown:
+        mark = "●" if r["enabled"] else ("○" if r["open_elsewhere"] else " ")
+        state = (r["status"] or {}).get("state", "")
+        print(f"{mark} {r['short_id']}  {_age(r['mtime']):>4}  {state:<9}  {r['project'][:28]:<28}  {r['title'][:60]}")
+    if len(shown) < len(rows):
+        print(f"… {len(rows) - len(shown)} more (-n 0 for all)")
+    print("● kept running   ○ open in another claude process")
+    return 0
+
+
+def _status(args) -> int:
+    rows = [r for r in _rows(args.port) if r["enabled"]]
+    if not rows:
+        print("No sessions are enabled.")
+    for r in rows:
+        st = r["status"] or {}
+        mem = f"{st['rss_kb'] // 1024}MB" if st.get("rss_kb") else ""
+        print(f"{r['short_id']}  {st.get('state', 'unknown'):<9} {mem:>6}  {r['project']}  {r['title'][:60]}")
+        if st.get("detail"):
+            print(f"          {st['detail']}")
+    return 0
+
+
+def _enable(args) -> int:
+    sid = _resolve(args.session, transcripts_only=True)
+    store = Store()
+    store.set_enabled(sid, True)
+    if args.name is not None:
+        store.set_name(sid, args.name)
+    print(f"Enabled {sid}; the service starts it within a few seconds.")
+    return 0
+
+
+def _disable(args) -> int:
+    sid = _resolve(args.session)
+    Store().set_enabled(sid, False)
+    print(f"Disabled {sid}; its window closes within a few seconds.")
+    return 0
+
+
+def _restart(args) -> int:
+    sid = _resolve(args.session)
+    _post(args.port, f"/api/sessions/{sid}/restart")
+    print(f"Restart requested for {sid}.")
+    return 0
+
+
+def _attach(args) -> int:
+    sid = _resolve(args.session)
+    tmux = Tmux()
+    window = next((w for w in tmux.windows() if w.session_id == sid), None)
+    if window is None:
+        print(f"{sid} has no window; is it enabled and has the service started it?", file=sys.stderr)
+        return 1
+    argv = tmux.attach_argv(window.window_id)
+    # Inside another tmux, attaching refuses unless $TMUX is cleared; nesting
+    # is what's wanted here since this is a separate server.
+    env = {k: v for k, v in os.environ.items() if k != "TMUX"}
+    os.execvpe(argv[0], argv, env)
+
+
+def _stop_all(args) -> int:
+    Tmux().kill_server()
+    print("Killed the tmux server. Enabled sessions come back on the next supervisor pass "
+          "unless the service is stopped: systemctl --user stop claude-always-remote")
+    return 0
+
+
+def _resolve(prefix: str, transcripts_only: bool = False) -> str:
+    ids = {t.session_id for t in TranscriptIndex().resolve(prefix)}
+    if not transcripts_only:
+        ids |= {sid for sid in Store().load() if sid.startswith(prefix)}
+    if len(ids) != 1:
+        problem = "no session matches" if not ids else f"{len(ids)} sessions match"
+        sys.exit(f"{problem} {prefix!r}")
+    return ids.pop()
+
+
+def _rows(port: int) -> list[dict]:
+    """Rows from the running service, or built locally (without supervisor state) if it's down."""
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/sessions", timeout=10) as resp:
+            return json.load(resp)["sessions"]
+    except (urllib.error.URLError, OSError):
+        print("(service not reachable; showing sessions without supervisor state)", file=sys.stderr)
+        return session_rows(TranscriptIndex().all(), Store().load(), live_processes(), {})
+
+
+def _post(port: int, path: str) -> dict:
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}{path}", data=b"{}", method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return json.load(resp)
+    except urllib.error.URLError as e:
+        sys.exit(f"service not reachable on port {port}: {e}")
+
+
+def _age(mtime: float | None) -> str:
+    if not mtime:
+        return "-"
+    secs = time.time() - mtime
+    for unit, size in (("d", 86400), ("h", 3600), ("m", 60)):
+        if secs >= size:
+            return f"{int(secs // size)}{unit}"
+    return "now"

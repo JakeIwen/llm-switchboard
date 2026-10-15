@@ -1,0 +1,15 @@
+# Template: install.sh replaces @REPO@ and installs this as a user unit.
+[Unit]
+Description=Keep chosen Claude Code sessions running with Remote Control (picker web app)
+
+[Service]
+Type=simple
+ExecStart=@REPO@/bin/claude-always-remote serve
+Restart=always
+RestartSec=5
+Environment=LANG=C.UTF-8
+# The tmux server runs in its own scope (see tmux.py), so stopping or
+# restarting this unit leaves the Claude sessions running.
+
+[Install]
+WantedBy=default.target
