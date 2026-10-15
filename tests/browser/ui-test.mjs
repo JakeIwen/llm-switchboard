@@ -101,8 +101,8 @@ check("Enter confirms and deletes", await waitFor(async () => (await count()) ==
 check("deleted ones are gone", !(await titles()).some((t) => doomed.includes(t)));
 const trashDir = `${HOME}/.local/share/claude-always-remote/trash`;
 check("transcripts are in the trash", fs.readdirSync(trashDir).length === 2);
-check("toast offers Undo", await page.$eval("#toast-undo", (e) => !e.hidden && !e.parentElement.hidden));
-await page.click("#toast-undo");
+check("toast offers Undo", await page.$eval("#toast-action", (e) => !e.hidden && !e.parentElement.hidden));
+await page.click("#toast-action");
 check("Undo restores both", await waitFor(async () => (await count()) === 10));
 
 // --- the X button; Cancel and Escape don't delete
@@ -118,6 +118,32 @@ check("Escape cancels", !(await dialogOpen()) && (await count()) === 10);
 await page.click("#list .card .x"); await sleep(100);
 await page.keyboard.press("Enter");
 check("X + Enter deletes that one", await waitFor(async () => (await count()) === 9 && !(await titles()).includes(first)));
+
+// --- new session: trusted folders only, name required, Enter creates
+const before = await count();
+await page.keyboard.press("n"); await sleep(150);
+check("n opens the new-session dialog", await dialogOpen());
+const options = await page.$$eval("dialog[open] select option", (els) => els.map((e) => e.textContent));
+check("only trusted folders are offered", options.length === 2 && options.every((o) => o.includes("~/dev/")), options.join(" | "));
+check("untrusted folder is explained", (await page.$eval("dialog[open] .dlg-body", (e) => e.textContent)).includes("~/scratch"));
+check("Create is disabled without a name", await page.$eval("dialog[open] [value=ok]", (e) => e.disabled));
+await page.keyboard.press("Enter"); await sleep(150);
+check("Enter does nothing without a name", await dialogOpen());
+await page.type("dialog[open] input[name=name]", "Brand new thing");
+if (SHOTS) await page.screenshot({ path: `${SHOTS}/new-session.png` });
+const nameHeight = await page.$eval("dialog[open] input[name=name]", (e) => e.getBoundingClientRect().height);
+check("name field is one line tall", nameHeight < 60, String(nameHeight));
+await page.keyboard.press("Enter");
+check("Enter creates it", await waitFor(async () => !(await dialogOpen()) && (await count()) === before + 1));
+check("it shows as new and kept running", await page.$$eval("#list .card", (els) => els.some((e) =>
+  e.textContent.includes("Brand new thing") && e.textContent.includes("New") && e.classList.contains("enabled"))));
+// claudepd doesn't exist under the fake HOME, so the launch fails and the page says so.
+check("a failed start is reported", await waitFor(async () =>
+  (await page.$eval("#toast-msg", (e) => e.textContent)).includes("needs attention"), 30000));
+const newId = await page.$$eval("#list .card", (els) => els.find((e) => e.textContent.includes("Brand new thing")).dataset.card);
+await page.click(`[data-card="${newId}"] .x`); await sleep(100);
+await page.keyboard.press("Enter");
+check("deleting a never-started session removes it", await waitFor(async () => (await count()) === before));
 
 // --- bulk move to another folder
 await search("dir:~/scratch");

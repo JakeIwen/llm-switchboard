@@ -11,7 +11,10 @@
 <div class="wrap">
   <header>
     <h1>Always Remote</h1>
-    <div class="sub" id="summary">loading…</div>
+    <div class="head-right">
+      <div class="sub" id="summary">loading…</div>
+      <button class="btn primary" type="button" id="new-btn" title="New session (n)">+ New session</button>
+    </div>
   </header>
   <div class="toolbar">
     <div class="searchrow">
@@ -34,7 +37,7 @@
       <li><code>age:&lt;2d</code> active in the last 2 days · <code>age:&gt;1w</code> older than a week (units m h d w)</li>
       <li><code>state:backoff</code> exact supervisor state</li>
     </ul>
-    <p class="keys">Keys: <kbd>↑</kbd><kbd>↓</kbd> move · <kbd>Space</kbd> select · <kbd>⇧</kbd>+<kbd>↑</kbd><kbd>↓</kbd> extend · <kbd>⌘/Ctrl</kbd>+<kbd>A</kbd> all · <kbd>Enter</kbd> details · <kbd>⌫</kbd> delete · <kbd>Esc</kbd> clear · <kbd>/</kbd> search.
+    <p class="keys">Keys: <kbd>↑</kbd><kbd>↓</kbd> move · <kbd>Space</kbd> select · <kbd>⇧</kbd>+<kbd>↑</kbd><kbd>↓</kbd> extend · <kbd>⌘/Ctrl</kbd>+<kbd>A</kbd> all · <kbd>Enter</kbd> details · <kbd>⌫</kbd> delete · <kbd>Esc</kbd> clear · <kbd>/</kbd> search · <kbd>n</kbd> new session.
       Click selects; <kbd>⌘/Ctrl</kbd>-click adds; <kbd>⇧</kbd>-click selects a range.</p>
   </div>
   <div class="qerr" id="qerr"></div>
@@ -57,7 +60,7 @@
   <button class="btn" type="button" data-bulk="all">Select all</button>
   <button class="btn" type="button" data-bulk="clear" aria-label="Clear selection">✕</button>
 </div>
-<div class="toast" id="toast" hidden><span id="toast-msg"></span><button id="toast-undo" type="button">Undo</button></div>
+<div class="toast" id="toast" hidden><span id="toast-msg"></span><button id="toast-action" type="button"></button></div>
 <script type="module" src="/static/app.js"></script>
 </body>
 </html>

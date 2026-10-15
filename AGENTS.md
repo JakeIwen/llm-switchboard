@@ -30,6 +30,8 @@ Sharing the socket would let its supervisor close the real windows.
 | `claude_always_remote/supervisor.py` | Reconcile loop, `State` enum, backoff |
 | `claude_always_remote/session_actions.py` | Rename / delete / restore, aware of running processes (`Conflict` → 409) |
 | `claude_always_remote/trash.py` | Deleted transcripts, kept 30 days for restore |
+| `claude_always_remote/folders.py` | Folders a new session may use (existing, trusted per `~/.claude.json`, never `~`) |
+| `claude_always_remote/notify.py` | Push notifications via `~/scripts/ntfy_send.sh` (`CLAUDE_ALWAYS_REMOTE_NOTIFY` overrides; empty disables) |
 | `claude_always_remote/relocate.py` | Moving a transcript to another working folder (Claude Code's project-folder naming) |
 | `claude_always_remote/conversation.py` | Recent prompts and replies from a transcript's tail |
 | `claude_always_remote/catalog.py` | Row shape shared by the web API and CLI |
@@ -48,6 +50,9 @@ Sharing the socket would let its supervisor close the real windows.
   CLI edit the store and call `wake()` / `request_restart()`.
 - Sessions must launch through the `claudepd` bash function, never a copy
   of its flags: Remote Control depends on its settings.
+- A session created from the picker has no transcript until Claude Code
+  writes one; its store entry carries `cwd`/`title`, and the supervisor starts
+  it with `--session-id … --name …` until the transcript exists, then `--resume`.
 - Never edit a transcript another claude process has open; a running
   process owns its title (rename it by typing `/rename` into our window).
 - State names are the `State` enum in `supervisor.py`; the page's `STATE`

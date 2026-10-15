@@ -46,6 +46,18 @@ deleted" list (Restore, or Empty now); entries expire after 30 days.
 Rename, move and delete are refused while the session is open in another
 claude process (like an SSH terminal), the same rule as `clauderm`/`claudeclean`.
 
+### New sessions
+
+**+ New session** (or `n`) asks for a folder and a name (required). Only
+folders that already have sessions, still exist, and that Claude Code already
+trusts are offered; `~` never is, since Claude Code asks about it every time.
+The session starts through `claudepd --session-id <id> --name <name>
+--remote-control <name>` in tmux and is kept running like any other. The page
+says when it's ready (with an Open in Claude button), and a push notification
+goes out through `~/scripts/ntfy_send.sh` with the claude.ai link (or a
+"needs attention" one if it doesn't come up). From a shell:
+`claude-always-remote new --list`, then `claude-always-remote new ~/dev/obd-things "name"`.
+
 ### Selecting several
 
 Click a session to select it, cmd/ctrl-click to add, shift-click for a
@@ -57,7 +69,7 @@ selection. Dialogs confirm with Enter and cancel with Esc.
 
 ### Search
 
-Every term must match, case-insensitive. `word` searches titles, first
+Every term must match, case-insensitive (`n` opens New session). `word` searches titles, first
 prompts, folders, ids and Remote Control names; `"two words"` is a phrase;
 `-word` excludes (also `-dir:tmp`, `-"a phrase"`). Prefixes: `dir:` (or
 `folder:`, `in:`), `title:`, `id:`, `is:kept|off|running|open|busy|attention|elsewhere`,
@@ -82,6 +94,8 @@ claude-always-remote enable c96934f7 [--name "van telemetrics"]
 claude-always-remote disable c96934f7
 claude-always-remote restart c96934f7
 claude-always-remote attach c96934f7      # open its tmux window (detach: Ctrl-b d)
+claude-always-remote new --list           # folders a new session can use
+claude-always-remote new ~/dev/obd-things "what it's for"
 claude-always-remote stop-all             # kill the tmux server
 journalctl --user -u claude-always-remote -f
 ```

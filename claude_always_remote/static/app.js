@@ -1,6 +1,6 @@
 import { compileQuery } from "./search.js";
 import { Selection } from "./selection.js";
-import { confirmDialog, promptDialog } from "./dialog.js";
+import { confirmDialog, formDialog, promptDialog } from "./dialog.js";
 
 // Labels for the supervisor's State enum (supervisor.py).
 const STATE = {
@@ -14,6 +14,8 @@ const STATE = {
   error:     ["Error", "b-bad"],
 };
 const UNKNOWN_DIR = "(unknown folder)";
+// Supervisor states that mean a new session didn't come up by itself.
+const TROUBLE = new Set(["attention", "backoff", "error", "missing"]);
 const TABS = { "f-all": "all", "f-on": "on", "f-open": "open" };
 
 const $ = (id) => document.getElementById(id);
@@ -47,6 +49,7 @@ let order = [];            // ids of the rows on screen, in order
 let bulkProgress = "";     // non-empty while a bulk action runs
 const expanded = new Set(), screens = new Map(), peeks = new Map();
 const sel = new Selection();
+const watching = new Map();  // id -> title of sessions created here, until they're ready
 // The chosen folder is a per-browser convenience; storage can be unavailable.
 try { dir = localStorage.getItem("car.dir"); } catch {}
 
@@ -70,6 +73,7 @@ async function refresh() {
   try {
     [data, { trash }] = await Promise.all([api("/api/sessions"), api("/api/trash")]);
     if (!pointerDown) render();
+    checkWatched();
   } catch (e) {
     setHTML($("list"), `<div class="err">Can't reach the service: ${esc(e.message)}</div>`);
   }
@@ -117,6 +121,7 @@ function badges(s) {
   } else if (s.enabled) {
     out.push(`<span class="badge b-info">Queued</span>`);
   }
+  if (s.new) out.push(`<span class="badge b-info">New</span>`);
   if (s.open_elsewhere.length && !(s.enabled && st && st.state === "elsewhere")) {
     out.push(`<span class="badge b-idle">Open in a terminal</span>`);
   }
@@ -249,13 +254,21 @@ function render() {
 // ---- feedback --------------------------------------------------------------
 
 let toastTimer = null;
-function toast(msg, undo) {
+// action: a function (shown as "Undo"), or { label, run } / { label, href }.
+function toast(msg, action, ms) {
+  if (typeof action === "function") action = { label: "Undo", run: action };
   $("toast-msg").textContent = msg;
-  $("toast-undo").hidden = !undo;
-  $("toast-undo").onclick = () => { $("toast").hidden = true; undo(); };
+  $("toast-action").hidden = !action;
+  if (action) {
+    $("toast-action").textContent = action.label;
+    $("toast-action").onclick = () => {
+      $("toast").hidden = true;
+      action.href ? window.open(action.href, "_blank", "noopener") : action.run();
+    };
+  }
   $("toast").hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { $("toast").hidden = true; }, undo ? 10000 : 5000);
+  toastTimer = setTimeout(() => { $("toast").hidden = true; }, ms || (action ? 10000 : 5000));
 }
 
 // A dialog body listing session titles (at most 8) and some notes.
@@ -342,6 +355,62 @@ async function deleteSessions(ids) {
   if (done.length) {
     const what = done.length === 1 ? `“${targets.find((s) => s.id === done[0]).title}”` : plural(done.length, "session");
     toast(`Deleted ${what}.`, () => restoreMany(done));
+  }
+}
+
+async function newSession() {
+  let folders;
+  try { ({ folders } = await api("/api/folders")); }
+  catch (e) { return toast(`Couldn't load folders: ${e.message}`); }
+  const usable = folders.filter((f) => !f.blocked);
+  const blocked = folders.filter((f) => f.blocked);
+  const notes = document.createElement("div");
+  notes.append(Object.assign(document.createElement("p"), {
+    textContent: `Starts through claudepd with Remote Control on, and is kept running.${data.notifications ? " You'll get a notification when it's ready." : ""}`,
+  }));
+  if (blocked.length) {
+    notes.append(Object.assign(document.createElement("p"), { textContent: "Not offered:" }));
+    const ul = document.createElement("ul");
+    for (const f of blocked) ul.append(Object.assign(document.createElement("li"), { textContent: `${f.project}: ${f.blocked}` }));
+    notes.append(ul);
+  }
+  if (!usable.length) return confirmDialog({ title: "No folder is available", body: notes, confirm: "OK" });
+  const res = await formDialog({
+    title: "New session",
+    body: notes,
+    confirm: "Create",
+    fields: [
+      { name: "cwd", label: "Folder", kind: "select",
+        value: usable.find((f) => f.project === dir)?.cwd,
+        options: usable.map((f) => ({ value: f.cwd, label: `${f.project}  (${plural(f.sessions, "session")})` })) },
+      { name: "name", label: "Name", placeholder: "What is this session for?", required: true, autofocus: true, maxlength: 120 },
+    ],
+  });
+  if (!res) return;
+  let created;
+  try { created = await api("/api/sessions/new", { cwd: res.cwd, name: res.name }); }
+  catch (e) { return toast(`Couldn't create it: ${e.message}`); }
+  watching.set(created.id, created.title);
+  sel.moveCursor(created.id);
+  toast(`Starting “${created.title}”…`, null, 30000);
+  refresh();
+}
+
+// Tell the page (as well as the phone, via the server) when a new session is up.
+function checkWatched() {
+  for (const [id, title] of watching) {
+    const s = byId(id);
+    if (!s || !s.enabled) { watching.delete(id); continue; }
+    const state = s.status?.state;
+    if (state === "running") {
+      watching.delete(id);
+      toast(`“${title}” is ready with Remote Control.`, s.remote_url ? { label: "Open in Claude", href: s.remote_url } : null, 20000);
+    } else if (TROUBLE.has(state)) {
+      watching.delete(id);
+      toast(`“${title}” needs attention: ${s.status.detail}`, {
+        label: "Details", run: () => { expanded.add(id); sel.moveCursor(id); render(); scrollToCursor(); },
+      }, 20000);
+    }
   }
 }
 
@@ -541,6 +610,9 @@ document.addEventListener("keydown", (ev) => {
   } else if (ev.key === "/") {
     ev.preventDefault();
     $("q").focus();
+  } else if (ev.key === "n" && !mod && !ev.altKey) {
+    ev.preventDefault();
+    newSession();
   }
 });
 
@@ -555,6 +627,7 @@ $("q").addEventListener("input", () => {
   query = compileQuery($("q").value);
   render();
 });
+$("new-btn").addEventListener("click", () => newSession());
 $("help-btn").addEventListener("click", () => {
   $("help").hidden = !$("help").hidden;
   $("help-btn").setAttribute("aria-expanded", String(!$("help").hidden));

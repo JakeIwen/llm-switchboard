@@ -42,11 +42,15 @@ class Transcript:
 
     @property
     def project(self) -> str:
-        """The working directory with the home folder shortened to ~."""
-        home = str(HOME)
-        if self.cwd == home or self.cwd.startswith(home + "/"):
-            return "~" + self.cwd[len(home):]
-        return self.cwd
+        return display_path(self.cwd)
+
+
+def display_path(path: str) -> str:
+    """The path with the home folder shortened to ~."""
+    home = str(HOME)
+    if path == home or path.startswith(home + "/"):
+        return "~" + path[len(home):]
+    return path
 
 
 def summarize(path: Path) -> Transcript | None:

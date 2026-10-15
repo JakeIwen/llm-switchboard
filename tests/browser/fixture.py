@@ -18,3 +18,5 @@ for folder, titles in specs:
         open(p, "w").write("".join(json.dumps(r, separators=(",", ":")) + "\n" for r in rec))
         m = t - (len(titles) - i) * 3600 * (3 if folder == "scratch" else 1); os.utime(p, (m, m))
 os.makedirs(f"{home}/dev/gamma", exist_ok=True)
+# Folder trust as Claude Code records it: everything under ~/dev, not ~/scratch.
+json.dump({"projects": {f"{home}/dev": {"hasTrustDialogAccepted": True}}}, open(f"{home}/.claude.json", "w"))

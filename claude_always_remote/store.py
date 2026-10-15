@@ -24,6 +24,10 @@ class Entry:
     # Remote Control display name; empty means "use the session's title".
     name: str = ""
     updated_at: float = 0.0
+    # Set for sessions created by this app, which have no transcript until
+    # Claude Code writes one: where to start it and what to call it.
+    cwd: str = ""
+    title: str = ""
 
 
 class Store:
@@ -44,6 +48,8 @@ class Store:
                 enabled=bool(fields.get("enabled")),
                 name=str(fields.get("name", "")),
                 updated_at=float(fields.get("updated_at", 0.0)),
+                cwd=str(fields.get("cwd", "")),
+                title=str(fields.get("title", "")),
             )
         return entries
 
@@ -52,6 +58,10 @@ class Store:
 
     def set_name(self, session_id: str, name: str) -> Entry:
         return self._update(session_id, name=name.strip())
+
+    def create(self, session_id: str, cwd: str, title: str) -> Entry:
+        """A new session to start in cwd, enabled from the outset."""
+        return self._update(session_id, enabled=True, cwd=cwd, title=title)
 
     def remove(self, session_id: str) -> None:
         with self._locked():

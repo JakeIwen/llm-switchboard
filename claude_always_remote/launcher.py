@@ -17,6 +17,13 @@ def pane_command(session_id: str, cwd: str, rc_name: str) -> str:
     return f"exec bash -lic {shlex.quote(inner)}"
 
 
+def new_session_command(session_id: str, cwd: str, title: str, rc_name: str) -> str:
+    """Start a conversation that doesn't exist yet, under a chosen id and title."""
+    claude = (f"{LAUNCH_FUNCTION} --session-id {shlex.quote(session_id)} --name {shlex.quote(title)}"
+              f" --remote-control {shlex.quote(rc_name)}")
+    return f"exec bash -lic {shlex.quote(f'cd -- {shlex.quote(cwd)} && {claude}')}"
+
+
 def resume_command(session_id: str, cwd: str) -> str:
     """What to type in a shell to open the session by hand."""
     claude = f"{LAUNCH_FUNCTION} --resume {shlex.quote(session_id)}"

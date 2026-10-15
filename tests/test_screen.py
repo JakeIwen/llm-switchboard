@@ -32,6 +32,9 @@ class ScreenTest(unittest.TestCase):
     def test_other_indicator_states(self):
         for word in ("connecting", "reconnecting", "failed"):
             self.assertEqual(rc_indicator(IDLE.replace("/rc active", f"/rc {word}")), Rc(word))
+        # As Claude Code actually prints them while connecting.
+        self.assertEqual(rc_indicator(IDLE.replace("/rc active", "/rc connecting…")), Rc.CONNECTING)
+        self.assertEqual(rc_indicator(IDLE.replace("/rc active", "/rc reconnecting...")), Rc.RECONNECTING)
 
     def test_no_indicator(self):
         self.assertIsNone(rc_indicator(IDLE.replace("/rc active", "")))

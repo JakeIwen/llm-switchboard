@@ -14,6 +14,7 @@ import urllib.request
 from .catalog import session_rows
 from .connectivity import Connectivity
 from .live_registry import live_processes
+from .notify import Notifier, default_script
 from .paths import DEFAULT_HOST, DEFAULT_PORT
 from .store import Store
 from .supervisor import Supervisor
@@ -60,6 +61,12 @@ def _parser() -> argparse.ArgumentParser:
             s.add_argument("--name", help="Remote Control display name (default: the session's title)")
         s.set_defaults(func=func)
 
+    s = sub.add_parser("new", help="start a new session in a folder that already has sessions")
+    s.add_argument("folder", help="working folder (one listed by `new --list`)", nargs="?")
+    s.add_argument("name", help="session name", nargs="?")
+    s.add_argument("--list", action="store_true", help="show the folders a new session can use")
+    s.set_defaults(func=_new)
+
     s = sub.add_parser("stop-all", help="kill the tmux server and every session in it")
     s.set_defaults(func=_stop_all)
     return p
@@ -68,7 +75,8 @@ def _parser() -> argparse.ArgumentParser:
 def _serve(args) -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     store, index, tmux = Store(), TranscriptIndex(), Tmux()
-    supervisor = Supervisor(store, index, tmux, Connectivity(), interval_s=args.interval)
+    supervisor = Supervisor(store, index, tmux, Connectivity(), interval_s=args.interval,
+                            notifier=Notifier(default_script()))
     server = make_server(App(store, index, supervisor, tmux, Trash()), args.host, args.port)
     stop = threading.Event()
 
@@ -153,6 +161,18 @@ def _attach(args) -> int:
     os.execvpe(argv[0], argv, env)
 
 
+def _new(args) -> int:
+    if args.list or not (args.folder and args.name):
+        with urllib.request.urlopen(f"http://127.0.0.1:{args.port}/api/folders", timeout=10) as resp:
+            for f in json.load(resp)["folders"]:
+                print(f"{'  ' if not f['blocked'] else '✗ '}{f['cwd']}  ({f['sessions']})  {f['blocked']}")
+        return 0 if args.list else 2
+    folder = os.path.normpath(os.path.abspath(os.path.expanduser(args.folder)))
+    result = _post(args.port, "/api/sessions/new", {"cwd": folder, "name": args.name})
+    print(f"Starting {result['id']} ({result['title']}); `claude-always-remote status` shows when it's ready.")
+    return 0
+
+
 def _stop_all(args) -> int:
     Tmux().kill_server()
     print("Killed the tmux server. Enabled sessions come back on the next supervisor pass "
@@ -180,14 +200,16 @@ def _rows(port: int) -> list[dict]:
         return session_rows(TranscriptIndex().all(), Store().load(), live_processes(), {})
 
 
-def _post(port: int, path: str) -> dict:
+def _post(port: int, path: str, body: dict | None = None) -> dict:
     req = urllib.request.Request(
-        f"http://127.0.0.1:{port}{path}", data=b"{}", method="POST",
+        f"http://127.0.0.1:{port}{path}", data=json.dumps(body or {}).encode(), method="POST",
         headers={"Content-Type": "application/json"},
     )
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
             return json.load(resp)
+    except urllib.error.HTTPError as e:
+        sys.exit(f"{path}: {json.load(e).get('error', e.reason)}")
     except urllib.error.URLError as e:
         sys.exit(f"service not reachable on port {port}: {e}")
 

@@ -16,6 +16,7 @@ import time
 
 from .catalog import session_rows
 from .conversation import recent_messages
+from .folders import new_session_folders
 from .live_registry import live_processes
 from .session_actions import Conflict, SessionActions
 from .session_id import is_session_id, short_id
@@ -50,7 +51,14 @@ class App:
 
     def list_sessions(self) -> dict:
         rows = session_rows(self.index.all(), self.store.load(), self.registry(), self.supervisor.snapshot())
-        return {"host": socket.gethostname(), "now": time.time(), "sessions": rows}
+        return {"host": socket.gethostname(), "now": time.time(), "sessions": rows,
+                "notifications": self.supervisor.notifier.enabled}
+
+    def list_folders(self) -> dict:
+        return {"folders": [
+            {"cwd": f.cwd, "project": f.project, "sessions": f.sessions, "blocked": f.blocked}
+            for f in new_session_folders(self.index.all())
+        ]}
 
     def list_trash(self) -> dict:
         items = [
@@ -119,6 +127,8 @@ def make_handler(app: App):
                 return self._send_json(app.list_sessions())
             if self.path == "/api/trash":
                 return self._send_json(app.list_trash())
+            if self.path == "/api/folders":
+                return self._send_json(app.list_folders())
             match = _ACTION_RE.match(self.path)
             if match and match.group(2) in _GET_ACTIONS and is_session_id(match.group(1)):
                 sid, action = match.groups()
@@ -129,10 +139,12 @@ def make_handler(app: App):
             self._send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
 
         def do_POST(self):
-            if self.path == "/api/trash/empty":
+            if self.path in ("/api/trash/empty", "/api/sessions/new"):
                 if not self._is_json():
                     return self._send_json({"error": "send application/json"}, HTTPStatus.UNSUPPORTED_MEDIA_TYPE)
-                return self._send_json({"ok": True, "removed": app.trash.empty()})
+                if self.path == "/api/trash/empty":
+                    return self._send_json({"ok": True, "removed": app.trash.empty()})
+                return self._guarded(lambda body: app.actions.create(body.get("cwd"), body.get("name")), "new")
             match = _ACTION_RE.match(self.path)
             if not match or match.group(2) not in _POST_ACTIONS:
                 return self._send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
@@ -141,16 +153,19 @@ def make_handler(app: App):
                 return self._send_json({"error": "bad session id"}, HTTPStatus.BAD_REQUEST)
             if not self._is_json():
                 return self._send_json({"error": "send application/json"}, HTTPStatus.UNSUPPORTED_MEDIA_TYPE)
+            self._guarded(lambda body: app.act(sid, action, body), f"{action} {sid[:8]}")
+
+        def _guarded(self, run, what: str):
+            """Run an action on the JSON body, mapping its errors to HTTP statuses."""
             try:
-                body = self._read_json()
-                result = app.act(sid, action, body)
+                result = run(self._read_json())
             except LookupError as e:
                 return self._send_json({"error": str(e)}, HTTPStatus.NOT_FOUND)
             except Conflict as e:
                 return self._send_json({"error": str(e)}, HTTPStatus.CONFLICT)
             except ValueError as e:
                 return self._send_json({"error": str(e)}, HTTPStatus.BAD_REQUEST)
-            log.info("%s %s from %s", action, sid[:8], self.client_address[0])
+            log.info("%s from %s", what, self.client_address[0])
             self._send_json(result)
 
         def _is_json(self) -> bool:

@@ -1,9 +1,9 @@
 """Reading a Claude Code terminal screen captured from tmux.
 
 Claude Code puts a Remote Control indicator at the right end of its status
-line: "/rc active", "/rc connecting", "/rc reconnecting" or "/rc failed".
-While a turn is running it shortens to a bare "/rc", which still means
-connected.
+line: "/rc active", "/rc connecting…", "/rc reconnecting…" or "/rc failed".
+A bare "/rc" also means connected (shown while a turn runs, and by new
+sessions).
 """
 
 from enum import Enum
@@ -12,7 +12,7 @@ import re
 # Only the bottom of the screen holds the status line; scrollback above it can
 # contain "/rc" typed as a command.
 _STATUS_LINES = 8
-_RC_RE = re.compile(r"(?:^|\s)/rc(?: (active|connecting|reconnecting|failed))?\s*$")
+_RC_RE = re.compile(r"(?:^|\s)/rc(?: (active|connecting|reconnecting|failed))?(?:…|\.\.\.)?\s*$")
 
 # Prompts that block startup until someone answers them in the terminal.
 _BLOCKING_PROMPTS = {

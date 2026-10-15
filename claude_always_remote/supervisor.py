@@ -14,14 +14,15 @@ import threading
 import time
 
 from .connectivity import Connectivity
-from .launcher import pane_command
+from .launcher import new_session_command, pane_command
 from .live_registry import LiveProcess, live_processes
+from .notify import Notifier
 from .paths import MANAGED_ENV_VAR
 from .screen import Rc, blocking_prompt, rc_indicator
 from .session_id import short_id
-from .store import Store
+from .store import Entry, Store
 from .tmux import Tmux, TmuxError
-from .transcripts import TranscriptIndex
+from .transcripts import TranscriptIndex, display_path
 
 log = logging.getLogger(__name__)
 
@@ -93,6 +94,7 @@ class Supervisor:
         registry=live_processes,
         clock=time.time,
         interval_s: float = 5.0,
+        notifier: Notifier | None = None,
     ):
         self.store = store
         self.index = index
@@ -101,7 +103,10 @@ class Supervisor:
         self.registry = registry
         self.clock = clock
         self.interval_s = interval_s
+        self.notifier = notifier or Notifier(None)
         self._statuses: dict[str, Status] = {}
+        # Sessions created from the picker, waiting to report "ready" (or a problem) once.
+        self._announce: set[str] = set()
         self._requests = _Requests()
         self._lock = threading.Lock()
         self._wake = threading.Event()
@@ -114,6 +119,11 @@ class Supervisor:
     def request_restart(self, session_id: str) -> None:
         with self._lock:
             self._requests.restart.add(session_id)
+        self.wake()
+
+    def announce_when_ready(self, session_id: str) -> None:
+        with self._lock:
+            self._announce.add(session_id)
         self.wake()
 
     def snapshot(self) -> dict[str, Status]:
@@ -151,7 +161,7 @@ class Supervisor:
             if sid in restarts:
                 status.failures, status.next_attempt = 0, 0.0
             try:
-                self._reconcile_one(status, entry.name, windows.get(sid), live, now)
+                self._reconcile_one(status, entry, windows.get(sid), live, now)
             except TmuxError as e:
                 log.error("tmux failed for %s: %s", short_id(sid), e)
                 status.state, status.detail = State.ERROR, str(e)
@@ -160,8 +170,31 @@ class Supervisor:
             statuses[sid] = status
         with self._lock:
             self._statuses = statuses
+        self._send_announcements(statuses)
 
-    def _reconcile_one(self, status: Status, rc_name: str, window, live: list[LiveProcess], now: float) -> None:
+    def _send_announcements(self, statuses: dict[str, Status]) -> None:
+        with self._lock:
+            waiting = set(self._announce)
+        for sid in waiting:
+            status = statuses.get(sid)
+            if status is None:  # disabled or deleted before it came up
+                done = True
+            elif status.state == State.RUNNING:
+                transcript = self.index.get(sid)
+                link = transcript.remote_url if transcript and transcript.remote_url else ""
+                self.notifier.send(f"Claude session ready: {status.rc_name}",
+                                   f"Remote Control is on.{' ' + link if link else ''}", "default", "white_check_mark")
+                done = True
+            elif status.state in (State.ATTENTION, State.BACKOFF, State.ERROR, State.MISSING):
+                self.notifier.send(f"Claude session needs attention: {status.rc_name}", status.detail, "high", "warning")
+                done = True
+            else:
+                done = False
+            if done:
+                with self._lock:
+                    self._announce.discard(sid)
+
+    def _reconcile_one(self, status: Status, entry: Entry, window, live: list[LiveProcess], now: float) -> None:
         sid = status.session_id
         others = [p for p in live if p.session_id == sid and p.managed_for != sid]
         ours = next((p for p in live if p.managed_for == sid), None)
@@ -181,7 +214,7 @@ class Supervisor:
             status.detail = f"Open in another claude process (pid {others[0].pid}); starts when that one exits."
             return
         transcript = self.index.get(sid)
-        if transcript is None:
+        if transcript is None and not entry.cwd:
             status.state, status.detail = State.MISSING, "No transcript with this session id."
             return
         if now < status.next_attempt:
@@ -192,10 +225,16 @@ class Supervisor:
             status.state, status.detail = State.OFFLINE, "Waiting for api.anthropic.com to be reachable."
             return
 
-        status.rc_name = rc_name or transcript.title or os.path.basename(transcript.cwd) or short_id(sid)
-        command = pane_command(sid, transcript.cwd, status.rc_name)
-        label = _window_label(transcript.project, sid)
-        log.info("launching %s in %s as %r", short_id(sid), transcript.cwd, status.rc_name)
+        if transcript:
+            status.rc_name = entry.name or transcript.title or os.path.basename(transcript.cwd) or short_id(sid)
+            cwd, command = transcript.cwd, pane_command(sid, transcript.cwd, status.rc_name)
+        else:
+            # Created here and not yet written to disk by Claude Code: start it fresh.
+            status.rc_name = entry.name or entry.title or short_id(sid)
+            cwd = entry.cwd
+            command = new_session_command(sid, cwd, entry.title or status.rc_name, status.rc_name)
+        label = _window_label(display_path(cwd), sid)
+        log.info("launching %s in %s as %r%s", short_id(sid), cwd, status.rc_name, "" if transcript else " (new)")
         status.window_id = self.tmux.start(sid, label, command, {MANAGED_ENV_VAR: sid})
         status.started_at = now
         status.launches += 1

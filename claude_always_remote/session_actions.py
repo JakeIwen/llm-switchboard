@@ -14,7 +14,9 @@ transcript, so:
 import json
 import os
 import time
+import uuid
 
+from .folders import new_session_folders
 from .live_registry import live_processes
 from .relocate import relocate
 from .screen import blocking_prompt
@@ -35,7 +37,7 @@ class Conflict(Exception):
 
 class SessionActions:
     def __init__(self, store: Store, index: TranscriptIndex, supervisor: Supervisor, tmux: Tmux, trash: Trash,
-                 registry=live_processes, sleep=time.sleep):
+                 registry=live_processes, sleep=time.sleep, folders=new_session_folders):
         self.store = store
         self.index = index
         self.supervisor = supervisor
@@ -43,13 +45,19 @@ class SessionActions:
         self.trash = trash
         self.registry = registry
         self.sleep = sleep
+        self.folders = folders
 
-    def rename(self, sid: str, title) -> dict:
+    @staticmethod
+    def _clean_title(title) -> str:
         if not isinstance(title, str) or not " ".join(title.split()):
-            raise ValueError("title must be a non-empty string")
+            raise ValueError("a name is required")
         title = " ".join(title.split())
         if len(title) > MAX_TITLE_LEN:
-            raise ValueError(f"title must be at most {MAX_TITLE_LEN} characters")
+            raise ValueError(f"the name must be at most {MAX_TITLE_LEN} characters")
+        return title
+
+    def rename(self, sid: str, title) -> dict:
+        title = self._clean_title(title)
         transcript = self._transcript(sid)
         self._refuse_if_open_elsewhere(sid, "rename")
         window = self._window(sid)
@@ -64,7 +72,28 @@ class SessionActions:
         self.tmux.send_line(window.window_id, f"/rename {title}")
         return {"ok": True, "title": title, "via": "running session"}
 
+    def create(self, cwd, title) -> dict:
+        """Start a brand-new session in one of the offered folders, kept running."""
+        title = self._clean_title(title)
+        folder = next((f for f in self.folders(self.index.all()) if f.cwd == cwd), None)
+        if folder is None:
+            raise ValueError("pick one of the listed folders")
+        if folder.blocked:
+            raise Conflict(folder.blocked)
+        sid = str(uuid.uuid4())
+        self.store.create(sid, cwd, title)
+        self.supervisor.announce_when_ready(sid)
+        return {"ok": True, "id": sid, "title": title}
+
     def delete(self, sid: str) -> dict:
+        entry = self.store.load().get(sid)
+        if self.index.get(sid) is None and entry and entry.cwd:
+            # Created here and never written to disk: just stop it and forget it.
+            self.store.set_enabled(sid, False)
+            self.supervisor.wake()
+            self._wait_until_stopped(sid)
+            self.store.remove(sid)
+            return {"ok": True, "title": entry.title, "trashed": False}
         transcript = self._transcript(sid)
         self._refuse_if_open_elsewhere(sid, "delete")
         entry = self.store.load().get(sid)
@@ -74,7 +103,7 @@ class SessionActions:
         self._wait_until_stopped(sid)
         self.store.remove(sid)
         item = self.trash.put(sid, transcript.path, transcript.title, transcript.project)
-        return {"ok": True, "title": item.title}
+        return {"ok": True, "title": item.title, "trashed": True}
 
     def move(self, sid: str, cwd) -> dict:
         if not isinstance(cwd, str) or not cwd.strip():

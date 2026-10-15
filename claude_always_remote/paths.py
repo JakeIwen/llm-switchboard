@@ -5,6 +5,8 @@ import os
 
 HOME = Path.home()
 CLAUDE_DIR = HOME / ".claude"
+# Claude Code's own settings and per-folder state, including folder trust.
+CLAUDE_STATE_FILE = HOME / ".claude.json"
 # One <session-id>.jsonl transcript per conversation, grouped by project folder.
 PROJECTS_DIR = CLAUDE_DIR / "projects"
 # Claude Code writes <pid>.json here for every running process.
