@@ -25,12 +25,41 @@ def project_dir_name(cwd: str) -> str:
     return re.sub(r"[^a-zA-Z0-9]", "-", cwd)
 
 
-def relocate(transcript: Path, session_id: str, old_cwd: str, new_cwd: str, projects_dir: Path) -> Path:
-    """Move the transcript to new_cwd's project folder and return its new path."""
-    name = project_dir_name(new_cwd)
+def project_dir(projects_dir: Path, cwd: str) -> Path:
+    name = project_dir_name(cwd)
     if len(name) > MAX_DIR_NAME:
         raise ValueError("folder path is too long")
-    target_dir = Path(projects_dir) / name
+    return Path(projects_dir) / name
+
+
+def cwd_field(cwd: str) -> bytes:
+    """A transcript's "cwd" field exactly as Claude Code writes it."""
+    return b'"cwd":' + json.dumps(cwd, ensure_ascii=False).encode()
+
+
+def write_rewritten(src: Path, target: Path, rewrite, keep_stat: bool) -> None:
+    """Atomically write src's lines to target, each passed through rewrite
+    (which returns the bytes to write, or None to leave the line out)."""
+    fd, tmp = tempfile.mkstemp(dir=target.parent, prefix=f".{target.stem}-", suffix=".jsonl")
+    try:
+        with os.fdopen(fd, "wb") as out, open(src, "rb") as f:
+            for line in f:
+                line = rewrite(line)
+                if line is not None:
+                    out.write(line)
+            out.flush()
+            os.fsync(out.fileno())
+        if keep_stat:
+            shutil.copystat(src, tmp)
+        os.replace(tmp, target)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
+def relocate(transcript: Path, session_id: str, old_cwd: str, new_cwd: str, projects_dir: Path) -> Path:
+    """Move the transcript to new_cwd's project folder and return its new path."""
+    target_dir = project_dir(projects_dir, new_cwd)
     target = target_dir / f"{session_id}.jsonl"
     companion, target_companion = transcript.with_suffix(""), target.with_suffix("")
     if target.exists() and target != transcript:
@@ -39,20 +68,9 @@ def relocate(transcript: Path, session_id: str, old_cwd: str, new_cwd: str, proj
 
     # Replace the exact JSON value, so every other byte of the transcript is
     # left as Claude Code wrote it.
-    old_field = b'"cwd":' + json.dumps(old_cwd, ensure_ascii=False).encode()
-    new_field = b'"cwd":' + json.dumps(new_cwd, ensure_ascii=False).encode()
-    fd, tmp = tempfile.mkstemp(dir=target_dir, prefix=f".{session_id}-", suffix=".jsonl")
-    try:
-        with os.fdopen(fd, "wb") as out, open(transcript, "rb") as src:
-            for line in src:
-                out.write(line.replace(old_field, new_field) if old_cwd else line)
-            out.flush()
-            os.fsync(out.fileno())
-        shutil.copystat(transcript, tmp)
-        os.replace(tmp, target)
-    except BaseException:
-        Path(tmp).unlink(missing_ok=True)
-        raise
+    old_field, new_field = cwd_field(old_cwd), cwd_field(new_cwd)
+    write_rewritten(transcript, target, lambda line: line.replace(old_field, new_field) if old_cwd else line,
+                    keep_stat=True)
     if target != transcript:
         transcript.unlink()
         if companion.is_dir() and not target_companion.exists():
