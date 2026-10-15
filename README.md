@@ -26,20 +26,43 @@ claude.ai/code. A small web page on the Pi picks which sessions those are.
 ## Picker
 
 Toggle a session to keep it running. Folder chips filter the list. Expand a
-session for:
+session (▾) for:
 
 - **Open in Claude**: its claude.ai/code link (from its last Remote Control connection)
 - **Recent messages**: the last few prompts and replies
 - **Terminal screen** and **Restart** (kept-running sessions)
-- **Rename**: types `/rename` into a running kept session (when idle), or
-  appends Claude Code's own `custom-title` record to a closed one
-- **Delete**: stops it if kept running, then moves the transcript (and its
-  companion folder) to `~/.local/share/claude-always-remote/trash/`, with
-  Undo and a "Recently deleted" list; entries expire after 30 days
+- **Title / Rename**: types `/rename` into a running kept session (when idle),
+  or appends Claude Code's own `custom-title` record to a closed one
+- **Working folder / Move**: moves the transcript under another folder's
+  project directory and points its `cwd` fields there, so `claudepd --resume`
+  works from the new folder; a kept session restarts there
 - Copyable resume and attach commands
 
-Rename and delete are refused while the session is open in another claude
-process (like an SSH terminal), the same rule as `clauderm`/`claudeclean`.
+The **×** on each session deletes it: a kept session is stopped first, and
+the transcript (with its companion folder) moves to
+`~/.local/share/claude-always-remote/trash/`, with Undo and a "Recently
+deleted" list (Restore, or Empty now); entries expire after 30 days.
+
+Rename, move and delete are refused while the session is open in another
+claude process (like an SSH terminal), the same rule as `clauderm`/`claudeclean`.
+
+### Selecting several
+
+Click a session to select it, cmd/ctrl-click to add, shift-click for a
+range, or tap the circle. Keys: ↑/↓ (or j/k) move, Space selects, Shift+↑/↓
+extends, Cmd/Ctrl+A selects everything shown, Enter opens details, ⌫/Delete
+deletes, Esc clears, `/` jumps to search. The bar at the bottom applies
+**Keep running**, **Stop keeping**, **Move to folder…** and **Delete** to the
+selection. Dialogs confirm with Enter and cancel with Esc.
+
+### Search
+
+Every term must match, case-insensitive. `word` searches titles, first
+prompts, folders, ids and Remote Control names; `"two words"` is a phrase;
+`-word` excludes (also `-dir:tmp`, `-"a phrase"`). Prefixes: `dir:` (or
+`folder:`, `in:`), `title:`, `id:`, `is:kept|off|running|open|busy|attention|elsewhere`,
+`state:<supervisor state>`, `age:<2d` / `age:>1w` (units m h d w). The **?**
+next to the search box shows this.
 
 ## Install
 
@@ -88,5 +111,6 @@ Ids can be any unique prefix.
 ## Tests
 
 ```
-python3 -m unittest discover -s tests
+python3 -m unittest discover -s tests   # Python + JS unit tests
+tests/browser/run.sh [screenshot-dir]   # headless Chromium, fake HOME, own socket/port
 ```

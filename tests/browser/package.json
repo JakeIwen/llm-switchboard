@@ -1,0 +1,6 @@
+{
+  "private": true,
+  "type": "module",
+  "description": "Browser test for the picker; run with ./run.sh",
+  "dependencies": { "puppeteer-core": "23.11.1" }
+}

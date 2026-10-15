@@ -15,7 +15,9 @@ STORE_FILE = STATE_DIR / "sessions.json"
 TRASH_DIR = Path(os.environ.get("XDG_DATA_HOME") or HOME / ".local" / "share") / "claude-always-remote" / "trash"
 
 # A dedicated tmux server keeps these windows apart from any tmux the user runs.
-TMUX_SOCKET = "claude-always-remote"
+# A second instance (development, browser tests) must use its own socket, or its
+# supervisor would close the real instance's windows as "not enabled".
+TMUX_SOCKET = os.environ.get("CLAUDE_ALWAYS_REMOTE_TMUX_SOCKET") or "claude-always-remote"
 TMUX_SESSION = "car"
 TMUX_CONF = Path(__file__).resolve().parent / "tmux.conf"
 

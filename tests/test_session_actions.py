@@ -5,6 +5,7 @@ from pathlib import Path
 
 from claude_always_remote.conversation import recent_messages
 from claude_always_remote.live_registry import LiveProcess
+from claude_always_remote.relocate import project_dir_name
 from claude_always_remote.session_actions import Conflict, SessionActions
 from claude_always_remote.store import Store
 from claude_always_remote.supervisor import Supervisor
@@ -18,14 +19,18 @@ def line(record):
     return json.dumps(record, separators=(",", ":")) + "\n"
 
 
-class SessionActionsTest(unittest.TestCase):
+class Fixture(unittest.TestCase):
+    """One transcript whose working folder is a real temp directory."""
+
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         root = Path(tmp.name)
-        self.path = root / "projects" / "-home-pi-dev-x" / f"{SID}.jsonl"
+        self.work = root / "work"
+        self.work.mkdir()
+        self.path = root / "projects" / project_dir_name(str(self.work)) / f"{SID}.jsonl"
         self.path.parent.mkdir(parents=True)
-        self.path.write_text(line({"type": "user", "cwd": "/home/pi/dev/x", "message": {"content": "hello"}})
+        self.path.write_text(line({"type": "user", "cwd": str(self.work), "message": {"content": "hello"}})
                              + line({"type": "bridge-session", "bridgeSessionId": "cse_01ABC"}))
         (self.path.parent / SID / "subagents").mkdir(parents=True)
         self.index = TranscriptIndex(root / "projects")
@@ -47,6 +52,8 @@ class SessionActionsTest(unittest.TestCase):
     def proc(self, managed, status="idle"):
         return LiveProcess(pid=9, session_id=SID, cwd="", status=status, managed_for=SID if managed else None, rss_kb=1)
 
+
+class SessionActionsTest(Fixture):
     def test_transcript_exposes_remote_url(self):
         self.assertEqual(self.index.get(SID).remote_url, "https://claude.ai/code/session_01ABC")
 
@@ -106,10 +113,63 @@ class SessionActionsTest(unittest.TestCase):
         with self.assertRaises(Conflict):
             self.actions.restore(SID)
 
+    def test_empty_trash(self):
+        self.actions.delete(SID)
+        self.assertEqual(self.trash.empty(), 1)
+        self.assertEqual(self.trash.items(), [])
+
     def test_old_trash_expires(self):
         self.actions.delete(SID)
         self.clock.t += RETENTION_S + 1
         self.assertEqual(self.trash.items(), [])
+
+
+class MoveTest(Fixture):
+    def target(self):
+        target = Path(self.trash.root).parent / "elsewhere"
+        target.mkdir(exist_ok=True)
+        return target
+
+    def test_move_rewrites_cwd_and_files_under_new_folder(self):
+        before = self.path.read_bytes()
+        target = self.target()
+        result = self.actions.move(SID, str(target))
+        self.assertTrue(result["moved"])
+        new_path = self.index.projects_dir / project_dir_name(str(target)) / f"{SID}.jsonl"
+        self.assertFalse(self.path.exists())
+        self.assertTrue((new_path.parent / SID / "subagents").is_dir())
+        self.assertEqual(new_path.read_bytes(),
+                         before.replace(f'"cwd":"{self.work}"'.encode(), f'"cwd":"{target}"'.encode()))
+        self.assertEqual(self.index.get(SID).cwd, str(target))
+
+    def test_move_kept_session_stops_it_and_keeps_it_enabled(self):
+        self.store.set_enabled(SID, True)
+        self.sup.reconcile()
+        self.live = [self.proc(managed=True)]
+        first = self.tmux.window_for(SID).window_id
+        self.actions.move(SID, str(self.target()))
+        self.assertIn(first, self.tmux.killed)
+        self.assertTrue(self.store.load()[SID].enabled)
+        self.sup.reconcile()
+        [_, (_, command, _)] = self.tmux.started
+        self.assertIn(str(self.target()), command)
+
+    def test_move_validation(self):
+        with self.assertRaises(ValueError):
+            self.actions.move(SID, "relative/path")
+        with self.assertRaises(ValueError):
+            self.actions.move(SID, "/definitely/not/here")
+        self.live = [self.proc(managed=False)]
+        with self.assertRaises(Conflict):
+            self.actions.move(SID, str(self.target()))
+
+    def test_move_to_same_folder_is_a_no_op(self):
+        self.assertFalse(self.actions.move(SID, f"{self.work}/")["moved"])
+        self.assertTrue(self.path.exists())
+
+    def test_folder_names_match_claude_code(self):
+        self.assertEqual(project_dir_name("/home/pi/dev/obd-things/projects/vehicle_data/dashboard"),
+                         "-home-pi-dev-obd-things-projects-vehicle-data-dashboard")
 
 
 class RecentMessagesTest(unittest.TestCase):

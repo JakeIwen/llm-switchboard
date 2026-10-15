@@ -1,10 +1,18 @@
 # claude-always-remote
 
 Python 3.11 standard library only. Run tests with
-`python3 -m unittest discover -s tests`. The service runs from this checkout
+`python3 -m unittest discover -s tests` (this also runs the node unit tests in
+`tests/js` when node is installed). After UI changes, run the browser test,
+`tests/browser/run.sh [screenshot-dir]` (needs /usr/bin/chromium; installs
+puppeteer-core into tests/browser on first run). The service runs from this checkout
 (`bin/claude-always-remote` → `python3 -m claude_always_remote`), so after a
 code change: `systemctl --user restart claude-always-remote` (sessions keep
 running; the supervisor adopts their windows).
+
+To run a second instance (say, to try UI changes) without touching the real
+one, give it its own HOME, socket and port:
+`HOME=/tmp/fakehome CLAUDE_ALWAYS_REMOTE_TMUX_SOCKET=car-dev bin/claude-always-remote --port 8790 serve --host 127.0.0.1`.
+Sharing the socket would let its supervisor close the real windows.
 
 ## Where things live
 
@@ -22,11 +30,16 @@ running; the supervisor adopts their windows).
 | `claude_always_remote/supervisor.py` | Reconcile loop, `State` enum, backoff |
 | `claude_always_remote/session_actions.py` | Rename / delete / restore, aware of running processes (`Conflict` → 409) |
 | `claude_always_remote/trash.py` | Deleted transcripts, kept 30 days for restore |
+| `claude_always_remote/relocate.py` | Moving a transcript to another working folder (Claude Code's project-folder naming) |
 | `claude_always_remote/conversation.py` | Recent prompts and replies from a transcript's tail |
 | `claude_always_remote/catalog.py` | Row shape shared by the web API and CLI |
 | `claude_always_remote/web.py` | HTTP API and static page |
 | `claude_always_remote/cli.py` | argparse entry point |
-| `claude_always_remote/static/index.html` | The picker UI (vanilla JS) |
+| `claude_always_remote/static/index.html`, `app.css` | The picker's markup and styles |
+| `claude_always_remote/static/app.js` | Picker: rendering, actions, events (ES module, no build step) |
+| `claude_always_remote/static/search.js` | Search syntax (`-neg`, `"phrase"`, `dir:`, `is:`, `age:`) |
+| `claude_always_remote/static/selection.js` | Multi-select: click, cmd/shift ranges, keyboard cursor |
+| `claude_always_remote/static/dialog.js` | Modal confirm/prompt (Enter confirms, Esc cancels) |
 | `systemd/`, `install.sh` | User unit template and installer |
 
 ## Rules
@@ -38,4 +51,6 @@ running; the supervisor adopts their windows).
 - Never edit a transcript another claude process has open; a running
   process owns its title (rename it by typing `/rename` into our window).
 - State names are the `State` enum in `supervisor.py`; the page's `STATE`
-  table mirrors them for labels.
+  table in `app.js` mirrors them for labels.
+- The page polls every 4s; only rewrite DOM through `setHTML` (skips
+  unchanged markup) so clicks aren't lost to a redraw mid-click.

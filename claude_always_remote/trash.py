@@ -88,6 +88,13 @@ class Trash:
                 found.append(item)
         return sorted(found, key=lambda i: i.deleted_at, reverse=True)
 
+    def empty(self) -> int:
+        """Remove everything in the trash for good; returns how many sessions."""
+        items = self.items()
+        for item in items:
+            shutil.rmtree(self._entry(item.session_id), ignore_errors=True)
+        return len(items)
+
     def _entry(self, session_id: str) -> Path:
         if not is_session_id(session_id):
             raise ValueError(f"not a session id: {session_id!r}")

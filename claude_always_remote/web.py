@@ -30,8 +30,11 @@ log = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 _ACTION_RE = re.compile(r"^/api/sessions/([^/]+)/([a-z]+)$")
 _GET_ACTIONS = {"screen", "messages"}
-_POST_ACTIONS = {"enable", "disable", "restart", "name", "rename", "delete", "restore"}
+_POST_ACTIONS = {"enable", "disable", "restart", "name", "rename", "delete", "restore", "move"}
 _MAX_BODY = 16 * 1024
+# Files under static/ the page may load; anything else under /static is a 404.
+_STATIC_RE = re.compile(r"^/static/([a-z][a-z0-9-]*\.(js|css))$")
+_STATIC_TYPES = {"js": "text/javascript; charset=utf-8", "css": "text/css; charset=utf-8"}
 
 
 class App:
@@ -94,6 +97,8 @@ class App:
             return self.actions.delete(sid)
         elif action == "restore":
             return self.actions.restore(sid)
+        elif action == "move":
+            return self.actions.move(sid, body.get("cwd"))
         else:
             raise ValueError(f"unknown action {action}")
         self.supervisor.wake()
@@ -107,6 +112,9 @@ def make_handler(app: App):
         def do_GET(self):
             if self.path in ("/", "/index.html"):
                 return self._send_file(STATIC_DIR / "index.html", "text/html; charset=utf-8")
+            static = _STATIC_RE.match(self.path)
+            if static and (STATIC_DIR / static.group(1)).is_file():
+                return self._send_file(STATIC_DIR / static.group(1), _STATIC_TYPES[static.group(2)])
             if self.path == "/api/sessions":
                 return self._send_json(app.list_sessions())
             if self.path == "/api/trash":
@@ -121,13 +129,17 @@ def make_handler(app: App):
             self._send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
 
         def do_POST(self):
+            if self.path == "/api/trash/empty":
+                if not self._is_json():
+                    return self._send_json({"error": "send application/json"}, HTTPStatus.UNSUPPORTED_MEDIA_TYPE)
+                return self._send_json({"ok": True, "removed": app.trash.empty()})
             match = _ACTION_RE.match(self.path)
             if not match or match.group(2) not in _POST_ACTIONS:
                 return self._send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
             sid, action = match.groups()
             if not is_session_id(sid):
                 return self._send_json({"error": "bad session id"}, HTTPStatus.BAD_REQUEST)
-            if self.headers.get("Content-Type", "").split(";")[0].strip() != "application/json":
+            if not self._is_json():
                 return self._send_json({"error": "send application/json"}, HTTPStatus.UNSUPPORTED_MEDIA_TYPE)
             try:
                 body = self._read_json()
@@ -140,6 +152,9 @@ def make_handler(app: App):
                 return self._send_json({"error": str(e)}, HTTPStatus.BAD_REQUEST)
             log.info("%s %s from %s", action, sid[:8], self.client_address[0])
             self._send_json(result)
+
+        def _is_json(self) -> bool:
+            return self.headers.get("Content-Type", "").split(";")[0].strip() == "application/json"
 
         def _read_json(self) -> dict:
             length = int(self.headers.get("Content-Length") or 0)

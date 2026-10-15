@@ -6,13 +6,17 @@ transcript, so:
   appended as a custom-title record when nothing has it open, and is refused
   when another claude process has it open;
 - delete stops a kept-running session first, is refused while another claude
-  process has it open, and moves the files to the trash so it can be undone.
+  process has it open, and moves the files to the trash so it can be undone;
+- move (to another working folder) stops a kept-running session, moves its
+  files, and lets the supervisor relaunch it in the new folder.
 """
 
 import json
+import os
 import time
 
 from .live_registry import live_processes
+from .relocate import relocate
 from .screen import blocking_prompt
 from .session_id import short_id
 from .store import Store
@@ -71,6 +75,34 @@ class SessionActions:
         self.store.remove(sid)
         item = self.trash.put(sid, transcript.path, transcript.title, transcript.project)
         return {"ok": True, "title": item.title}
+
+    def move(self, sid: str, cwd) -> dict:
+        if not isinstance(cwd, str) or not cwd.strip():
+            raise ValueError("folder must be a non-empty path")
+        new_cwd = os.path.normpath(os.path.expanduser(cwd.strip()))
+        if not os.path.isabs(new_cwd):
+            raise ValueError("folder must be an absolute path (or start with ~)")
+        if not os.path.isdir(new_cwd):
+            raise ValueError(f"{new_cwd} is not an existing folder")
+        transcript = self._transcript(sid)
+        if new_cwd == transcript.cwd:
+            return {"ok": True, "cwd": new_cwd, "moved": False}
+        self._refuse_if_open_elsewhere(sid, "move")
+        entry = self.store.load().get(sid)
+        kept = bool(entry and entry.enabled)
+        if kept:
+            self.store.set_enabled(sid, False)
+            self.supervisor.wake()
+        try:
+            self._wait_until_stopped(sid)
+            relocate(transcript.path, sid, transcript.cwd, new_cwd, self.index.projects_dir)
+        except FileExistsError as e:
+            raise Conflict(str(e)) from e
+        finally:
+            if kept:
+                self.store.set_enabled(sid, True)
+                self.supervisor.wake()
+        return {"ok": True, "cwd": new_cwd, "moved": True}
 
     def restore(self, sid: str) -> dict:
         try:

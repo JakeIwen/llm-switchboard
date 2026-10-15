@@ -4,122 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Always Remote</title>
-<style>
-:root {
-  --bg: #f6f5f2; --surface: #ffffff; --surface-2: #efede8; --text: #1d1c1a; --muted: #6b6862;
-  --border: #e2dfd8; --accent: #c2622d; --accent-text: #ffffff;
-  --ok: #2f7d4f; --ok-bg: #e3f2e8; --info: #2d62a8; --info-bg: #e3ecf8;
-  --warn: #9a5b00; --warn-bg: #fbefd9; --bad: #b3261e; --bad-bg: #fbe3e1; --idle: #5f6368; --idle-bg: #ebeae7;
-  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #171614; --surface: #211f1d; --surface-2: #2a2826; --text: #ece9e3; --muted: #a29e96;
-    --border: #36332f; --accent: #e07a43; --accent-text: #1a1310;
-    --ok: #7fd19c; --ok-bg: #1f3327; --info: #8db5ef; --info-bg: #1e2b3e;
-    --warn: #f2bd6b; --warn-bg: #3a2c15; --bad: #f2948d; --bad-bg: #3d1f1d; --idle: #b2aea6; --idle-bg: #2c2a27;
-  }
-}
-* { box-sizing: border-box; }
-body {
-  margin: 0; background: var(--bg); color: var(--text);
-  font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  -webkit-text-size-adjust: 100%;
-}
-.wrap { max-width: 860px; margin: 0 auto; padding: 20px 16px 48px; }
-header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-h1 { font-size: 22px; margin: 0; letter-spacing: -0.01em; }
-.sub { color: var(--muted); font-size: 13px; }
-.toolbar { display: flex; gap: 8px; margin: 16px 0 12px; flex-wrap: wrap; }
-input[type=search], input[type=text] {
-  flex: 1 1 220px; min-width: 0; padding: 9px 12px; border-radius: 10px; border: 1px solid var(--border);
-  background: var(--surface); color: var(--text); font: inherit;
-}
-.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--surface); }
-.seg button { border: 0; background: transparent; color: var(--muted); padding: 8px 12px; font: inherit; cursor: pointer; }
-.seg button.on { background: var(--surface-2); color: var(--text); font-weight: 600; }
-.dirs { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 12px; }
-.chip {
-  border: 1px solid var(--border); background: var(--surface); color: var(--text); font: inherit; font-size: 13px;
-  padding: 5px 10px; border-radius: 999px; cursor: pointer; max-width: 100%; overflow-wrap: anywhere; text-align: left;
-}
-.chip .n { color: var(--muted); margin-left: 4px; font-variant-numeric: tabular-nums; }
-.chip.on { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
-.chip.on .n { color: inherit; opacity: .8; }
-.chip.zero { opacity: .45; }
-.dirlink { border: 0; background: none; padding: 0; font: inherit; color: inherit; cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; }
-.list { display: flex; flex-direction: column; gap: 8px; }
-.card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 12px 14px; }
-.card.enabled { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
-.row { display: flex; gap: 12px; align-items: flex-start; }
-.main { flex: 1; min-width: 0; }
-.title { font-weight: 600; overflow-wrap: anywhere; }
-.meta { color: var(--muted); font-size: 13px; margin-top: 2px; display: flex; gap: 6px 10px; flex-wrap: wrap; }
-.meta code { font-family: var(--mono); font-size: 12px; }
-.detail { font-size: 13px; margin-top: 6px; color: var(--muted); }
-.badges { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
-.badge { font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
-.b-ok { color: var(--ok); background: var(--ok-bg); }
-.b-info { color: var(--info); background: var(--info-bg); }
-.b-warn { color: var(--warn); background: var(--warn-bg); }
-.b-bad { color: var(--bad); background: var(--bad-bg); }
-.b-idle { color: var(--idle); background: var(--idle-bg); }
-.switch { position: relative; width: 46px; height: 28px; flex: none; margin-top: 1px; }
-.switch input { opacity: 0; width: 0; height: 0; position: absolute; }
-.switch span {
-  position: absolute; inset: 0; border-radius: 999px; background: var(--surface-2);
-  border: 1px solid var(--border); cursor: pointer; transition: background .15s;
-}
-.switch span::after {
-  content: ""; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%;
-  background: var(--muted); transition: transform .15s, background .15s;
-}
-.switch input:checked + span { background: var(--accent); border-color: var(--accent); }
-.switch input:checked + span::after { transform: translateX(18px); background: var(--accent-text); }
-.switch input:focus-visible + span { outline: 2px solid var(--info); outline-offset: 2px; }
-.more {
-  border: 0; background: transparent; color: var(--muted); font-size: 18px; line-height: 1; padding: 4px 6px;
-  cursor: pointer; border-radius: 8px; flex: none;
-}
-.more:hover { background: var(--surface-2); }
-.panel { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 10px; }
-.panel label { font-size: 12px; color: var(--muted); display: block; margin-bottom: 4px; }
-.line { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-.btn {
-  border: 1px solid var(--border); background: var(--surface-2); color: var(--text); font: inherit; font-size: 14px;
-  padding: 8px 12px; border-radius: 10px; cursor: pointer;
-}
-.btn:hover { border-color: var(--muted); }
-pre {
-  margin: 0; padding: 10px; border-radius: 10px; background: #111; color: #ddd; font: 11px/1.35 var(--mono);
-  overflow-x: auto; max-height: 420px; overflow-y: auto; white-space: pre;
-}
-.cmd { font-family: var(--mono); font-size: 12px; background: var(--surface-2); padding: 6px 8px; border-radius: 8px; overflow-wrap: anywhere; user-select: all; }
-.empty, .err { color: var(--muted); padding: 24px 4px; text-align: center; }
-.err { color: var(--bad); }
-.hint { color: var(--muted); font-size: 12px; }
-.actions { display: flex; gap: 6px; flex-wrap: wrap; }
-.btn.danger { color: var(--bad); }
-.btn:disabled { opacity: .45; cursor: not-allowed; }
-a.btn { text-decoration: none; display: inline-block; }
-.cmdline { display: flex; gap: 6px; align-items: stretch; }
-.cmdline .cmd { flex: 1; min-width: 0; }
-.cmdline .btn { padding: 4px 10px; font-size: 13px; }
-.msgs { display: flex; flex-direction: column; gap: 6px; max-height: 420px; overflow-y: auto; }
-.msg { padding: 8px 10px; border-radius: 10px; font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; max-width: 92%; }
-.msg.user { align-self: flex-end; background: color-mix(in srgb, var(--accent) 16%, var(--surface)); }
-.msg.assistant { align-self: flex-start; background: var(--surface-2); }
-.trash { margin-top: 20px; }
-.trash summary { cursor: pointer; color: var(--muted); font-size: 14px; }
-.trash .card { margin-top: 8px; display: flex; gap: 10px; align-items: center; justify-content: space-between; }
-.toast {
-  position: fixed; left: 50%; bottom: calc(16px + env(safe-area-inset-bottom)); transform: translateX(-50%);
-  background: var(--text); color: var(--bg); padding: 10px 14px; border-radius: 12px; display: flex; gap: 12px;
-  align-items: center; max-width: calc(100% - 32px); box-shadow: 0 6px 24px rgba(0,0,0,.25); font-size: 14px; z-index: 10;
-}
-.toast[hidden] { display: none; }
-.toast button { border: 0; background: none; color: var(--accent); font: inherit; font-weight: 700; cursor: pointer; padding: 0; }
-</style>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23c2622d'/%3E%3Ccircle cx='16' cy='16' r='6' fill='%23fff'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
 <div class="wrap">
@@ -128,331 +14,50 @@ a.btn { text-decoration: none; display: inline-block; }
     <div class="sub" id="summary">loading…</div>
   </header>
   <div class="toolbar">
-    <input type="search" id="q" placeholder="Search title, folder or id" autocomplete="off">
+    <div class="searchrow">
+      <input type="search" id="q" placeholder='Search  ( -exclude  "phrase"  dir:  is:kept  age:<2d )' autocomplete="off" spellcheck="false">
+      <button type="button" class="help-btn" id="help-btn" aria-label="Search syntax" aria-expanded="false">?</button>
+    </div>
     <div class="seg" role="tablist">
       <button id="f-all" class="on" type="button">All</button>
       <button id="f-on" type="button">Kept running</button>
       <button id="f-open" type="button">Open now</button>
     </div>
   </div>
+  <div class="help" id="help" hidden>
+    Every term must match. Case doesn't matter.
+    <ul>
+      <li><code>word</code> in the title, first prompt, folder, id or Remote Control name; <code>"two words"</code> for a phrase</li>
+      <li><code>-word</code> excludes; works with everything below too, e.g. <code>-dir:tmp</code></li>
+      <li><code>dir:obd</code> folder · <code>title:telem</code> · <code>id:c969</code></li>
+      <li><code>is:kept</code> <code>is:off</code> <code>is:running</code> <code>is:open</code> <code>is:busy</code> <code>is:attention</code> <code>is:elsewhere</code></li>
+      <li><code>age:&lt;2d</code> active in the last 2 days · <code>age:&gt;1w</code> older than a week (units m h d w)</li>
+      <li><code>state:backoff</code> exact supervisor state</li>
+    </ul>
+    <p class="keys">Keys: <kbd>↑</kbd><kbd>↓</kbd> move · <kbd>Space</kbd> select · <kbd>⇧</kbd>+<kbd>↑</kbd><kbd>↓</kbd> extend · <kbd>⌘/Ctrl</kbd>+<kbd>A</kbd> all · <kbd>Enter</kbd> details · <kbd>⌫</kbd> delete · <kbd>Esc</kbd> clear · <kbd>/</kbd> search.
+      Click selects; <kbd>⌘/Ctrl</kbd>-click adds; <kbd>⇧</kbd>-click selects a range.</p>
+  </div>
+  <div class="qerr" id="qerr"></div>
   <div class="dirs" id="dirs" aria-label="Filter by folder"></div>
   <div class="list" id="list"></div>
-  <details class="trash" id="trash" hidden><summary id="trash-sum"></summary><div id="trash-list"></div></details>
+  <details class="trash" id="trash" hidden>
+    <summary id="trash-sum"></summary>
+    <div id="trash-list"></div>
+    <div class="trash-head"><button class="btn danger" type="button" id="trash-empty">Empty now</button></div>
+  </details>
   <p class="hint">Enabled sessions are resumed through <code>claudepd … --remote-control</code> in tmux, relaunched if they exit, and started again at boot.</p>
 </div>
+<datalist id="cwds"></datalist>
+<div class="bulkbar" id="bulkbar" hidden>
+  <span class="count" id="bulk-count"></span>
+  <button class="btn" type="button" data-bulk="keep">Keep running</button>
+  <button class="btn" type="button" data-bulk="stop">Stop keeping</button>
+  <button class="btn" type="button" data-bulk="move">Move to folder…</button>
+  <button class="btn danger" type="button" data-bulk="delete">Delete</button>
+  <button class="btn" type="button" data-bulk="all">Select all</button>
+  <button class="btn" type="button" data-bulk="clear" aria-label="Clear selection">✕</button>
+</div>
 <div class="toast" id="toast" hidden><span id="toast-msg"></span><button id="toast-undo" type="button">Undo</button></div>
-<script>
-const STATE = {
-  running:   ["Remote Control on", "b-ok"],
-  starting:  ["Starting", "b-info"],
-  attention: ["Needs attention", "b-warn"],
-  elsewhere: ["Waiting: open elsewhere", "b-idle"],
-  offline:   ["Waiting for network", "b-idle"],
-  backoff:   ["Exited, relaunching", "b-warn"],
-  missing:   ["Transcript missing", "b-bad"],
-  error:     ["Error", "b-bad"],
-};
-let data = null, filter = "all", dir = null;
-// The chosen folder is a per-browser convenience; storage can be unavailable.
-try { dir = localStorage.getItem("car.dir"); } catch {}
-function setDir(d) {
-  dir = d;
-  try { d === null ? localStorage.removeItem("car.dir") : localStorage.setItem("car.dir", d); } catch {}
-  render();
-}
-const UNKNOWN_DIR = "(unknown folder)";
-const dirOf = (s) => s.project || UNKNOWN_DIR;
-const expanded = new Set(), screens = new Map(), peeks = new Map();
-let trash = [];
-const $ = (id) => document.getElementById(id);
-const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-
-function age(t) {
-  if (!t) return "";
-  const s = Date.now() / 1000 - t;
-  if (s < 60) return "just now";
-  if (s < 3600) return Math.floor(s / 60) + "m ago";
-  if (s < 86400) return Math.floor(s / 3600) + "h ago";
-  return Math.floor(s / 86400) + "d ago";
-}
-const size = (b) => b == null ? "" : b < 1048576 ? (b / 1024).toFixed(0) + " KB" : (b / 1048576).toFixed(1) + " MB";
-
-async function api(path, body) {
-  const opts = body === undefined ? {} : { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body) };
-  const r = await fetch(path, opts);
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(j.error || r.statusText);
-  return j;
-}
-
-async function refresh() {
-  try {
-    [data, { trash }] = await Promise.all([api("/api/sessions"), api("/api/trash")]);
-    render();
-  } catch (e) {
-    $("list").innerHTML = `<div class="err">Can't reach the service: ${esc(e.message)}</div>`;
-  }
-}
-
-// Every filter except the folder one, so folder counts reflect the search and tab.
-function matches(s) {
-  const q = $("q").value.trim().toLowerCase();
-  if (filter === "on" && !s.enabled) return false;
-  if (filter === "open" && !(s.enabled || s.open_elsewhere.length)) return false;
-  if (!q) return true;
-  return [s.title, s.first_prompt, s.project, s.id, s.rc_name].some((v) => (v || "").toLowerCase().includes(q));
-}
-
-const visible = () => data.sessions.filter((s) => matches(s) && (dir === null || dirOf(s) === dir));
-
-function renderDirs() {
-  // Folders ordered by their most recent session.
-  const dirs = new Map();
-  for (const s of data.sessions) {
-    const d = dirs.get(dirOf(s)) || { latest: 0, n: 0 };
-    d.latest = Math.max(d.latest, s.mtime || 0);
-    if (matches(s)) d.n++;
-    dirs.set(dirOf(s), d);
-  }
-  if (dir !== null && !dirs.has(dir)) dirs.set(dir, { latest: 0, n: 0 });
-  const total = data.sessions.filter(matches).length;
-  const chip = (d, label, n) => `<button type="button" class="chip ${dir === d ? "on" : ""} ${n ? "" : "zero"}" data-dir="${esc(d ?? "")}" ${d === null ? "data-all" : ""}>${esc(label)}<span class="n">${n}</span></button>`;
-  const sorted = [...dirs].sort((a, b) => b[1].latest - a[1].latest);
-  $("dirs").innerHTML = chip(null, "All folders", total) + sorted.map(([d, v]) => chip(d, d, v.n)).join("");
-}
-
-function badges(s) {
-  const out = [];
-  const st = s.status;
-  if (s.enabled && st) {
-    const [label, cls] = STATE[st.state] || [st.state, "b-idle"];
-    out.push(`<span class="badge ${cls}">${esc(label)}</span>`);
-    if (st.busy) out.push(`<span class="badge b-info">Working</span>`);
-    if (st.rss_kb) out.push(`<span class="badge b-idle">${Math.round(st.rss_kb / 1024)} MB</span>`);
-  } else if (s.enabled) {
-    out.push(`<span class="badge b-info">Queued</span>`);
-  }
-  if (s.open_elsewhere.length && !(s.enabled && st && st.state === "elsewhere")) {
-    out.push(`<span class="badge b-idle">Open in a terminal</span>`);
-  }
-  return out.length ? `<div class="badges">${out.join("")}</div>` : "";
-}
-
-function copyButton(text) {
-  return `<button class="btn" data-act="copy" data-text="${esc(text)}">Copy</button>`;
-}
-
-function messagesBlock(id) {
-  const m = peeks.get(id);
-  if (m === undefined) return "";
-  if (typeof m === "string") return `<div class="hint">${esc(m)}</div>`;
-  if (!m.length) return `<div class="hint">No messages yet.</div>`;
-  return `<div class="msgs">${m.map((x) => `<div class="msg ${x.role}">${esc(x.text)}</div>`).join("")}</div>`;
-}
-
-function panel(s) {
-  const st = s.status || {};
-  const screen = screens.get(s.id);
-  const elsewhere = s.open_elsewhere.length ? `Open in another claude process (pid ${s.open_elsewhere[0].pid}); close it to rename or delete.` : "";
-  const lock = elsewhere ? `disabled title="${esc(elsewhere)}"` : "";
-  const exit = st.last_exit ? `<div class="hint">Last exit: status ${esc(st.last_exit.status)} after ${Math.round(st.last_exit.ran_s)}s, ${age(st.last_exit.at)} · launches: ${st.launches}</div>` : "";
-  const attach = `claude-always-remote attach ${s.short_id}`;
-  return `<div class="panel">
-    <div class="actions">
-      ${s.remote_url ? `<a class="btn" href="${esc(s.remote_url)}" target="_blank" rel="noopener">Open in Claude ↗</a>` : ""}
-      <button class="btn" data-act="peek" data-id="${s.id}">${peeks.has(s.id) ? "Refresh messages" : "Recent messages"}</button>
-      ${s.enabled ? `<button class="btn" data-act="screen" data-id="${s.id}">${screen !== undefined ? "Refresh screen" : "Terminal screen"}</button>` : ""}
-      ${s.enabled ? `<button class="btn" data-act="restart" data-id="${s.id}">Restart</button>` : ""}
-      <button class="btn danger" data-act="delete" data-id="${s.id}" ${lock}>Delete</button>
-    </div>
-    ${elsewhere ? `<div class="hint">${esc(elsewhere)}</div>` : ""}
-    ${messagesBlock(s.id)}
-    ${screen !== undefined ? `<pre>${esc(screen || "(nothing to show)")}</pre>` : ""}
-    <div>
-      <label for="title-${s.id}">Title</label>
-      <div class="line">
-        <input type="text" id="title-${s.id}" value="${esc(s.title)}" maxlength="120">
-        <button class="btn" data-act="rename" data-id="${s.id}" ${lock}>Rename</button>
-      </div>
-    </div>
-    <div>
-      <label for="name-${s.id}">Remote Control name (blank = session title; applies on next launch)</label>
-      <div class="line">
-        <input type="text" id="name-${s.id}" value="${esc(s.rc_name)}" placeholder="${esc(st.rc_name || s.title)}" maxlength="120">
-        <button class="btn" data-act="name" data-id="${s.id}">Save</button>
-      </div>
-    </div>
-    ${exit}
-    <div>
-      <label>Resume in a shell on the Pi</label>
-      <div class="cmdline"><div class="cmd">${esc(s.resume_cmd)}</div>${copyButton(s.resume_cmd)}</div>
-    </div>
-    ${s.enabled ? `<div>
-      <label>Attach to its tmux window (detach: Ctrl-b d)</label>
-      <div class="cmdline"><div class="cmd">${esc(attach)}</div>${copyButton(attach)}</div>
-    </div>` : ""}
-    <div class="hint">${s.cwd ? esc(s.cwd) + " · " : ""}<code>${esc(s.id)}</code></div>
-  </div>`;
-}
-
-function card(s) {
-  const st = s.status;
-  const detail = s.enabled && st && st.detail && st.state !== "running" ? `<div class="detail">${esc(st.detail)}</div>` : "";
-  return `<div class="card ${s.enabled ? "enabled" : ""}">
-    <div class="row">
-      <label class="switch" title="${s.enabled ? "Stop keeping this running" : "Keep this running with Remote Control"}">
-        <input type="checkbox" data-act="toggle" data-id="${s.id}" ${s.enabled ? "checked" : ""} aria-label="Keep running">
-        <span></span>
-      </label>
-      <div class="main">
-        <div class="title">${esc(s.title)}</div>
-        <div class="meta"><button type="button" class="dirlink" data-dir="${esc(dirOf(s))}" title="Show only this folder">${esc(dirOf(s))}</button><span>${age(s.mtime)}</span><code>${esc(s.short_id)}</code><span>${size(s.size)}</span></div>
-        ${badges(s)}${detail}
-      </div>
-      <button class="more" data-act="expand" data-id="${s.id}" aria-label="Details">${expanded.has(s.id) ? "▴" : "▾"}</button>
-    </div>
-    ${expanded.has(s.id) ? panel(s) : ""}
-  </div>`;
-}
-
-function render() {
-  // Don't redraw under someone typing a name.
-  if (document.activeElement && document.activeElement.matches("#list input[type=text]")) return;
-  const on = data.sessions.filter((s) => s.enabled);
-  const rc = on.filter((s) => s.status && s.status.state === "running").length;
-  $("summary").textContent = `${data.host} · ${on.length} kept running · ${rc} with Remote Control`;
-  renderDirs();
-  const rows = visible();
-  $("list").innerHTML = rows.length ? rows.map(card).join("") : `<div class="empty">No sessions match.</div>`;
-  renderTrash();
-}
-
-function renderTrash() {
-  $("trash").hidden = !trash.length;
-  $("trash-sum").textContent = `Recently deleted (${trash.length}) · kept 30 days`;
-  $("trash-list").innerHTML = trash.map((t) => `<div class="card">
-    <div class="main"><div class="title">${esc(t.title)}</div>
-      <div class="meta"><span>${esc(t.project)}</span><span>deleted ${age(t.deleted_at)}</span><code>${esc(t.short_id)}</code></div></div>
-    <button class="btn" data-restore="${t.id}">Restore</button></div>`).join("");
-}
-
-let toastTimer = null;
-function toast(msg, undo) {
-  $("toast-msg").textContent = msg;
-  $("toast-undo").hidden = !undo;
-  $("toast-undo").onclick = () => { $("toast").hidden = true; undo(); };
-  $("toast").hidden = false;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { $("toast").hidden = true; }, undo ? 10000 : 4000);
-}
-
-async function copyText(text) {
-  // navigator.clipboard needs a secure (https) page; plain http on the LAN falls back to execCommand.
-  try { await navigator.clipboard.writeText(text); return true; } catch {}
-  const ta = document.createElement("textarea");
-  ta.value = text; ta.setAttribute("readonly", ""); ta.style.position = "fixed"; ta.style.opacity = "0";
-  document.body.appendChild(ta); ta.select(); ta.setSelectionRange(0, text.length);
-  let ok = false;
-  try { ok = document.execCommand("copy"); } catch {}
-  ta.remove();
-  return ok;
-}
-
-async function restore(id) {
-  try { await api(`/api/sessions/${id}/restore`, {}); toast("Restored."); }
-  catch (e) { toast(`Restore failed: ${e.message}`); }
-  refresh();
-}
-
-async function loadScreen(id) {
-  try { screens.set(id, (await api(`/api/sessions/${id}/screen`)).screen); }
-  catch (e) { screens.set(id, "error: " + e.message); }
-  render();
-}
-
-$("dirs").addEventListener("click", (ev) => {
-  const el = ev.target.closest("[data-dir]");
-  if (!el) return;
-  const d = el.hasAttribute("data-all") ? null : el.dataset.dir;
-  setDir(d === dir ? null : d);
-});
-
-$("list").addEventListener("click", async (ev) => {
-  const link = ev.target.closest(".dirlink");
-  if (link) return setDir(link.dataset.dir === dir ? null : link.dataset.dir);
-  const el = ev.target.closest("[data-act]");
-  if (!el || el.dataset.act === "toggle") return;
-  const id = el.dataset.id, s = data.sessions.find((x) => x.id === id);
-  if (el.dataset.act === "expand") {
-    expanded.has(id) ? expanded.delete(id) : expanded.add(id);
-    render();
-  } else if (el.dataset.act === "screen") {
-    loadScreen(id);
-  } else if (el.dataset.act === "restart") {
-    if (s.status && s.status.busy && !confirm("This session is working on a turn. Restart anyway?")) return;
-    await act(id, "restart");
-  } else if (el.dataset.act === "name") {
-    await act(id, "name", { name: $("name-" + id).value });
-    document.activeElement.blur();
-  } else if (el.dataset.act === "rename") {
-    const title = $("title-" + id).value.trim();
-    document.activeElement.blur();
-    if (!title || title === s.title) return;
-    if (await act(id, "rename", { title })) toast(`Renamed to “${title}”.`);
-  } else if (el.dataset.act === "copy") {
-    toast((await copyText(el.dataset.text)) ? "Copied." : "Couldn't copy; select the text instead.");
-  } else if (el.dataset.act === "peek") {
-    try { peeks.set(id, (await api(`/api/sessions/${id}/messages`)).messages); }
-    catch (e) { peeks.set(id, "Couldn't load messages: " + e.message); }
-    render();
-  } else if (el.dataset.act === "delete") {
-    const msg = s.enabled
-      ? `Stop “${s.title}” and delete it?\n\nIt stops being kept running. The transcript goes to Recently deleted for 30 days.`
-      : `Delete “${s.title}”?\n\nThe transcript goes to Recently deleted for 30 days.`;
-    if (s.status && s.status.busy && !confirm("This session is working on a turn right now. Continue?")) return;
-    if (!confirm(msg)) return;
-    el.disabled = true; el.textContent = "Deleting…";
-    if (await act(id, "delete")) {
-      expanded.delete(id);
-      toast(`Deleted “${s.title}”.`, () => restore(id));
-    }
-  }
-});
-
-$("trash-list").addEventListener("click", (ev) => {
-  const el = ev.target.closest("[data-restore]");
-  if (el) restore(el.dataset.restore);
-});
-
-$("list").addEventListener("change", async (ev) => {
-  const el = ev.target;
-  if (el.dataset.act !== "toggle") return;
-  const s = data.sessions.find((x) => x.id === el.dataset.id);
-  if (!el.checked && s.status && s.status.busy && !confirm("This session is working on a turn. Stop it anyway?")) {
-    el.checked = true;
-    return;
-  }
-  await act(s.id, el.checked ? "enable" : "disable");
-});
-
-async function act(id, action, body = {}) {
-  let ok = true;
-  try { await api(`/api/sessions/${id}/${action}`, body); }
-  catch (e) { ok = false; alert(`${action} failed: ${e.message}`); }
-  setTimeout(refresh, 600);
-  return ok;
-}
-
-for (const [btn, f] of [["f-all", "all"], ["f-on", "on"], ["f-open", "open"]]) {
-  $(btn).addEventListener("click", () => {
-    filter = f;
-    for (const b of ["f-all", "f-on", "f-open"]) $(b).classList.toggle("on", b === btn);
-    render();
-  });
-}
-$("q").addEventListener("input", () => data && render());
-refresh();
-setInterval(refresh, 4000);
-</script>
+<script type="module" src="/static/app.js"></script>
 </body>
 </html>
