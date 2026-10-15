@@ -50,6 +50,9 @@ let bulkProgress = "";     // non-empty while a bulk action runs
 const expanded = new Set(), screens = new Map(), peeks = new Map();
 const sel = new Selection();
 const watching = new Map();  // id -> title of sessions created here, until they're ready
+// The open Move ▾ menu: { id, cwd }, keeping the folder typed before it opened
+// (opening it redraws the panel's fields).
+let menu = null;
 // The chosen folder is a per-browser convenience; storage can be unavailable.
 try { dir = localStorage.getItem("car.dir"); } catch {}
 
@@ -151,6 +154,17 @@ function field(s, key, label, value, button, extra = "") {
     </div>`;
 }
 
+function moveSplit(s, lock) {
+  const open = menu?.id === s.id;
+  return `<div class="split">
+      <button class="btn" data-act="move" data-id="${s.id}" ${lock}>Move</button>
+      <button class="btn caret" data-act="menu" data-id="${s.id}" aria-label="More folder actions" aria-haspopup="menu" aria-expanded="${open}">▾</button>
+      ${open ? `<div class="menu" role="menu">
+        <button type="button" role="menuitem" data-act="fork" data-id="${s.id}">Fork…<small>Copy the conversation into a new session; the original stays as it is</small></button>
+      </div>` : ""}
+    </div>`;
+}
+
 function panel(s) {
   const st = s.status || {};
   const screen = screens.get(s.id);
@@ -168,8 +182,8 @@ function panel(s) {
     ${messagesBlock(s.id)}
     ${screen !== undefined ? `<pre>${esc(screen || "(nothing to show)")}</pre>` : ""}
     ${field(s, "title", "Title", s.title, `<button class="btn" data-act="rename" data-id="${s.id}" ${lock}>Rename</button>`)}
-    ${field(s, "cwd", "Working folder (moves the transcript; a kept session restarts there)", s.cwd,
-            `<button class="btn" data-act="move" data-id="${s.id}" ${lock}>Move</button>`, `list="cwds" spellcheck="false"`)}
+    ${field(s, "cwd", "Working folder (Move takes the transcript there and a kept session restarts there; ▾ Fork copies it instead)",
+            menu?.id === s.id ? menu.cwd : s.cwd, moveSplit(s, lock), `list="cwds" spellcheck="false"`)}
     ${field(s, "name", "Remote Control name (blank = session title; applies on next launch)", s.rc_name,
             `<button class="btn" data-act="name" data-id="${s.id}">Save</button>`, `placeholder="${esc(st.rc_name || s.title)}"`)}
     ${exit}
@@ -385,6 +399,7 @@ async function newSession() {
         options: usable.map((f) => ({ value: f.cwd, label: `${f.project}  (${plural(f.sessions, "session")})` })) },
       { name: "name", label: "Name", placeholder: "What is this session for?", required: true, autofocus: true, maxlength: 120 },
     ],
+    validate: (v) => nameTaken(v.cwd, v.name),
   });
   if (!res) return;
   let created;
@@ -412,6 +427,47 @@ function checkWatched() {
       }, 20000);
     }
   }
+}
+
+// Names are unique per folder (the server enforces it; this explains it early).
+const nameKey = (t) => t.trim().split(/\s+/).join(" ").toLowerCase();
+function nameTaken(cwd, title) {
+  const folder = cwd.trim().replace(/(.)\/+$/, "$1");
+  const other = data.sessions.find((s) => (s.cwd === folder || s.project === folder) && nameKey(s.title) === nameKey(title));
+  return other ? `${other.project} already has a session named “${other.title}”.` : "";
+}
+
+function forkName(s) {
+  for (let n = 1; ; n++) {
+    const name = `${s.title.slice(0, 100)} (fork${n > 1 ? " " + n : ""})`;
+    if (!nameTaken(s.cwd, name)) return name;
+  }
+}
+
+async function forkSession(id, cwd) {
+  const s = byId(id);
+  menu = null;
+  render();
+  const res = await formDialog({
+    title: `Fork “${s.title}”`,
+    body: "Copies the conversation so far into a new session. The original is left as it is, even if it's running.",
+    confirm: "Fork",
+    fields: [
+      { name: "title", label: "Name", required: true, autofocus: true, maxlength: 120, value: forkName(s) },
+      { name: "cwd", label: "Folder", required: true, value: cwd || s.cwd, list: "cwds", placeholder: "/home/pi/dev/…" },
+      { name: "keep", label: "Keep it running with Remote Control", kind: "checkbox", value: s.enabled },
+    ],
+    validate: (v) => nameTaken(v.cwd, v.title),
+  });
+  if (!res) return;
+  let made;
+  try { made = await api(`/api/sessions/${id}/fork`, { ...res, cwd: res.cwd.trim() }); }
+  catch (e) { return toast(`Fork failed: ${e.message}`); }
+  if (res.keep) watching.set(made.id, made.title);
+  sel.moveCursor(made.id);
+  await refresh();
+  scrollToCursor();
+  toast(`Forked as “${made.title}”${res.keep ? "; starting it…" : "."}`);
 }
 
 async function restoreMany(ids) {
@@ -467,6 +523,11 @@ async function onAction(el) {
       return render();
     case "delete": return deleteSessions([id]);
     case "move": return moveSessions([id], $("cwd-" + id).value);
+    case "menu":
+      menu = menu?.id === id ? null : { id, cwd: $("cwd-" + id).value };
+      render();
+      return document.querySelector(".menu button")?.focus();
+    case "fork": return forkSession(id, menu?.cwd);
     case "screen":
       try { screens.set(id, (await api(`/api/sessions/${id}/screen`)).screen); }
       catch (e) { screens.set(id, "error: " + e.message); }
@@ -567,9 +628,20 @@ function scrollToCursor() {
   document.querySelector(`[data-card="${sel.cursor}"]`)?.scrollIntoView({ block: "nearest" });
 }
 
+// A click anywhere outside the open menu closes it.
+document.addEventListener("click", (ev) => {
+  if (menu && !ev.target.closest(".split")) { menu = null; render(); }
+});
+
 // Keyboard selection. Ignored while typing in a field or while a dialog is open.
 document.addEventListener("keydown", (ev) => {
   if (!data || document.querySelector("dialog[open]")) return;
+  if (ev.key === "Escape" && menu) {
+    const id = menu.id;
+    menu = null;
+    render();
+    return document.querySelector(`[data-act=menu][data-id="${id}"]`)?.focus();
+  }
   const t = ev.target;
   if (t.matches?.("input, textarea, select")) {
     if (ev.key === "Escape" && t.id === "q") t.blur();

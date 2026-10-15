@@ -2,13 +2,14 @@
 // Escape cancels, in place of the browser's confirm()/prompt(). The confirm
 // button stays disabled until every required field has a value.
 
-// fields: [{ name, label, kind: "text" | "select", value, placeholder, list,
+// fields: [{ name, label, kind: "text" | "select" | "checkbox", value, placeholder, list,
 //            required, options: [{ value, label, disabled }] }]
-function open({ title, body, confirm, danger, fields = [] }) {
+// validate(values) returns a message to show (and blocks confirming), or "".
+function open({ title, body, confirm, danger, fields = [], validate }) {
   const dlg = document.createElement("dialog");
   dlg.className = "dlg";
   dlg.innerHTML = `<form method="dialog">
-    <h2></h2><div class="dlg-body"></div><div class="dlg-fields"></div>
+    <h2></h2><div class="dlg-body"></div><div class="dlg-fields"></div><div class="dlg-error" role="alert"></div>
     <div class="dlg-buttons">
       <button type="button" class="btn" data-cancel>Cancel</button>
       <button type="submit" class="btn primary ${danger ? "danger-fill" : ""}" value="ok"></button>
@@ -20,8 +21,13 @@ function open({ title, body, confirm, danger, fields = [] }) {
   const ok = dlg.querySelector("[value=ok]");
   ok.textContent = confirm;
   const inputs = fields.map((f) => addField(dlg.querySelector(".dlg-fields"), f));
-  const valid = () => fields.every((f, i) => !f.required || inputs[i].value.trim());
-  const sync = () => { ok.disabled = !valid(); };
+  const values = () => Object.fromEntries(fields.map((f, i) => [f.name, inputs[i].type === "checkbox" ? inputs[i].checked : inputs[i].value]));
+  const problem = () => (validate && validate(values())) || "";
+  const valid = () => fields.every((f, i) => !f.required || inputs[i].value.trim()) && !problem();
+  const sync = () => {
+    dlg.querySelector(".dlg-error").textContent = problem();
+    ok.disabled = !valid();
+  };
   for (const el of inputs) el.addEventListener("input", sync);
   sync();
   document.body.append(dlg);
@@ -45,7 +51,7 @@ function open({ title, body, confirm, danger, fields = [] }) {
     dlg.addEventListener("close", () => {
       dlg.remove();
       if (!fields.length) return resolve(result);
-      resolve(result ? Object.fromEntries(fields.map((f, i) => [f.name, inputs[i].value])) : null);
+      resolve(result ? values() : null);
     });
     dlg.showModal();
     const first = inputs.find((el, i) => fields[i].autofocus) || inputs[0];
@@ -59,6 +65,14 @@ function addField(container, f) {
   wrap.className = "dlg-field";
   if (f.label) wrap.append(Object.assign(document.createElement("span"), { textContent: f.label }));
   let el;
+  if (f.kind === "checkbox") {
+    wrap.classList.add("dlg-check");
+    el = Object.assign(document.createElement("input"), { type: "checkbox", checked: Boolean(f.value) });
+    el.name = f.name;
+    wrap.prepend(el);
+    container.append(wrap);
+    return el;
+  }
   if (f.kind === "select") {
     el = document.createElement("select");
     for (const o of f.options) {
@@ -87,4 +101,4 @@ export const promptDialog = ({ title, body, confirm = "OK", value = "", placehol
   open({ title, body, confirm, fields: [{ name: "value", value, placeholder, list }] }).then((r) => r && r.value);
 
 // Resolves to { [field name]: value }, or null if cancelled.
-export const formDialog = ({ title, body, confirm = "OK", fields }) => open({ title, body, confirm, fields });
+export const formDialog = ({ title, body, confirm = "OK", fields, validate }) => open({ title, body, confirm, fields, validate });

@@ -21,18 +21,18 @@ Sharing the socket would let its supervisor close the real windows.
 | `claude_always_remote/paths.py` | Shared locations, names, the managed-process env marker, default port |
 | `claude_always_remote/session_id.py` | Session id validation and short ids |
 | `claude_always_remote/store.py` | The enabled-session list (locked, atomic JSON) |
-| `claude_always_remote/transcripts.py` | Finding and summarizing `~/.claude/projects/*/*.jsonl` (cached) |
+| `claude_always_remote/transcripts.py` | Finding and summarizing `~/.claude/projects/*/*.jsonl` (cached); the record markers and the custom-title line |
 | `claude_always_remote/live_registry.py` | Which claude processes are running (`~/.claude/sessions`, `/proc`) |
 | `claude_always_remote/tmux.py` | The dedicated tmux server and its windows |
 | `claude_always_remote/launcher.py` | The pane command (goes through `claudepd`) |
 | `claude_always_remote/screen.py` | Reading a captured Claude Code screen: `/rc` indicator, blocking prompts |
 | `claude_always_remote/connectivity.py` | API reachability gate |
 | `claude_always_remote/supervisor.py` | Reconcile loop, `State` enum, backoff |
-| `claude_always_remote/session_actions.py` | Rename / delete / restore, aware of running processes (`Conflict` → 409) |
+| `claude_always_remote/session_actions.py` | Rename / create / delete / move / fork / restore, aware of running processes (`Conflict` → 409); per-folder unique names |
 | `claude_always_remote/trash.py` | Deleted transcripts, kept 30 days for restore |
 | `claude_always_remote/folders.py` | Folders a new session may use (existing, trusted per `~/.claude.json`, never `~`) |
 | `claude_always_remote/notify.py` | Push notifications via `~/scripts/ntfy_send.sh` (`CLAUDE_ALWAYS_REMOTE_NOTIFY` overrides; empty disables) |
-| `claude_always_remote/relocate.py` | Moving a transcript to another working folder (Claude Code's project-folder naming) |
+| `claude_always_remote/relocate.py` | Moving or forking a transcript into a working folder (Claude Code's project-folder naming, line rewriting) |
 | `claude_always_remote/conversation.py` | Recent prompts and replies from a transcript's tail |
 | `claude_always_remote/catalog.py` | Row shape shared by the web API and CLI |
 | `claude_always_remote/web.py` | HTTP API and static page |
@@ -41,7 +41,7 @@ Sharing the socket would let its supervisor close the real windows.
 | `claude_always_remote/static/app.js` | Picker: rendering, actions, events (ES module, no build step) |
 | `claude_always_remote/static/search.js` | Search syntax (`-neg`, `"phrase"`, `dir:`, `is:`, `age:`) |
 | `claude_always_remote/static/selection.js` | Multi-select: click, cmd/shift ranges, keyboard cursor |
-| `claude_always_remote/static/dialog.js` | Modal confirm/prompt (Enter confirms, Esc cancels) |
+| `claude_always_remote/static/dialog.js` | Modal confirm/prompt/form (text, select, checkbox fields; `validate`; Enter confirms, Esc cancels) |
 | `systemd/`, `install.sh` | User unit template and installer |
 
 ## Rules
@@ -55,6 +55,8 @@ Sharing the socket would let its supervisor close the real windows.
   it with `--session-id … --name …` until the transcript exists, then `--resume`.
 - Never edit a transcript another claude process has open; a running
   process owns its title (rename it by typing `/rename` into our window).
+- Session names are unique per folder (case and spacing ignored); every path
+  that sets or moves a name goes through `SessionActions._refuse_duplicate_name`.
 - State names are the `State` enum in `supervisor.py`; the page's `STATE`
   table in `app.js` mirrors them for labels.
 - The page polls every 4s; only rewrite DOM through `setHTML` (skips

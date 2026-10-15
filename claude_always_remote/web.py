@@ -31,7 +31,7 @@ log = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 _ACTION_RE = re.compile(r"^/api/sessions/([^/]+)/([a-z]+)$")
 _GET_ACTIONS = {"screen", "messages"}
-_POST_ACTIONS = {"enable", "disable", "restart", "name", "rename", "delete", "restore", "move"}
+_POST_ACTIONS = {"enable", "disable", "restart", "name", "rename", "delete", "restore", "move", "fork"}
 _MAX_BODY = 16 * 1024
 # Files under static/ the page may load; anything else under /static is a 404.
 _STATIC_RE = re.compile(r"^/static/([a-z][a-z0-9-]*\.(js|css))$")
@@ -107,6 +107,8 @@ class App:
             return self.actions.restore(sid)
         elif action == "move":
             return self.actions.move(sid, body.get("cwd"))
+        elif action == "fork":
+            return self.actions.fork(sid, body.get("cwd"), body.get("title"), bool(body.get("keep")))
         else:
             raise ValueError(f"unknown action {action}")
         self.supervisor.wake()

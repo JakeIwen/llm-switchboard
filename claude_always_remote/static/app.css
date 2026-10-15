@@ -176,5 +176,24 @@ select.dlg-input {
 }
 .dlg-body p { margin: 6px 0 0; }
 .btn:disabled.primary { opacity: .45; }
+.dlg-check { flex-direction: row; align-items: center; gap: 8px; color: var(--text); font-size: 14px; }
+.dlg-check input { width: 18px; height: 18px; margin: 0; flex: none; }
+.dlg-error { color: var(--bad); font-size: 13px; }
+.dlg-error:empty { display: none; }
 .dlg-buttons { display: flex; justify-content: flex-end; gap: 8px; }
 @media (hover: none) { .keys { display: none; } }
+
+/* Split button: the main action, plus a caret that opens a menu of alternatives. */
+.split { position: relative; display: inline-flex; }
+.split > .btn:first-child { border-radius: 10px 0 0 10px; }
+.split > .caret { border-radius: 0 10px 10px 0; border-left: 0; padding: 8px 9px; }
+.menu {
+  position: absolute; right: 0; top: calc(100% + 4px); z-index: 20; min-width: 240px; padding: 4px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 6px 24px rgba(0,0,0,.18);
+}
+.menu button {
+  display: block; width: 100%; text-align: left; background: none; border: 0; color: var(--text);
+  font: inherit; font-size: 14px; padding: 8px 10px; border-radius: 8px; cursor: pointer;
+}
+.menu button:hover, .menu button:focus-visible { background: var(--surface-2); }
+.menu button small { display: block; font-size: 12px; color: var(--muted); }

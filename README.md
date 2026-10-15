@@ -36,6 +36,10 @@ session (▾) for:
 - **Working folder / Move**: moves the transcript under another folder's
   project directory and points its `cwd` fields there, so `claudepd --resume`
   works from the new folder; a kept session restarts there
+- **Move ▾ → Fork…**: copies the conversation so far into a new session (new
+  id, a name you choose, in that folder or another), optionally kept running;
+  the original is only read, so it can be running. The copy drops the
+  original's Remote Control link and any half-written last line.
 - Copyable resume and attach commands
 
 The **×** on each session deletes it: a kept session is stopped first, and
@@ -45,6 +49,10 @@ deleted" list (Restore, or Empty now); entries expire after 30 days.
 
 Rename, move and delete are refused while the session is open in another
 claude process (like an SSH terminal), the same rule as `clauderm`/`claudeclean`.
+
+No two sessions in one folder may share a name (ignoring case and spacing):
+rename, new, move and fork are refused with a message when they would make a
+duplicate. Claude Code itself doesn't enforce this.
 
 ### New sessions
 
@@ -96,6 +104,7 @@ claude-always-remote restart c96934f7
 claude-always-remote attach c96934f7      # open its tmux window (detach: Ctrl-b d)
 claude-always-remote new --list           # folders a new session can use
 claude-always-remote new ~/dev/obd-things "what it's for"
+claude-always-remote fork c96934f7 "try another approach" [--folder ~/dev] [--keep]
 claude-always-remote stop-all             # kill the tmux server
 journalctl --user -u claude-always-remote -f
 ```

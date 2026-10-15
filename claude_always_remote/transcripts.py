@@ -22,7 +22,7 @@ _USER = b'"type":"user"'
 _CUSTOM_TITLE = b'"type":"custom-title"'
 _AI_TITLE = b'"type":"ai-title"'
 _SUMMARY = b'"type":"summary"'
-_BRIDGE = b'"type":"bridge-session"'
+BRIDGE_RECORD = b'"type":"bridge-session"'
 # A Remote Control bridge id "cse_X" is the claude.ai session "session_X".
 _BRIDGE_PREFIX = "cse_"
 REMOTE_URL_BASE = "https://claude.ai/code/session_"
@@ -67,7 +67,7 @@ def summarize(path: Path) -> Transcript | None:
                 ai_title = str(_loads(line).get("aiTitle") or ai_title)
             elif _SUMMARY in line:
                 summary = str(_loads(line).get("summary") or summary)
-            elif _BRIDGE in line:
+            elif BRIDGE_RECORD in line:
                 bridge_id = str(_loads(line).get("bridgeSessionId") or bridge_id)
             elif not first_prompt and _USER in line:
                 first_prompt = prompt_text(_loads(line))
@@ -84,6 +84,12 @@ def summarize(path: Path) -> Transcript | None:
         size=stat.st_size,
         remote_url=_remote_url(bridge_id),
     )
+
+
+def custom_title_record(session_id: str, title: str) -> bytes:
+    """The line Claude Code appends when a session is renamed."""
+    record = {"type": "custom-title", "customTitle": title, "sessionId": session_id}
+    return (json.dumps(record, separators=(",", ":")) + "\n").encode()
 
 
 def _remote_url(bridge_id: str) -> str:

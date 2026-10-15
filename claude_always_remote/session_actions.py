@@ -8,23 +8,27 @@ transcript, so:
 - delete stops a kept-running session first, is refused while another claude
   process has it open, and moves the files to the trash so it can be undone;
 - move (to another working folder) stops a kept-running session, moves its
-  files, and lets the supervisor relaunch it in the new folder.
+  files, and lets the supervisor relaunch it in the new folder;
+- fork copies the conversation so far into a new session, leaving the
+  original (running or not) as it is.
+
+No two sessions in one folder may share a name (case and spacing aside);
+Claude Code doesn't enforce that, so rename, create, move and fork do.
 """
 
-import json
 import os
 import time
 import uuid
 
 from .folders import new_session_folders
 from .live_registry import live_processes
-from .relocate import relocate
+from .relocate import fork, relocate
 from .screen import blocking_prompt
 from .session_id import short_id
 from .store import Store
 from .supervisor import Supervisor
 from .tmux import Tmux
-from .transcripts import TranscriptIndex
+from .transcripts import TranscriptIndex, custom_title_record, display_path
 from .trash import Trash
 
 MAX_TITLE_LEN = 120
@@ -60,11 +64,11 @@ class SessionActions:
         title = self._clean_title(title)
         transcript = self._transcript(sid)
         self._refuse_if_open_elsewhere(sid, "rename")
+        self._refuse_duplicate_name(transcript.cwd, title, sid)
         window = self._window(sid)
         if window is None:
-            record = {"type": "custom-title", "customTitle": title, "sessionId": sid}
-            with open(transcript.path, "a") as f:
-                f.write(json.dumps(record, separators=(",", ":")) + "\n")
+            with open(transcript.path, "ab") as f:
+                f.write(custom_title_record(sid, title))
             return {"ok": True, "title": title, "via": "transcript"}
         ours = next((p for p in self.registry() if p.managed_for == sid), None)
         if ours is None or ours.status != "idle" or blocking_prompt(self.tmux.capture(window.window_id)):
@@ -80,6 +84,7 @@ class SessionActions:
             raise ValueError("pick one of the listed folders")
         if folder.blocked:
             raise Conflict(folder.blocked)
+        self._refuse_duplicate_name(cwd, title)
         sid = str(uuid.uuid4())
         self.store.create(sid, cwd, title)
         self.supervisor.announce_when_ready(sid)
@@ -106,17 +111,12 @@ class SessionActions:
         return {"ok": True, "title": item.title, "trashed": True}
 
     def move(self, sid: str, cwd) -> dict:
-        if not isinstance(cwd, str) or not cwd.strip():
-            raise ValueError("folder must be a non-empty path")
-        new_cwd = os.path.normpath(os.path.expanduser(cwd.strip()))
-        if not os.path.isabs(new_cwd):
-            raise ValueError("folder must be an absolute path (or start with ~)")
-        if not os.path.isdir(new_cwd):
-            raise ValueError(f"{new_cwd} is not an existing folder")
+        new_cwd = _existing_folder(cwd)
         transcript = self._transcript(sid)
         if new_cwd == transcript.cwd:
             return {"ok": True, "cwd": new_cwd, "moved": False}
         self._refuse_if_open_elsewhere(sid, "move")
+        self._refuse_duplicate_name(new_cwd, transcript.title, sid, "rename one of them first")
         entry = self.store.load().get(sid)
         kept = bool(entry and entry.enabled)
         if kept:
@@ -133,6 +133,19 @@ class SessionActions:
                 self.supervisor.wake()
         return {"ok": True, "cwd": new_cwd, "moved": True}
 
+    def fork(self, sid: str, cwd, title, keep: bool = False) -> dict:
+        """Copy a conversation into a new session in cwd (default: the same folder)."""
+        title = self._clean_title(title)
+        transcript = self._transcript(sid)
+        new_cwd = _existing_folder(cwd) if cwd else transcript.cwd
+        self._refuse_duplicate_name(new_cwd, title)
+        new_sid = str(uuid.uuid4())
+        fork(transcript.path, sid, new_sid, transcript.cwd, new_cwd, title, self.index.projects_dir)
+        if keep:
+            self.store.set_enabled(new_sid, True)
+            self.supervisor.announce_when_ready(new_sid)
+        return {"ok": True, "id": new_sid, "title": title, "cwd": new_cwd}
+
     def restore(self, sid: str) -> dict:
         try:
             path = self.trash.restore(sid)
@@ -145,6 +158,17 @@ class SessionActions:
         if transcript is None:
             raise LookupError("no transcript with that session id")
         return transcript
+
+    def _refuse_duplicate_name(self, cwd: str, title: str, sid: str | None = None,
+                               hint: str = "pick another name") -> None:
+        names = [(t.session_id, t.cwd, t.title) for t in self.index.all()]
+        # Created here and not yet on disk.
+        names += [(e.session_id, e.cwd, e.title) for e in self.store.load().values()
+                  if e.cwd and self.index.get(e.session_id) is None]
+        key = _name_key(title)
+        for other, other_cwd, other_title in names:
+            if other != sid and other_cwd == cwd and _name_key(other_title) == key:
+                raise Conflict(f"{display_path(cwd)} already has a session named “{other_title}”; {hint}.")
 
     def _refuse_if_open_elsewhere(self, sid: str, verb: str) -> None:
         others = [p for p in self.registry() if p.session_id == sid and p.managed_for != sid]
@@ -160,3 +184,18 @@ class SessionActions:
             if time.monotonic() > deadline:
                 raise Conflict(f"{short_id(sid)} didn't stop within {_STOP_TIMEOUT_S}s; try again.")
             self.sleep(0.5)
+
+
+def _name_key(title: str) -> str:
+    return " ".join(title.split()).casefold()
+
+
+def _existing_folder(cwd) -> str:
+    if not isinstance(cwd, str) or not cwd.strip():
+        raise ValueError("folder must be a non-empty path")
+    path = os.path.normpath(os.path.expanduser(cwd.strip()))
+    if not os.path.isabs(path):
+        raise ValueError("folder must be an absolute path (or start with ~)")
+    if not os.path.isdir(path):
+        raise ValueError(f"{path} is not an existing folder")
+    return path

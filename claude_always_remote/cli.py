@@ -67,6 +67,13 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("--list", action="store_true", help="show the folders a new session can use")
     s.set_defaults(func=_new)
 
+    s = sub.add_parser("fork", help="copy a session's conversation so far into a new session")
+    s.add_argument("session", help="session id, or a unique prefix of one")
+    s.add_argument("name", help="name for the copy (unique in its folder)")
+    s.add_argument("--folder", help="working folder for the copy (default: the original's)")
+    s.add_argument("--keep", action="store_true", help="keep the copy running with Remote Control")
+    s.set_defaults(func=_fork)
+
     s = sub.add_parser("stop-all", help="kill the tmux server and every session in it")
     s.set_defaults(func=_stop_all)
     return p
@@ -170,6 +177,15 @@ def _new(args) -> int:
     folder = os.path.normpath(os.path.abspath(os.path.expanduser(args.folder)))
     result = _post(args.port, "/api/sessions/new", {"cwd": folder, "name": args.name})
     print(f"Starting {result['id']} ({result['title']}); `claude-always-remote status` shows when it's ready.")
+    return 0
+
+
+def _fork(args) -> int:
+    sid = _resolve(args.session, transcripts_only=True)
+    folder = os.path.normpath(os.path.abspath(os.path.expanduser(args.folder))) if args.folder else ""
+    result = _post(args.port, f"/api/sessions/{sid}/fork", {"cwd": folder, "title": args.name, "keep": args.keep})
+    print(f"Forked as {result['id']} ({result['title']}) in {result['cwd']}"
+          + ("; `claude-always-remote status` shows when it's ready." if args.keep else "."))
     return 0
 
 

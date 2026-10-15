@@ -16,7 +16,8 @@ const browser = await puppeteer.launch({ executablePath: "/usr/bin/chromium", he
 const page = await browser.newPage();
 const errors = [];
 page.on("pageerror", (e) => errors.push(e.message));
-page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
+// A 409 is how the server refuses an action the test expects to be refused.
+page.on("console", (m) => m.type() === "error" && !m.text().includes("status of 409") && errors.push(m.text()));
 await page.setViewport({ width: 1000, height: 900 });
 await page.goto(BASE);
 await page.waitForSelector(".card");
@@ -37,6 +38,13 @@ const clickCard = async (i, mods = []) => {
   await el.click();
   for (const m of mods) await page.keyboard.up(m);
   await sleep(30);
+};
+// The 4s poll can replace a node between puppeteer finding it and clicking it.
+const clickSettled = async (selector) => {
+  for (let i = 0; ; i++) {
+    try { return await page.click(selector); }
+    catch (e) { if (i === 4 || !/detached/.test(e.message)) throw e; await sleep(100); }
+  }
 };
 const waitFor = async (fn, ms = 8000) => {
   const end = Date.now() + ms;
@@ -175,6 +183,45 @@ check("panel Move works", await waitFor(async () => {
   const r = await (await fetch(BASE + "api/sessions")).json();
   return r.sessions.find((s) => s.id === id)?.cwd === `${HOME}/dev/beta`;
 }));
+
+// --- Move ▾ menu: Fork, and names unique per folder
+const caret = `[data-act="menu"][data-id="${id}"]`;
+const menuShown = () => page.evaluate(() => Boolean(document.querySelector(".menu")));
+await clickSettled(caret); await sleep(100);
+check("the caret opens a menu", await menuShown());
+if (SHOTS) await page.screenshot({ path: `${SHOTS}/move-menu.png` });
+await page.keyboard.press("Escape"); await sleep(100);
+check("Escape closes the menu", !(await menuShown()));
+await clickSettled(caret); await sleep(100);
+await clickSettled("#summary"); await sleep(100);
+check("a click elsewhere closes the menu", !(await menuShown()));
+await clickSettled(caret); await sleep(100);
+await clickSettled(`.menu [data-act="fork"]`); await sleep(150);
+check("Fork opens a dialog", await dialogOpen());
+const forkName = await page.$eval("dialog[open] input[name=title]", (e) => e.value);
+check("fork name is prefilled", forkName.endsWith("(fork)"), forkName);
+check("fork folder is the session's", (await page.$eval("dialog[open] input[name=cwd]", (e) => e.value)) === `${HOME}/dev/beta`);
+await page.$eval("dialog[open] input[name=title]", (el) => { el.value = ""; });
+await page.type("dialog[open] input[name=title]", "beta RELEASE notes");
+check("a name taken in that folder is refused", await page.$eval("dialog[open] [value=ok]", (e) => e.disabled)
+  && (await page.$eval("dialog[open] .dlg-error", (e) => e.textContent)).includes("already has a session named"));
+if (SHOTS) await page.screenshot({ path: `${SHOTS}/fork-dialog.png` });
+await page.$eval("dialog[open] input[name=title]", (el) => { el.value = ""; });
+await page.type("dialog[open] input[name=title]", "Forked copy");
+await page.keyboard.press("Enter");
+const forked = await waitFor(async () => {
+  const r = await (await fetch(BASE + "api/sessions")).json();
+  const f = r.sessions.find((s) => s.title === "Forked copy");
+  return f && f.cwd === `${HOME}/dev/beta` && !f.enabled && r.sessions.some((s) => s.id === id);
+});
+check("Fork makes a copy in that folder and keeps the original", forked);
+check("the page confirms the fork", await waitFor(async () =>
+  (await page.$eval("#toast-msg", (e) => e.textContent)).includes("Forked as “Forked copy”")));
+await page.$eval(`#title-${id}`, (el) => { el.value = "forked COPY"; });
+await clickSettled(`[data-act="rename"][data-id="${id}"]`);
+check("renaming to a taken name is refused", await waitFor(async () =>
+  (await page.$eval("#toast-msg", (e) => e.textContent)).includes("already has a session named")),
+  await page.$eval("#toast-msg", (e) => e.textContent));
 
 // --- empty trash
 await page.click("#trash summary"); await sleep(50);

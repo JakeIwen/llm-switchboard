@@ -1,4 +1,4 @@
-"""Moving a conversation to another working folder.
+"""Moving or copying a conversation to another working folder.
 
 Claude Code files each transcript under projects/<encoded cwd>/ and resumes
 `--resume <id>` from the folder matching the current directory, so a session
@@ -14,6 +14,8 @@ import os
 import re
 import shutil
 import tempfile
+
+from .transcripts import BRIDGE_RECORD, custom_title_record
 
 # Claude Code shortens longer names with a hash; those aren't handled here.
 MAX_DIR_NAME = 200
@@ -75,4 +77,31 @@ def relocate(transcript: Path, session_id: str, old_cwd: str, new_cwd: str, proj
         transcript.unlink()
         if companion.is_dir() and not target_companion.exists():
             shutil.move(str(companion), target_companion)
+    return target
+
+
+def fork(transcript: Path, old_id: str, new_id: str, old_cwd: str, new_cwd: str, title: str,
+         projects_dir: Path) -> Path:
+    """Copy a conversation, as it stands, into a new session named title under
+    new_cwd's project folder, and return the copy's path. The original is
+    only read, so it may be running."""
+    target_dir = project_dir(projects_dir, new_cwd)
+    target = target_dir / f"{new_id}.jsonl"
+    if target.exists():
+        raise FileExistsError(f"{target} already exists")
+    target_dir.mkdir(parents=True, exist_ok=True)
+    old_sid, new_sid = b'"sessionId":"' + old_id.encode() + b'"', b'"sessionId":"' + new_id.encode() + b'"'
+    old_field, new_field = cwd_field(old_cwd), cwd_field(new_cwd)
+
+    def rewrite(line: bytes):
+        # Leave out a last line the original's process is still writing, and
+        # its Remote Control link, which belongs to the original.
+        if not line.endswith(b"\n") or BRIDGE_RECORD in line:
+            return None
+        line = line.replace(old_sid, new_sid)
+        return line.replace(old_field, new_field) if old_cwd else line
+
+    write_rewritten(transcript, target, rewrite, keep_stat=False)
+    with open(target, "ab") as f:
+        f.write(custom_title_record(new_id, title))
     return target

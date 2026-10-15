@@ -119,6 +119,14 @@ class CreateTest(Fixture):
             self.create(str(self.trusted), "   ")
         self.assertEqual(self.store.load(), {})
 
+    def test_create_refuses_a_name_taken_in_that_folder(self):
+        with self.assertRaises(Conflict):
+            self.create(str(self.trusted), "IN  Proj")
+        self.create(str(self.trusted), "logger")
+        with self.assertRaises(Conflict):
+            self.create(str(self.trusted), "Logger")
+        self.assertEqual(len(self.store.load()), 1)
+
     def test_ready_is_announced_once(self):
         sid = self.create(str(self.trusted), "logger")["id"]
         self.sup.reconcile()

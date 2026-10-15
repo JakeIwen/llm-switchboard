@@ -49,6 +49,12 @@ class Fixture(unittest.TestCase):
         self.sup.reconcile()
         self.live = [p for p in self.live if p.managed_for != SID]
 
+    def target(self):
+        """Another existing folder to move or fork into."""
+        target = Path(self.trash.root).parent / "elsewhere"
+        target.mkdir(exist_ok=True)
+        return target
+
     def proc(self, managed, status="idle"):
         return LiveProcess(pid=9, session_id=SID, cwd="", status=status, managed_for=SID if managed else None, rss_kb=1)
 
@@ -125,11 +131,6 @@ class SessionActionsTest(Fixture):
 
 
 class MoveTest(Fixture):
-    def target(self):
-        target = Path(self.trash.root).parent / "elsewhere"
-        target.mkdir(exist_ok=True)
-        return target
-
     def test_move_rewrites_cwd_and_files_under_new_folder(self):
         before = self.path.read_bytes()
         target = self.target()
@@ -170,6 +171,48 @@ class MoveTest(Fixture):
     def test_folder_names_match_claude_code(self):
         self.assertEqual(project_dir_name("/home/pi/dev/obd-things/projects/vehicle_data/dashboard"),
                          "-home-pi-dev-obd-things-projects-vehicle-data-dashboard")
+
+
+class ForkTest(Fixture):
+    def test_fork_copies_the_conversation_under_a_new_id_and_name(self):
+        with open(self.path, "a") as f:
+            f.write(line({"type": "assistant", "sessionId": SID, "cwd": str(self.work), "message": {"content": []}}))
+            f.write('{"type":"user","sessionId":"' + SID)  # still being written
+        before = self.path.read_bytes()
+        new = self.actions.fork(SID, "", "  the   copy ", keep=False)
+        self.assertEqual(new["cwd"], str(self.work))
+        self.assertEqual(self.path.read_bytes(), before)
+        copy = self.index.get(new["id"])
+        self.assertEqual(copy.path.parent, self.path.parent)
+        self.assertEqual((copy.title, copy.cwd, copy.remote_url), ("the copy", str(self.work), ""))
+        records = [json.loads(x) for x in copy.path.read_text().splitlines()]
+        self.assertEqual([r["type"] for r in records], ["user", "assistant", "custom-title"])
+        self.assertEqual(records[1]["sessionId"], new["id"])
+        self.assertNotIn(SID, copy.path.read_text())
+        self.assertNotIn(new["id"], self.store.load())
+
+    def test_fork_elsewhere_and_keep_running_resumes_the_copy_there(self):
+        target = self.target()
+        new = self.actions.fork(SID, str(target), "copy", keep=True)
+        self.assertEqual(self.index.get(new["id"]).cwd, str(target))
+        self.assertTrue(self.store.load()[new["id"]].enabled)
+        self.sup.reconcile()
+        [(sid, command, _)] = self.tmux.started
+        self.assertEqual(sid, new["id"])
+        self.assertIn(f"--resume {new['id']}", command)
+        self.assertIn(str(target), command)
+
+    def test_names_are_unique_per_folder(self):
+        with self.assertRaises(Conflict):
+            self.actions.fork(SID, "", " HELLO ")
+        self.actions.fork(SID, "", "copy")
+        with self.assertRaises(Conflict):
+            self.actions.rename(SID, "Copy")
+        self.actions.rename(SID, "Hello")  # its own name, recased
+        self.actions.fork(SID, str(self.target()), "hello")
+        with self.assertRaises(Conflict):
+            self.actions.move(SID, str(self.target()))
+        self.assertTrue(self.path.exists())
 
 
 class RecentMessagesTest(unittest.TestCase):
