@@ -3,7 +3,8 @@
 // button stays disabled until every required field has a value.
 
 // fields: [{ name, label, kind: "text" | "select" | "checkbox", value, placeholder, list,
-//            required, options: [{ value, label, disabled }] }]
+//            required, options: [{ value, label, disabled }], when }]
+// when(values) hides the field (and drops its required check) while it's false.
 // validate(values) returns a message to show (and blocks confirming), or "".
 function open({ title, body, confirm, danger, fields = [], validate }) {
   const dlg = document.createElement("dialog");
@@ -23,12 +24,14 @@ function open({ title, body, confirm, danger, fields = [], validate }) {
   const inputs = fields.map((f) => addField(dlg.querySelector(".dlg-fields"), f));
   const values = () => Object.fromEntries(fields.map((f, i) => [f.name, inputs[i].type === "checkbox" ? inputs[i].checked : inputs[i].value]));
   const problem = () => (validate && validate(values())) || "";
-  const valid = () => fields.every((f, i) => !f.required || inputs[i].value.trim()) && !problem();
+  const shown = (i) => !fields[i].when || fields[i].when(values());
+  const valid = () => fields.every((f, i) => !f.required || !shown(i) || inputs[i].value.trim()) && !problem();
   const sync = () => {
+    inputs.forEach((el, i) => { el.closest(".dlg-field").hidden = !shown(i); });
     dlg.querySelector(".dlg-error").textContent = problem();
     ok.disabled = !valid();
   };
-  for (const el of inputs) el.addEventListener("input", sync);
+  for (const el of inputs) { el.addEventListener("input", sync); el.addEventListener("change", sync); }
   sync();
   document.body.append(dlg);
 

@@ -10,7 +10,8 @@ code change: `systemctl --user restart claude-always-remote` (sessions keep
 running; the supervisor adopts their windows).
 
 To run a second instance (say, to try UI changes) without touching the real
-one, give it its own HOME, socket and port:
+one, give it its own HOME, socket and port (and `CLAUDE_ALWAYS_REMOTE_CODEX_SOCKET=`
+to leave Codex out, or point it at `tests/fake_codex.py`):
 `HOME=/tmp/fakehome CLAUDE_ALWAYS_REMOTE_TMUX_SOCKET=car-dev bin/claude-always-remote --port 8790 serve --host 127.0.0.1`.
 Sharing the socket would let its supervisor close the real windows.
 
@@ -36,14 +37,19 @@ Sharing the socket would let its supervisor close the real windows.
 | `claude_always_remote/notify.py` | Push notifications via `~/scripts/ntfy_send.sh` (`CLAUDE_ALWAYS_REMOTE_NOTIFY` overrides; empty disables) |
 | `claude_always_remote/relocate.py` | Moving or forking a transcript into a working folder (Claude Code's project-folder naming, line rewriting) |
 | `claude_always_remote/conversation.py` | Recent prompts and replies from a transcript's tail |
-| `claude_always_remote/catalog.py` | Row shape shared by the web API and CLI |
-| `claude_always_remote/web.py` | HTTP API and static page |
+| `claude_always_remote/catalog.py` | Row shape shared by the web API and CLI (Claude and Codex rows; `tool` field) |
+| `claude_always_remote/codex_client.py` | JSON-RPC over WebSocket to Codex's app-server daemon (`CodexUnavailable`, `CodexError`) |
+| `claude_always_remote/codex_threads.py` | Listing Codex threads (cached), their messages, `CodexState`, short ids |
+| `claude_always_remote/codex_actions.py` | Rename / delete (archive) / restore / fork / create Codex sessions |
+| `claude_always_remote/codex_trash.py` | Which Codex sessions were deleted here, for Recently deleted and the 30-day purge |
+| `claude_always_remote/web.py` | HTTP API and static page; `make_app` wires both session sources |
 | `claude_always_remote/cli.py` | argparse entry point |
 | `claude_always_remote/static/index.html`, `app.css` | The picker's markup and styles |
 | `claude_always_remote/static/app.js` | Picker: rendering, actions, events (ES module, no build step) |
 | `claude_always_remote/static/search.js` | Search syntax (`-neg`, `"phrase"`, `dir:`, `is:`, `age:`) |
 | `claude_always_remote/static/selection.js` | Multi-select: click, cmd/shift ranges, keyboard cursor |
 | `claude_always_remote/static/dialog.js` | Modal confirm/prompt/form (text, select, checkbox fields; `validate`; Enter confirms, Esc cancels) |
+| `tests/fake_codex.py` | In-memory Codex daemon for the unit and browser tests |
 | `systemd/`, `install.sh` | User unit template and installer |
 
 ## Rules
@@ -55,6 +61,9 @@ Sharing the socket would let its supervisor close the real windows.
 - A session created from the picker has no transcript until Claude Code
   writes one; its store entry carries `cwd`/`title`, and the supervisor starts
   it with `--session-id … --name …` until the transcript exists, then `--resume`.
+- Codex sessions are changed only through the daemon's API (codex_client.py),
+  never by editing `~/.codex` files: Codex keeps their state in SQLite too.
+  Its API is experimental; any Codex failure must leave the Claude side working.
 - Never edit a transcript another claude process has open; a running
   process owns its title (rename it by typing `/rename` into our window).
 - Session names are unique per folder (case and spacing ignored); every path

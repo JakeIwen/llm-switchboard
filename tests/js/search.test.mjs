@@ -63,3 +63,12 @@ test("unknown prefixes are plain text; bad values report errors", () => {
   assert.deepEqual(compileQuery("age:soon").errors.length, 1);
   assert.equal(compileQuery("  - ").empty, true);
 });
+
+test("is:codex and is:claude pick the tool; a working Codex session is busy", () => {
+  const mixed = [S({ id: "aaaa", tool: "claude" }), S({ id: "bbbb", tool: "codex", codex_state: "active" }),
+                 S({ id: "cccc", tool: "codex", codex_state: "notLoaded" })];
+  const pick = (q) => mixed.filter((s) => compileQuery(q).test(s, NOW)).map((s) => s.id);
+  assert.deepEqual(pick("is:codex"), ["bbbb", "cccc"]);
+  assert.deepEqual(pick("is:claude"), ["aaaa"]);
+  assert.deepEqual(pick("is:codex is:busy"), ["bbbb"]);
+});

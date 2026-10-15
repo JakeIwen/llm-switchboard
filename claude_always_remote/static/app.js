@@ -17,6 +17,9 @@ const UNKNOWN_DIR = "(unknown folder)";
 // Supervisor states that mean a new session didn't come up by itself.
 const TROUBLE = new Set(["attention", "backoff", "error", "missing"]);
 const TABS = { "f-all": "all", "f-on": "on", "f-open": "open" };
+const TOOLS = { "t-all": "all", "t-claude": "claude", "t-codex": "codex" };
+const TOOL_NAME = { claude: "Claude Code", codex: "Codex" };
+const isCodex = (s) => s.tool === "codex";
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -44,7 +47,7 @@ async function api(path, body) {
 
 // ---- state -----------------------------------------------------------------
 
-let data = null, trash = [], tab = "all", dir = null, query = compileQuery("");
+let data = null, trash = [], tab = "all", tool = "all", dir = null, query = compileQuery("");
 let order = [];            // ids of the rows on screen, in order
 let bulkProgress = "";     // non-empty while a bulk action runs
 const expanded = new Set(), screens = new Map(), peeks = new Map();
@@ -54,7 +57,7 @@ const watching = new Map();  // id -> title of sessions created here, until they
 // (opening it redraws the panel's fields).
 let menu = null;
 // The chosen folder is a per-browser convenience; storage can be unavailable.
-try { dir = localStorage.getItem("car.dir"); } catch {}
+try { dir = localStorage.getItem("car.dir"); tool = localStorage.getItem("car.tool") || "all"; } catch {}
 
 const byId = (id) => data.sessions.find((s) => s.id === id);
 
@@ -84,6 +87,8 @@ async function refresh() {
 
 // Every filter except the folder one, so folder counts follow the search and tab.
 function matches(s, now) {
+  // The tool switch is hidden (and ignored) while Codex support is off.
+  if (tool !== "all" && data.codex?.enabled && s.tool !== tool) return false;
   if (tab === "on" && !s.enabled) return false;
   if (tab === "open" && !(s.enabled || s.open_elsewhere.length)) return false;
   return query.test(s, now);
@@ -125,6 +130,7 @@ function badges(s) {
     out.push(`<span class="badge b-info">Queued</span>`);
   }
   if (s.new) out.push(`<span class="badge b-info">New</span>`);
+  if (isCodex(s) && s.codex_state === "active") out.push(`<span class="badge b-info">Working</span>`);
   if (s.open_elsewhere.length && !(s.enabled && st && st.state === "elsewhere")) {
     out.push(`<span class="badge b-idle">Open in a terminal</span>`);
   }
@@ -165,7 +171,26 @@ function moveSplit(s, lock) {
     </div>`;
 }
 
+// Codex sessions have no keep-running, screen, Remote Control name or move.
+function codexPanel(s) {
+  return `<div class="panel">
+    <div class="actions">
+      <button class="btn" data-act="peek" data-id="${s.id}">${peeks.has(s.id) ? "Refresh messages" : "Recent messages"}</button>
+    </div>
+    ${messagesBlock(s.id)}
+    ${field(s, "title", "Title", s.title, `<button class="btn" data-act="rename" data-id="${s.id}">Rename</button>`)}
+    ${field(s, "cwd", "Working folder (Codex can't move a session; Fork copies it into a folder)", s.cwd,
+            `<button class="btn" data-act="fork" data-id="${s.id}">Fork…</button>`, `list="cwds" spellcheck="false"`)}
+    <div>
+      <label>Resume in a shell on the Pi</label>
+      <div class="cmdline"><div class="cmd">${esc(s.resume_cmd)}</div>${copyButton(s.resume_cmd)}</div>
+    </div>
+    <div class="hint"><code>${esc(s.id)}</code></div>
+  </div>`;
+}
+
 function panel(s) {
+  if (isCodex(s)) return codexPanel(s);
   const st = s.status || {};
   const screen = screens.get(s.id);
   const lock = lockAttr(s);
@@ -206,10 +231,10 @@ function card(s) {
   return `<div class="${cls}" data-card="${s.id}">
     <div class="row">
       <button type="button" class="check" data-act="select" data-id="${s.id}" aria-label="Select" aria-pressed="${sel.has(s.id)}"></button>
-      <label class="switch" title="${s.enabled ? "Stop keeping this running" : "Keep this running with Remote Control"}">
+      ${isCodex(s) ? `<span class="tool-tag" title="A Codex session">Codex</span>` : `<label class="switch" title="${s.enabled ? "Stop keeping this running" : "Keep this running with Remote Control"}">
         <input type="checkbox" data-act="toggle" data-id="${s.id}" ${s.enabled ? "checked" : ""} aria-label="Keep running">
         <span></span>
-      </label>
+      </label>`}
       <div class="main">
         <div class="title">${esc(s.title)}</div>
         <div class="meta"><button type="button" class="dirlink" data-dir="${esc(dirOf(s))}" title="Show only this folder">${esc(dirOf(s))}</button><span>${age(s.mtime)}</span><code>${esc(s.short_id)}</code><span>${size(s.size)}</span></div>
@@ -229,7 +254,7 @@ function renderTrash() {
   $("trash-sum").textContent = `Recently deleted (${trash.length}) · kept 30 days`;
   setHTML($("trash-list"), trash.map((t) => `<div class="card">
     <div class="main"><div class="title">${esc(t.title)}</div>
-      <div class="meta"><span>${esc(t.project)}</span><span>deleted ${age(t.deleted_at)}</span><code>${esc(t.short_id)}</code></div></div>
+      <div class="meta"><span>${esc(t.project)}</span><span>deleted ${age(t.deleted_at)}</span><code>${esc(t.short_id)}</code>${t.tool === "codex" ? "<span>Codex</span>" : ""}</div></div>
     <button class="btn" data-restore="${t.id}">Restore</button></div>`).join(""));
 }
 
@@ -257,7 +282,8 @@ function render() {
   const on = data.sessions.filter((s) => s.enabled);
   const rc = on.filter((s) => s.status && s.status.state === "running").length;
   $("summary").textContent = `${data.host} · ${on.length} kept running · ${rc} with Remote Control`;
-  $("qerr").textContent = query.errors.join(" · ");
+  $("tools").hidden = !data.codex?.enabled;
+  $("qerr").textContent = [...query.errors, data.codex?.error && `Codex sessions unavailable: ${data.codex.error}`].filter(Boolean).join(" · ");
   renderDirs(now);
   setHTML($("list"), rows.length ? rows.map(card).join("") : `<div class="empty">No sessions match.</div>`);
   renderTrash();
@@ -376,38 +402,53 @@ async function newSession() {
   let folders;
   try { ({ folders } = await api("/api/folders")); }
   catch (e) { return toast(`Couldn't load folders: ${e.message}`); }
-  const usable = folders.filter((f) => !f.blocked);
+  const codexOn = Boolean(data.codex?.enabled && !data.codex.error);
+  const usable = folders.filter((f) => !f.blocked || (codexOn && !f.codex_blocked));
   const blocked = folders.filter((f) => f.blocked);
   const notes = document.createElement("div");
-  notes.append(Object.assign(document.createElement("p"), {
-    textContent: `Starts through claudepd with Remote Control on, and is kept running.${data.notifications ? " You'll get a notification when it's ready." : ""}`,
-  }));
+  const note = (text) => notes.append(Object.assign(document.createElement("p"), { textContent: text }));
+  note(`${codexOn ? "Claude Code: " : ""}starts through claudepd with Remote Control on, and is kept running.${data.notifications ? " You'll get a notification when it's ready." : ""}`);
+  if (codexOn) note("Codex: starts in the Codex daemon and works on your first message right away, without asking for approvals (as codexp). Codex saves a session only once it has a message.");
   if (blocked.length) {
-    notes.append(Object.assign(document.createElement("p"), { textContent: "Not offered:" }));
+    note(codexOn ? "Not offered to Claude Code:" : "Not offered:");
     const ul = document.createElement("ul");
     for (const f of blocked) ul.append(Object.assign(document.createElement("li"), { textContent: `${f.project}: ${f.blocked}` }));
     notes.append(ul);
   }
   if (!usable.length) return confirmDialog({ title: "No folder is available", body: notes, confirm: "OK" });
+  const fields = [
+    { name: "cwd", label: "Folder", kind: "select",
+      value: usable.find((f) => f.project === dir)?.cwd,
+      options: usable.map((f) => ({ value: f.cwd, label: `${f.project}  (${plural(f.sessions, "session")})` })) },
+    { name: "name", label: "Name", placeholder: "What is this session for?", required: true, autofocus: true, maxlength: 120 },
+  ];
+  if (codexOn) {
+    fields.unshift({ name: "tool", label: "Tool", kind: "select", value: tool === "codex" ? "codex" : "claude",
+                     options: Object.entries(TOOL_NAME).map(([value, label]) => ({ value, label })) });
+    fields.push({ name: "prompt", label: "First message", placeholder: "What should Codex do first?", required: true,
+                  maxlength: 20000, when: (v) => v.tool === "codex" });
+  }
   const res = await formDialog({
     title: "New session",
     body: notes,
     confirm: "Create",
-    fields: [
-      { name: "cwd", label: "Folder", kind: "select",
-        value: usable.find((f) => f.project === dir)?.cwd,
-        options: usable.map((f) => ({ value: f.cwd, label: `${f.project}  (${plural(f.sessions, "session")})` })) },
-      { name: "name", label: "Name", placeholder: "What is this session for?", required: true, autofocus: true, maxlength: 120 },
-    ],
-    validate: (v) => nameTaken(v.cwd, v.name),
+    fields,
+    validate: (v) => {
+      const why = folders.find((f) => f.cwd === v.cwd)?.[v.tool === "codex" ? "codex_blocked" : "blocked"];
+      return why ? `${TOOL_NAME[v.tool || "claude"]} can't start here: ${why}` : nameTaken(v.cwd, v.name);
+    },
   });
   if (!res) return;
   let created;
-  try { created = await api("/api/sessions/new", { cwd: res.cwd, name: res.name }); }
+  try { created = await api("/api/sessions/new", { tool: res.tool || "claude", cwd: res.cwd, name: res.name, prompt: res.prompt }); }
   catch (e) { return toast(`Couldn't create it: ${e.message}`); }
-  watching.set(created.id, created.title);
   sel.moveCursor(created.id);
-  toast(`Starting “${created.title}”…`, null, 30000);
+  if (res.tool === "codex") {
+    toast(`Started “${created.title}” in Codex; it's working on your first message.`, null, 15000);
+  } else {
+    watching.set(created.id, created.title);
+    toast(`Starting “${created.title}”…`, null, 30000);
+  }
   refresh();
 }
 
@@ -448,15 +489,16 @@ async function forkSession(id, cwd) {
   const s = byId(id);
   menu = null;
   render();
+  const fields = [
+    { name: "title", label: "Name", required: true, autofocus: true, maxlength: 120, value: forkName(s) },
+    { name: "cwd", label: "Folder", required: true, value: cwd || s.cwd, list: "cwds", placeholder: "/home/pi/dev/…" },
+  ];
+  if (!isCodex(s)) fields.push({ name: "keep", label: "Keep it running with Remote Control", kind: "checkbox", value: s.enabled });
   const res = await formDialog({
     title: `Fork “${s.title}”`,
-    body: "Copies the conversation so far into a new session. The original is left as it is, even if it's running.",
+    body: `Copies the conversation so far into a new ${TOOL_NAME[s.tool]} session. The original is left as it is, even if it's running.`,
     confirm: "Fork",
-    fields: [
-      { name: "title", label: "Name", required: true, autofocus: true, maxlength: 120, value: forkName(s) },
-      { name: "cwd", label: "Folder", required: true, value: cwd || s.cwd, list: "cwds", placeholder: "/home/pi/dev/…" },
-      { name: "keep", label: "Keep it running with Remote Control", kind: "checkbox", value: s.enabled },
-    ],
+    fields,
     validate: (v) => nameTaken(v.cwd, v.title),
   });
   if (!res) return;
@@ -476,8 +518,11 @@ async function restoreMany(ids) {
 }
 
 async function setKept(ids, on) {
-  const targets = ids.map(byId).filter((s) => s && s.enabled !== on);
-  if (!targets.length) return toast(on ? "Already kept running." : "None of these are kept running.");
+  const targets = ids.map(byId).filter((s) => s && !isCodex(s) && s.enabled !== on);
+  if (!targets.length) {
+    if (ids.map(byId).every((s) => s && isCodex(s))) return toast("Codex sessions have no keep-running; the Codex daemon holds them all.");
+    return toast(on ? "Already kept running." : "None of these are kept running.");
+  }
   const busy = targets.filter((s) => s.status?.busy).length;
   if (on && targets.length > 2 && !await confirmDialog({
     title: `Keep ${targets.length} sessions running?`,
@@ -491,8 +536,10 @@ async function setKept(ids, on) {
 }
 
 async function moveSessions(ids, cwd) {
-  const { targets, blocked } = splitBlocked(ids);
-  if (!targets.length) return toast("Open in another claude process; close it there first.");
+  const split = splitBlocked(ids);
+  const targets = split.targets.filter((s) => !isCodex(s)), blocked = split.blocked;
+  const codex = split.targets.length - targets.length;
+  if (!targets.length) return toast(codex ? "Codex can't move a session; fork it into the folder instead." : "Open in another claude process; close it there first.");
   if (cwd === undefined) {
     const common = targets.every((s) => s.cwd === targets[0].cwd) ? targets[0].cwd : "";
     const one = targets.length === 1;
@@ -500,6 +547,7 @@ async function moveSessions(ids, cwd) {
       `${one ? "Its transcript moves" : "Their transcripts move"} under the new folder, so claudepd --resume works from there.`,
       targets.some((s) => s.enabled) && "Kept-running sessions restart in the new folder.",
       blocked.length && `${plural(blocked.length, "session")} open in another claude process will be skipped.`,
+      codex && `${plural(codex, "Codex session")} will be skipped; Codex can't move one (fork it instead).`,
     ]);
     cwd = await promptDialog({
       title: one ? `Move “${targets[0].title}”` : `Move ${targets.length} sessions`,
@@ -527,7 +575,7 @@ async function onAction(el) {
       menu = menu?.id === id ? null : { id, cwd: $("cwd-" + id).value };
       render();
       return document.querySelector(".menu button")?.focus();
-    case "fork": return forkSession(id, menu?.cwd);
+    case "fork": return forkSession(id, menu?.cwd ?? $("cwd-" + id)?.value);
     case "screen":
       try { screens.set(id, (await api(`/api/sessions/${id}/screen`)).screen); }
       catch (e) { screens.set(id, "error: " + e.message); }
@@ -700,6 +748,15 @@ $("q").addEventListener("input", () => {
   render();
 });
 $("new-btn").addEventListener("click", () => newSession());
+for (const [btn, value] of Object.entries(TOOLS)) {
+  $(btn).classList.toggle("on", value === tool);
+  $(btn).addEventListener("click", () => {
+    tool = value;
+    try { localStorage.setItem("car.tool", tool); } catch {}
+    for (const b of Object.keys(TOOLS)) $(b).classList.toggle("on", b === btn);
+    render();
+  });
+}
 $("help-btn").addEventListener("click", () => {
   $("help").hidden = !$("help").hidden;
   $("help-btn").setAttribute("aria-expanded", String(!$("help").hidden));

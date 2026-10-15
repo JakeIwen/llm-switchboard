@@ -1,4 +1,5 @@
-"""Fake HOME for the browser test: ten sessions across three folders, plus an empty one."""
+"""Fake HOME for the browser test: ten Claude sessions across three folders, plus an
+empty folder, and two Codex threads for the fake Codex daemon (codex-seed.json)."""
 import json, sys, re, uuid, os, time, shutil
 home = sys.argv[1]
 shutil.rmtree(home, ignore_errors=True)
@@ -20,3 +21,8 @@ for folder, titles in specs:
 os.makedirs(f"{home}/dev/gamma", exist_ok=True)
 # Folder trust as Claude Code records it: everything under ~/dev, not ~/scratch.
 json.dump({"projects": {f"{home}/dev": {"hasTrustDialogAccepted": True}}}, open(f"{home}/.claude.json", "w"))
+# Threads for tests/fake_codex.py, which run.sh starts.
+json.dump([{"tid": "01a13da1-a87b-76d0-bf7f-fbe83e9bc6%02d" % i, "cwd": f"{home}/{folder}", "name": name, "preview": preview}
+           for i, (folder, name, preview) in enumerate([("dev/alpha", "Codex alpha refactor", "refactor alpha"),
+                                                        ("dev/beta", "", "investigate the beta flake")])],
+          open(f"{home}/codex-seed.json", "w"))

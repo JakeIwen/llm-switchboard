@@ -7,11 +7,15 @@ here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 repo=$(cd "$here/../.." && pwd)
 port=8796
 work=$(mktemp -d)
-trap 'kill "$pid" 2>/dev/null || true; tmux -L car-browsertest kill-server 2>/dev/null || true; rm -rf "$work"' EXIT
+trap 'kill "$pid" "$codex" 2>/dev/null || true; tmux -L car-browsertest kill-server 2>/dev/null || true; rm -rf "$work"' EXIT
 
 [ -d "$here/node_modules/puppeteer-core" ] || (cd "$here" && PUPPETEER_SKIP_DOWNLOAD=1 npm install --silent)
 python3 "$here/fixture.py" "$work/home"
+python3 "$repo/tests/fake_codex.py" "$work/codex.sock" "$work/home/codex-seed.json" &
+codex=$!
+for _ in $(seq 50); do [ -S "$work/codex.sock" ] && break; sleep 0.1; done
 HOME="$work/home" CLAUDE_ALWAYS_REMOTE_TMUX_SOCKET=car-browsertest CLAUDE_ALWAYS_REMOTE_NOTIFY= XDG_CONFIG_HOME= XDG_DATA_HOME= \
+  CLAUDE_ALWAYS_REMOTE_CODEX_SOCKET="$work/codex.sock" \
   "$repo/bin/claude-always-remote" --port "$port" serve --host 127.0.0.1 >"$work/serve.log" 2>&1 &
 pid=$!
 for _ in $(seq 50); do curl -sf "http://127.0.0.1:$port/api/sessions" >/dev/null && break; sleep 0.2; done

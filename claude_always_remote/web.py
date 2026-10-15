@@ -14,10 +14,15 @@ import re
 import socket
 import time
 
-from .catalog import session_rows
+from .catalog import codex_rows, session_rows, sort_rows
+from .codex_actions import CodexActions
+from .codex_client import CodexClient, CodexError, CodexUnavailable
+from .codex_threads import CodexCatalog, codex_names, codex_short_id
+from .codex_trash import CodexTrash
 from .conversation import recent_messages
 from .folders import new_session_folders
 from .live_registry import live_processes
+from .names import Names, claude_names
 from .session_actions import Conflict, SessionActions
 from .session_id import is_session_id, short_id
 from .store import Store
@@ -40,7 +45,7 @@ _STATIC_TYPES = {"js": "text/javascript; charset=utf-8", "css": "text/css; chars
 
 class App:
     def __init__(self, store: Store, index: TranscriptIndex, supervisor: Supervisor, tmux: Tmux, trash: Trash,
-                 registry=live_processes, actions: SessionActions | None = None):
+                 registry=live_processes, actions: SessionActions | None = None, codex: CodexActions | None = None):
         self.store = store
         self.index = index
         self.supervisor = supervisor
@@ -48,27 +53,56 @@ class App:
         self.trash = trash
         self.registry = registry
         self.actions = actions or SessionActions(store, index, supervisor, tmux, trash, registry=registry)
+        # Codex sessions, when Codex support is on (codex_actions.py).
+        self.codex = codex
+
+    def codex_threads(self) -> list:
+        return self.codex.catalog.threads() if self.codex else []
 
     def list_sessions(self) -> dict:
         rows = session_rows(self.index.all(), self.store.load(), self.registry(), self.supervisor.snapshot())
-        return {"host": socket.gethostname(), "now": time.time(), "sessions": rows,
-                "notifications": self.supervisor.notifier.enabled}
+        codex = {"enabled": self.codex is not None, "error": ""}
+        if self.codex:
+            rows += codex_rows(self.codex.catalog.threads())
+            codex["error"] = self.codex.catalog.error
+        return {"host": socket.gethostname(), "now": time.time(), "sessions": sort_rows(rows),
+                "notifications": self.supervisor.notifier.enabled, "codex": codex}
 
     def list_folders(self) -> dict:
         return {"folders": [
-            {"cwd": f.cwd, "project": f.project, "sessions": f.sessions, "blocked": f.blocked}
-            for f in new_session_folders(self.index.all())
+            {"cwd": f.cwd, "project": f.project, "sessions": f.sessions, "blocked": f.blocked,
+             "codex_blocked": f.codex_blocked if self.codex else "Codex support is off."}
+            for f in new_session_folders(self.index.all(), codex=self.codex_threads())
         ]}
 
     def list_trash(self) -> dict:
         items = [
-            {"id": i.session_id, "short_id": short_id(i.session_id), "title": i.title,
+            {"id": i.session_id, "tool": "claude", "short_id": short_id(i.session_id), "title": i.title,
              "project": i.project, "deleted_at": i.deleted_at}
             for i in self.trash.items()
         ]
-        return {"trash": items}
+        if self.codex:
+            items += [
+                {"id": i.session_id, "tool": "codex", "short_id": codex_short_id(i.session_id), "title": i.title,
+                 "project": i.project, "deleted_at": i.deleted_at}
+                for i in self.codex.trash_items()
+            ]
+        return {"trash": sorted(items, key=lambda i: i["deleted_at"], reverse=True)}
+
+    def empty_trash(self) -> dict:
+        removed = self.trash.empty() + (self.codex.empty_trash() if self.codex else 0)
+        return {"ok": True, "removed": removed}
+
+    def create(self, body: dict) -> dict:
+        if body.get("tool") == "codex":
+            if not self.codex:
+                raise ValueError("Codex support is off")
+            return self.codex.create(body.get("cwd"), body.get("name"), body.get("prompt"))
+        return self.actions.create(body.get("cwd"), body.get("name"))
 
     def messages(self, sid: str) -> dict:
+        if self.codex and self.codex.owns(sid):
+            return {"messages": self.codex.catalog.messages(sid)}
         transcript = self.index.get(sid)
         if transcript is None:
             raise LookupError("no transcript with that session id")
@@ -85,6 +119,8 @@ class App:
         return {"source": "none", "screen": ""}
 
     def act(self, sid: str, action: str, body: dict) -> dict:
+        if self.codex and self.codex.owns(sid):
+            return self.codex.act(sid, action, body)
         if action == "enable":
             if self.index.get(sid) is None:
                 raise LookupError("no transcript with that session id")
@@ -115,6 +151,23 @@ class App:
         return {"ok": True, "enabled": entry.enabled, "rc_name": entry.name}
 
 
+def make_app(store: Store, index: TranscriptIndex, supervisor: Supervisor, tmux: Tmux, trash: Trash,
+             codex_socket: Path | None, registry=live_processes, codex_trash: CodexTrash | None = None,
+             folders=new_session_folders) -> App:
+    """The App with both session sources wired up, sharing one name check.
+    codex_socket None leaves Codex out."""
+    names = Names(claude_names(index, store))
+    codex = None
+    if codex_socket is not None:
+        catalog = CodexCatalog(CodexClient(codex_socket))
+        names.add_source(codex_names(catalog))
+        codex = CodexActions(catalog.client, catalog, codex_trash or CodexTrash(), names)
+    threads = (lambda: codex.catalog.threads()) if codex else (lambda: [])
+    actions = SessionActions(store, index, supervisor, tmux, trash, registry=registry, names=names,
+                             folders=lambda transcripts: folders(transcripts, codex=threads()))
+    return App(store, index, supervisor, tmux, trash, registry=registry, actions=actions, codex=codex)
+
+
 def make_handler(app: App):
     class Handler(BaseHTTPRequestHandler):
         server_version = "claude-always-remote"
@@ -138,6 +191,8 @@ def make_handler(app: App):
                     return self._send_json(app.screen(sid) if action == "screen" else app.messages(sid))
                 except LookupError as e:
                     return self._send_json({"error": str(e)}, HTTPStatus.NOT_FOUND)
+                except (CodexUnavailable, CodexError) as e:
+                    return self._send_json({"error": str(e)}, HTTPStatus.SERVICE_UNAVAILABLE)
             self._send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
 
         def do_POST(self):
@@ -145,8 +200,8 @@ def make_handler(app: App):
                 if not self._is_json():
                     return self._send_json({"error": "send application/json"}, HTTPStatus.UNSUPPORTED_MEDIA_TYPE)
                 if self.path == "/api/trash/empty":
-                    return self._send_json({"ok": True, "removed": app.trash.empty()})
-                return self._guarded(lambda body: app.actions.create(body.get("cwd"), body.get("name")), "new")
+                    return self._guarded(lambda body: app.empty_trash(), "empty trash")
+                return self._guarded(app.create, "new")
             match = _ACTION_RE.match(self.path)
             if not match or match.group(2) not in _POST_ACTIONS:
                 return self._send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
@@ -163,6 +218,8 @@ def make_handler(app: App):
                 result = run(self._read_json())
             except LookupError as e:
                 return self._send_json({"error": str(e)}, HTTPStatus.NOT_FOUND)
+            except CodexUnavailable as e:
+                return self._send_json({"error": str(e)}, HTTPStatus.SERVICE_UNAVAILABLE)
             except Conflict as e:
                 return self._send_json({"error": str(e)}, HTTPStatus.CONFLICT)
             except ValueError as e:

@@ -1,9 +1,10 @@
 """Folders a new session may be started in.
 
-Only folders that already have conversations, still exist, and that Claude
-Code already trusts: a new session started anywhere else would stop at the
-folder trust prompt with nobody at the terminal. The home folder is never
-offered; Claude Code asks about it every time.
+Only folders that already have conversations (Claude Code's or Codex's) and
+still exist. A Claude Code session also needs a folder Claude Code already
+trusts: anywhere else it would stop at the folder trust prompt with nobody at
+the terminal, and in the home folder Claude Code asks every time. A Codex
+session runs in the Codex daemon, which has no such prompt.
 """
 
 from dataclasses import dataclass
@@ -20,8 +21,10 @@ class Folder:
     cwd: str
     project: str
     sessions: int
-    # Why it can't be used, or "" if it can.
+    # Why a Claude Code session can't start here, or "" if it can.
     blocked: str
+    # The same for a Codex session.
+    codex_blocked: str = ""
 
 
 def trusted_paths(state_file: Path = CLAUDE_STATE_FILE) -> set[str]:
@@ -41,9 +44,10 @@ def is_trusted(cwd: str, trusted: set[str]) -> bool:
 
 
 def new_session_folders(transcripts: list[Transcript], state_file: Path = CLAUDE_STATE_FILE,
-                        home: Path = HOME) -> list[Folder]:
+                        home: Path = HOME, *, codex=()) -> list[Folder]:
+    """codex: Codex threads (anything with a .cwd), counted alongside the transcripts."""
     counts: dict[str, int] = {}
-    for t in transcripts:
+    for t in [*transcripts, *codex]:
         if t.cwd:
             counts[t.cwd] = counts.get(t.cwd, 0) + 1
     trusted = trusted_paths(state_file)
@@ -57,8 +61,9 @@ def new_session_folders(transcripts: list[Transcript], state_file: Path = CLAUDE
             blocked = "Not trusted yet; open Claude Code there once in a terminal to accept the trust prompt."
         else:
             blocked = ""
-        folders.append(Folder(cwd=cwd, project=display_path(cwd), sessions=n, blocked=blocked))
-    return sorted(folders, key=lambda f: (bool(f.blocked), -f.sessions, f.cwd))
+        codex_blocked = "" if os.path.isdir(cwd) else "The folder no longer exists."
+        folders.append(Folder(cwd=cwd, project=display_path(cwd), sessions=n, blocked=blocked, codex_blocked=codex_blocked))
+    return sorted(folders, key=lambda f: (bool(f.blocked) and bool(f.codex_blocked), -f.sessions, f.cwd))
 
 
 def existing_folder(cwd) -> str:

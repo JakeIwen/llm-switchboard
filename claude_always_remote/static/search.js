@@ -6,7 +6,8 @@
 //   title:telem     title or Remote Control name contains it
 //   id:c969         session id contains it
 //   is:kept         kept running (also on); is:off, is:running, is:open, is:busy,
-//                   is:attention, is:elsewhere (open in another claude process)
+//                   is:attention, is:elsewhere (open in another claude process),
+//                   is:claude, is:codex (which tool the session belongs to)
 //   state:backoff   supervisor state is exactly this
 //   age:<2d         last active within 2 days; age:>1w older than a week (units m h d w)
 // An unknown prefix (say "https:") is searched as plain text.
@@ -25,8 +26,10 @@ const IS = {
   running: (s) => s.enabled && s.status?.state === "running",
   open: (s) => s.enabled || s.open_elsewhere.length > 0,
   elsewhere: (s) => s.open_elsewhere.length > 0,
-  busy: (s) => Boolean(s.status?.busy) || s.open_elsewhere.some((p) => p.status === "busy"),
+  busy: (s) => Boolean(s.status?.busy) || s.open_elsewhere.some((p) => p.status === "busy") || s.codex_state === "active",
   attention: (s) => s.status?.state === "attention",
+  claude: (s) => s.tool !== "codex",
+  codex: (s) => s.tool === "codex",
 };
 export const IS_VALUES = Object.keys(IS);
 

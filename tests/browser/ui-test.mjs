@@ -52,6 +52,9 @@ const waitFor = async (fn, ms = 8000) => {
   return false;
 };
 
+check("Codex sessions are listed too", await waitFor(async () => (await count()) === 12), String(await count()));
+// The checks up to the Codex section are about Claude sessions.
+await page.click("#t-claude"); await sleep(50);
 check("loads all sessions", (await count()) === 10, String(await count()));
 
 // --- search modifiers
@@ -131,8 +134,13 @@ check("X + Enter deletes that one", await waitFor(async () => (await count()) ==
 const before = await count();
 await page.keyboard.press("n"); await sleep(150);
 check("n opens the new-session dialog", await dialogOpen());
-const options = await page.$$eval("dialog[open] select option", (els) => els.map((e) => e.textContent));
-check("only trusted folders are offered", options.length === 2 && options.every((o) => o.includes("~/dev/")), options.join(" | "));
+const options = await page.$$eval("dialog[open] select[name=cwd] option", (els) => els.map((e) => e.textContent));
+check("folders with sessions are offered", options.length === 3 && options.some((o) => o.includes("~/scratch")), options.join(" | "));
+check("tool defaults to Claude Code", (await page.$eval("dialog[open] select[name=tool]", (e) => e.value)) === "claude");
+check("first message is hidden for Claude", await page.$eval("dialog[open] input[name=prompt]", (e) => e.closest(".dlg-field").hidden));
+await page.select("dialog[open] select[name=cwd]", `${HOME}/scratch`); await sleep(50);
+check("an untrusted folder is refused for Claude", (await page.$eval("dialog[open] .dlg-error", (e) => e.textContent)).includes("can't start here"));
+await page.select("dialog[open] select[name=cwd]", `${HOME}/dev/alpha`); await sleep(50);
 check("untrusted folder is explained", (await page.$eval("dialog[open] .dlg-body", (e) => e.textContent)).includes("~/scratch"));
 check("Create is disabled without a name", await page.$eval("dialog[open] [value=ok]", (e) => e.disabled));
 await page.keyboard.press("Enter"); await sleep(150);
@@ -222,6 +230,56 @@ await clickSettled(`[data-act="rename"][data-id="${id}"]`);
 check("renaming to a taken name is refused", await waitFor(async () =>
   (await page.$eval("#toast-msg", (e) => e.textContent)).includes("already has a session named")),
   await page.$eval("#toast-msg", (e) => e.textContent));
+
+// --- Codex sessions
+const api = async () => (await (await fetch(BASE + "api/sessions")).json()).sessions;
+await page.click("#t-codex"); await sleep(100);
+check("Codex filter shows only Codex sessions", (await count()) === 2 && (await page.$$("#list .tool-tag")).length === 2);
+check("Codex rows have no keep-running switch", (await page.$$("#list .switch")).length === 0);
+await page.click("#t-all"); await sleep(50);
+await search("is:codex"); check("is:codex", (await count()) === 2);
+await search("is:codex dir:alpha");
+const cx = await page.$eval("#list .card", (e) => e.dataset.card);
+await clickSettled(`[data-act="expand"][data-id="${cx}"]`); await sleep(100);
+check("Codex panel offers Fork, not Move", Boolean(await page.$(`[data-act="fork"][data-id="${cx}"]`))
+  && !(await page.$(`[data-act="move"][data-id="${cx}"]`)) && !(await page.$(`#name-${cx}`)));
+await page.$eval(`#title-${cx}`, (el) => { el.value = "fix ALPHA login bug"; });
+await clickSettled(`[data-act="rename"][data-id="${cx}"]`);
+check("a Codex rename can't take a Claude session's name", await waitFor(async () =>
+  (await page.$eval("#toast-msg", (e) => e.textContent)).includes("already has a session named")));
+await page.$eval(`#title-${cx}`, (el) => { el.value = "Codex alpha v2"; });
+await clickSettled(`[data-act="rename"][data-id="${cx}"]`);
+check("renames a Codex session", await waitFor(async () => (await api()).find((s) => s.id === cx)?.title === "Codex alpha v2"));
+await clickSettled(`[data-act="fork"][data-id="${cx}"]`); await sleep(150);
+check("Codex fork dialog has no keep-running box", await dialogOpen() && !(await page.$("dialog[open] input[name=keep]")));
+await page.$eval("dialog[open] input[name=title]", (el) => { el.value = ""; });
+await page.type("dialog[open] input[name=title]", "Codex alpha fork");
+await page.keyboard.press("Enter");
+check("forks a Codex session", await waitFor(async () => (await api()).some((s) => s.tool === "codex" && s.title === "Codex alpha fork")));
+await search("is:codex");
+await page.$eval("#q", (el) => el.blur());
+const doomedCx = await page.$$eval("#list .card", (els) => els.find((e) => e.textContent.includes("investigate the beta flake")).dataset.card);
+await clickSettled(`[data-card="${doomedCx}"] .x`); await sleep(100);
+await page.keyboard.press("Enter");
+check("deletes a Codex session", await waitFor(async () => !(await api()).some((s) => s.id === doomedCx)));
+check("it's in Recently deleted", await waitFor(() => page.$eval("#trash-list", (e) => e.textContent.includes("investigate the beta flake"))));
+await page.click("#toast-action");
+check("Undo brings the Codex session back", await waitFor(async () => (await api()).some((s) => s.id === doomedCx)));
+await page.keyboard.press("n"); await sleep(150);
+await page.select("dialog[open] select[name=tool]", "codex"); await sleep(50);
+check("Codex asks for a first message", !(await page.$eval("dialog[open] input[name=prompt]", (e) => e.closest(".dlg-field").hidden)));
+await page.type("dialog[open] input[name=name]", "Codex new thing");
+check("Create waits for the first message", await page.$eval("dialog[open] [value=ok]", (e) => e.disabled));
+await page.type("dialog[open] input[name=prompt]", "add a logger");
+if (SHOTS) await page.screenshot({ path: `${SHOTS}/new-codex.png` });
+await page.keyboard.press("Enter");
+check("creates a Codex session that starts working", await waitFor(async () =>
+  (await api()).some((s) => s.tool === "codex" && s.title === "Codex new thing" && s.codex_state === "active")));
+check("it shows as Working", await waitFor(() => page.$$eval("#list .card", (els) =>
+  els.some((e) => e.textContent.includes("Codex new thing") && e.textContent.includes("Working")))));
+if (SHOTS) await page.screenshot({ path: `${SHOTS}/codex.png`, fullPage: true });
+await search("");
+await page.$eval("#q", (el) => el.blur());
 
 // --- empty trash
 await page.click("#trash summary"); await sleep(50);

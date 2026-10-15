@@ -12,8 +12,27 @@ PROJECTS_DIR = CLAUDE_DIR / "projects"
 # Claude Code writes <pid>.json here for every running process.
 LIVE_REGISTRY_DIR = CLAUDE_DIR / "sessions"
 
+CODEX_DIR = HOME / ".codex"
+# Codex's own settings, including which folders it trusts.
+CODEX_CONFIG_FILE = CODEX_DIR / "config.toml"
+
+
+def _codex_socket() -> Path | None:
+    """The Codex daemon's control socket. CLAUDE_ALWAYS_REMOTE_CODEX_SOCKET
+    points elsewhere (tests use a fake daemon); set it empty to leave Codex out."""
+    configured = os.environ.get("CLAUDE_ALWAYS_REMOTE_CODEX_SOCKET")
+    if configured is not None:
+        return Path(configured) if configured else None
+    return CODEX_DIR / "app-server-control" / "app-server-control.sock"
+
+
+CODEX_SOCKET = _codex_socket()
+
 STATE_DIR = Path(os.environ.get("XDG_CONFIG_HOME") or HOME / ".config") / "claude-always-remote"
 STORE_FILE = STATE_DIR / "sessions.json"
+# Codex sessions deleted here are archived in Codex; this remembers which ones,
+# so they show under "Recently deleted" and are deleted for good after 30 days.
+CODEX_TRASH_FILE = STATE_DIR / "codex-trash.json"
 TRASH_DIR = Path(os.environ.get("XDG_DATA_HOME") or HOME / ".local" / "share") / "claude-always-remote" / "trash"
 
 # A dedicated tmux server keeps these windows apart from any tmux the user runs.

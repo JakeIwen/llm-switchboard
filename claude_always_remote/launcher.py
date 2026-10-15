@@ -10,6 +10,8 @@ function from ~/.bashrc and the PATH from ~/.profile, as an SSH login would.
 import shlex
 
 LAUNCH_FUNCTION = "claudepd"
+# Codex sessions aren't launched here, only offered as a command to copy.
+CODEX_FUNCTION = "codexp"
 
 
 def pane_command(session_id: str, cwd: str, rc_name: str) -> str:
@@ -28,3 +30,8 @@ def resume_command(session_id: str, cwd: str) -> str:
     """What to type in a shell to open the session by hand."""
     claude = f"{LAUNCH_FUNCTION} --resume {shlex.quote(session_id)}"
     return f"cd -- {shlex.quote(cwd)} && {claude}" if cwd else claude
+
+
+def codex_resume_command(thread_id: str, cwd: str) -> str:
+    codex = f"{CODEX_FUNCTION} resume {shlex.quote(thread_id)}"
+    return f"cd -- {shlex.quote(cwd)} && {codex}" if cwd else codex

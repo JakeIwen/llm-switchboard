@@ -11,17 +11,17 @@ import time
 import urllib.error
 import urllib.request
 
-from .catalog import session_rows
+from .catalog import session_rows, sort_rows
 from .connectivity import Connectivity
 from .live_registry import live_processes
 from .notify import Notifier, default_script
-from .paths import DEFAULT_HOST, DEFAULT_PORT
+from .paths import CODEX_SOCKET, DEFAULT_HOST, DEFAULT_PORT
 from .store import Store
 from .supervisor import Supervisor
 from .tmux import Tmux
 from .transcripts import TranscriptIndex
 from .trash import Trash
-from .web import App, make_server
+from .web import make_app, make_server
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -65,10 +65,12 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("folder", help="working folder (one listed by `new --list`)", nargs="?")
     s.add_argument("name", help="session name", nargs="?")
     s.add_argument("--list", action="store_true", help="show the folders a new session can use")
+    s.add_argument("--codex", metavar="FIRST_MESSAGE",
+                   help="make it a Codex session that starts working on this message")
     s.set_defaults(func=_new)
 
     s = sub.add_parser("fork", help="copy a session's conversation so far into a new session")
-    s.add_argument("session", help="session id, or a unique prefix of one")
+    s.add_argument("session", help="session id, a unique prefix of one, or the short id `list` shows")
     s.add_argument("name", help="name for the copy (unique in its folder)")
     s.add_argument("--folder", help="working folder for the copy (default: the original's)")
     s.add_argument("--keep", action="store_true", help="keep the copy running with Remote Control")
@@ -84,7 +86,7 @@ def _serve(args) -> int:
     store, index, tmux = Store(), TranscriptIndex(), Tmux()
     supervisor = Supervisor(store, index, tmux, Connectivity(), interval_s=args.interval,
                             notifier=Notifier(default_script()))
-    server = make_server(App(store, index, supervisor, tmux, Trash()), args.host, args.port)
+    server = make_server(make_app(store, index, supervisor, tmux, Trash(), CODEX_SOCKET), args.host, args.port)
     stop = threading.Event()
 
     def shutdown(*_):
@@ -110,6 +112,7 @@ def _list(args) -> int:
     for r in shown:
         mark = "●" if r["enabled"] else ("○" if r["open_elsewhere"] else " ")
         state = (r["status"] or {}).get("state", "")
+        state = state or ("codex" if r.get("tool") == "codex" else "")
         print(f"{mark} {r['short_id']}  {_age(r['mtime']):>4}  {state:<9}  {r['project'][:28]:<28}  {r['title'][:60]}")
     if len(shown) < len(rows):
         print(f"… {len(rows) - len(shown)} more (-n 0 for all)")
@@ -172,16 +175,27 @@ def _new(args) -> int:
     if args.list or not (args.folder and args.name):
         with urllib.request.urlopen(f"http://127.0.0.1:{args.port}/api/folders", timeout=10) as resp:
             for f in json.load(resp)["folders"]:
-                print(f"{'  ' if not f['blocked'] else '✗ '}{f['cwd']}  ({f['sessions']})  {f['blocked']}")
+                blocked = f["codex_blocked"] if args.codex else f["blocked"]
+                print(f"{'  ' if not blocked else '✗ '}{f['cwd']}  ({f['sessions']})  {blocked}")
         return 0 if args.list else 2
     folder = os.path.normpath(os.path.abspath(os.path.expanduser(args.folder)))
+    if args.codex:
+        result = _post(args.port, "/api/sessions/new",
+                       {"tool": "codex", "cwd": folder, "name": args.name, "prompt": args.codex})
+        print(f"Started Codex session {result['id']} ({result['title']}); it's working on your message. "
+              f"Open it with: cd {folder} && codexp resume {result['id']}")
+        return 0
     result = _post(args.port, "/api/sessions/new", {"cwd": folder, "name": args.name})
     print(f"Starting {result['id']} ({result['title']}); `claude-always-remote status` shows when it's ready.")
     return 0
 
 
 def _fork(args) -> int:
-    sid = _resolve(args.session, transcripts_only=True)
+    # Through the service's rows, so Codex sessions resolve too.
+    ids = {r["id"] for r in _rows(args.port) if r["id"].startswith(args.session) or r["short_id"] == args.session}
+    if len(ids) != 1:
+        sys.exit(f"{'no session matches' if not ids else f'{len(ids)} sessions match'} {args.session!r}")
+    sid = ids.pop()
     folder = os.path.normpath(os.path.abspath(os.path.expanduser(args.folder))) if args.folder else ""
     result = _post(args.port, f"/api/sessions/{sid}/fork", {"cwd": folder, "title": args.name, "keep": args.keep})
     print(f"Forked as {result['id']} ({result['title']}) in {result['cwd']}"
@@ -213,7 +227,7 @@ def _rows(port: int) -> list[dict]:
             return json.load(resp)["sessions"]
     except (urllib.error.URLError, OSError):
         print("(service not reachable; showing sessions without supervisor state)", file=sys.stderr)
-        return session_rows(TranscriptIndex().all(), Store().load(), live_processes(), {})
+        return sort_rows(session_rows(TranscriptIndex().all(), Store().load(), live_processes(), {}))
 
 
 def _post(port: int, path: str, body: dict | None = None) -> dict:

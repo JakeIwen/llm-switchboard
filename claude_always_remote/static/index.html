@@ -26,6 +26,11 @@
       <button id="f-on" type="button">Kept running</button>
       <button id="f-open" type="button">Open now</button>
     </div>
+    <div class="seg" id="tools" role="tablist" hidden>
+      <button id="t-all" type="button">All tools</button>
+      <button id="t-claude" type="button">Claude</button>
+      <button id="t-codex" type="button">Codex</button>
+    </div>
   </div>
   <div class="help" id="help" hidden>
     Every term must match. Case doesn't matter.
@@ -33,7 +38,7 @@
       <li><code>word</code> in the title, first prompt, folder, id or Remote Control name; <code>"two words"</code> for a phrase</li>
       <li><code>-word</code> excludes; works with everything below too, e.g. <code>-dir:tmp</code></li>
       <li><code>dir:obd</code> folder · <code>title:telem</code> · <code>id:c969</code></li>
-      <li><code>is:kept</code> <code>is:off</code> <code>is:running</code> <code>is:open</code> <code>is:busy</code> <code>is:attention</code> <code>is:elsewhere</code></li>
+      <li><code>is:kept</code> <code>is:off</code> <code>is:running</code> <code>is:open</code> <code>is:busy</code> <code>is:attention</code> <code>is:elsewhere</code> <code>is:claude</code> <code>is:codex</code></li>
       <li><code>age:&lt;2d</code> active in the last 2 days · <code>age:&gt;1w</code> older than a week (units m h d w)</li>
       <li><code>state:backoff</code> exact supervisor state</li>
     </ul>

@@ -29,6 +29,7 @@ input[type=search], input[type=text] {
   background: var(--surface); color: var(--text); font: inherit;
 }
 .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--surface); }
+.seg[hidden] { display: none; }
 .seg button { border: 0; background: transparent; color: var(--muted); padding: 8px 12px; font: inherit; cursor: pointer; }
 .seg button.on { background: var(--surface-2); color: var(--text); font-weight: 600; }
 .dirs { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 12px; }
@@ -176,6 +177,7 @@ select.dlg-input {
 }
 .dlg-body p { margin: 6px 0 0; }
 .btn:disabled.primary { opacity: .45; }
+.dlg-field[hidden] { display: none; }
 .dlg-check { flex-direction: row; align-items: center; gap: 8px; color: var(--text); font-size: 14px; }
 .dlg-check input { width: 18px; height: 18px; margin: 0; flex: none; }
 .dlg-error { color: var(--bad); font-size: 13px; }
@@ -197,3 +199,9 @@ select.dlg-input {
 }
 .menu button:hover, .menu button:focus-visible { background: var(--surface-2); }
 .menu button small { display: block; font-size: 12px; color: var(--muted); }
+
+/* Codex rows have no keep-running switch; a tag sits in its place. */
+.tool-tag {
+  flex: none; width: 44px; text-align: center; font-size: 11px; font-weight: 600; letter-spacing: .02em;
+  color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 3px 0; margin-top: 2px;
+}

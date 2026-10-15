@@ -1,9 +1,11 @@
 """One row per session for the picker and the CLI: what's on disk, whether it's
-enabled, whether it's open anywhere, and what the supervisor is doing with it."""
+enabled, whether it's open anywhere, and what the supervisor is doing with it.
+Codex sessions get the same row shape, with tool "codex"."""
 
 from dataclasses import asdict
 
-from .launcher import resume_command
+from .codex_threads import CodexThread, codex_short_id
+from .launcher import codex_resume_command, resume_command
 from .live_registry import LiveProcess
 from .session_id import short_id
 from .store import Entry
@@ -19,10 +21,35 @@ def session_rows(
 ) -> list[dict]:
     by_id = {t.session_id: t for t in transcripts}
     ids = list(by_id) + [sid for sid in entries if sid not in by_id]
-    rows = [_row(sid, by_id.get(sid), entries.get(sid), live, statuses.get(sid)) for sid in ids]
-    # Enabled sessions first, then most recently active.
-    rows.sort(key=lambda r: (not r["enabled"], -(r["mtime"] or 0)))
-    return rows
+    return [_row(sid, by_id.get(sid), entries.get(sid), live, statuses.get(sid)) for sid in ids]
+
+
+def codex_rows(threads: list[CodexThread]) -> list[dict]:
+    return [{
+        "id": t.thread_id,
+        "tool": "codex",
+        "short_id": codex_short_id(t.thread_id),
+        "title": t.title,
+        "first_prompt": t.first_prompt,
+        "cwd": t.cwd,
+        "project": t.project,
+        "mtime": t.mtime,
+        "size": t.size,
+        "remote_url": "",
+        "resume_cmd": codex_resume_command(t.thread_id, t.cwd),
+        "new": False,
+        "enabled": False,
+        "rc_name": "",
+        "open_elsewhere": [],
+        "status": None,
+        # Codex's own thread status (codex_threads.CodexState).
+        "codex_state": t.state,
+    } for t in threads]
+
+
+def sort_rows(rows: list[dict]) -> list[dict]:
+    """Enabled sessions first, then most recently active."""
+    return sorted(rows, key=lambda r: (not r["enabled"], -(r["mtime"] or 0)))
 
 
 def _row(sid: str, t: Transcript | None, entry: Entry | None, live: list[LiveProcess], status: Status | None) -> dict:
@@ -32,6 +59,7 @@ def _row(sid: str, t: Transcript | None, entry: Entry | None, live: list[LivePro
     cwd = t.cwd if t else (entry.cwd if pending else "")
     row = {
         "id": sid,
+        "tool": "claude",
         "short_id": short_id(sid),
         "title": t.title if t else (entry.title if pending else "(transcript not found)"),
         "first_prompt": t.first_prompt if t else "",

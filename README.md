@@ -2,7 +2,9 @@
 
 Keeps chosen Claude Code sessions running on the Pi, in tmux, with Remote
 Control on, so they can always be reached from the Claude app or
-claude.ai/code. A small web page on the Pi picks which sessions those are.
+claude.ai/code. A web page on the Pi picks which sessions those are, and
+manages Claude Code and Codex sessions in bulk: search, filter by folder,
+rename, fork, move, delete with undo, and start new ones.
 
 ## How it works
 
@@ -66,6 +68,33 @@ goes out through `~/scripts/ntfy_send.sh` with the claude.ai link (or a
 "needs attention" one if it doesn't come up). From a shell:
 `claude-always-remote new --list`, then `claude-always-remote new ~/dev/obd-things "name"`.
 
+### Codex sessions
+
+Codex sessions are listed beside Claude Code ones, tagged **Codex** (the
+**All tools / Claude / Codex** switch, or `is:codex`, narrows the list). The
+picker reads and changes them through Codex's shared app-server daemon, the
+same way the Codex TUI does, never by editing Codex's files. For a Codex
+session:
+
+- **Rename**, **Recent messages**, and a copyable `codexp resume` command.
+- **Fork…** copies it into a new Codex session, in the same or another folder.
+  There's no Move: Codex has no way to change a session's folder.
+- **Delete** archives it in Codex and lists it under Recently deleted, with
+  Undo/Restore (unarchive); after 30 days, or Empty now, it's deleted for
+  good. Codex won't delete one that a fork still points at; that one just
+  stays archived in Codex. A session working on a turn can't be deleted.
+- No keep-running switch: the Codex daemon already holds every session, and
+  its remote control is one setting for the whole Pi
+  (`codex app-server daemon enable-remote-control`), not per session.
+- **+ New session** with Tool: Codex asks for a first message too, because
+  Codex saves a session only once it has one. The session starts in the
+  daemon and works on that message right away, with approval policy
+  `never` (what `codexp` passes).
+
+If the daemon isn't running, the page says so above the list and the Claude
+side works as usual (`codex app-server daemon start` starts it). The daemon's
+API is marked experimental, so a Codex update can break this half.
+
 ### Selecting several
 
 Click a session to select it, cmd/ctrl-click to add, shift-click for a
@@ -80,7 +109,7 @@ selection. Dialogs confirm with Enter and cancel with Esc.
 Every term must match, case-insensitive (`n` opens New session). `word` searches titles, first
 prompts, folders, ids and Remote Control names; `"two words"` is a phrase;
 `-word` excludes (also `-dir:tmp`, `-"a phrase"`). Prefixes: `dir:` (or
-`folder:`, `in:`), `title:`, `id:`, `is:kept|off|running|open|busy|attention|elsewhere`,
+`folder:`, `in:`), `title:`, `id:`, `is:kept|off|running|open|busy|attention|elsewhere|claude|codex`,
 `state:<supervisor state>`, `age:<2d` / `age:>1w` (units m h d w). The **?**
 next to the search box shows this.
 
@@ -104,12 +133,13 @@ claude-always-remote restart c96934f7
 claude-always-remote attach c96934f7      # open its tmux window (detach: Ctrl-b d)
 claude-always-remote new --list           # folders a new session can use
 claude-always-remote new ~/dev/obd-things "what it's for"
+claude-always-remote new ~/dev/obd-things "logger" --codex "add a logger"   # a Codex session
 claude-always-remote fork c96934f7 "try another approach" [--folder ~/dev] [--keep]
 claude-always-remote stop-all             # kill the tmux server
 journalctl --user -u claude-always-remote -f
 ```
 
-Ids can be any unique prefix.
+Ids can be any unique prefix; Codex sessions also go by the short id `list` shows.
 
 ## States
 
