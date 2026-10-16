@@ -6,6 +6,9 @@ claude.ai/code. A web page on the Pi picks which sessions those are, and
 manages Claude Code and Codex sessions in bulk: search, filter by folder,
 rename, fork, move, delete with undo, and start new ones.
 
+Illustrated guide: http://vanpi.lan:8791/guides/always-remote.html (source in
+`JakeIwen/visual-guides`; keep it current with any change in behaviour, see AGENTS.md).
+
 ## How it works
 
 - A user systemd service (`claude-always-remote`, started at boot through

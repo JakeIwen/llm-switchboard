@@ -52,6 +52,22 @@ Sharing the socket would let its supervisor close the real windows.
 | `tests/fake_codex.py` | In-memory Codex daemon for the unit and browser tests |
 | `systemd/`, `install.sh` | User unit template and installer |
 
+## User guide
+
+The user-facing guide is a page in the visual-guides repo
+(`~/dev/visual-guides/static/guides/always-remote.html`, served at
+http://vanpi.lan:8791/guides/always-remote.html; clone
+`github.com/JakeIwen/visual-guides` if the checkout is missing). It describes
+the page, the keep-running states, the search syntax, the details panel, bulk
+actions, new sessions, delete/restore, the Codex differences, the CLI and
+troubleshooting. Any change to what the user sees or can do (a control, a
+badge, a search term, a CLI flag, a state, a refusal message, a path) must
+update that guide in the same piece of work: edit the page, bump its Updated
+date (the `facts` list and the entry in `static/index.html`), then follow that
+repo's AGENTS.md to test, commit, push and deploy. Mention the guide commit in
+the report. If the guide can't be updated (no checkout, no network), say so in
+the report instead of leaving it silently stale.
+
 ## Rules
 
 - Only the supervisor thread starts or kills tmux windows; the web app and
