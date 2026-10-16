@@ -7,14 +7,14 @@ import urllib.request
 from functools import partial
 from pathlib import Path
 
-from claude_always_remote.codex_client import CodexClient, CodexError
-from claude_always_remote.codex_threads import CodexCatalog
-from claude_always_remote.codex_trash import CodexTrash
-from claude_always_remote.folders import new_session_folders
-from claude_always_remote.store import Store
-from claude_always_remote.supervisor import Supervisor
-from claude_always_remote.trash import RETENTION_S, Trash
-from claude_always_remote.web import make_app, make_server
+from llm_switchboard.codex_client import CodexClient, CodexError
+from llm_switchboard.codex_threads import CodexCatalog
+from llm_switchboard.codex_trash import CodexTrash
+from llm_switchboard.folders import new_session_folders
+from llm_switchboard.store import Store
+from llm_switchboard.supervisor import Supervisor
+from llm_switchboard.trash import RETENTION_S, Trash
+from llm_switchboard.web import make_app, make_server
 
 from fake_codex import FakeCodexDaemon, thread
 from fakes import SID, Clock, FakeConnectivity, FakeIndex, FakeTmux, transcript

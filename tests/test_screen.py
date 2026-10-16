@@ -1,6 +1,6 @@
 import unittest
 
-from claude_always_remote.screen import Rc, blocking_prompt, rc_indicator
+from llm_switchboard.screen import Rc, blocking_prompt, rc_indicator
 
 BAR = "─" * 60
 IDLE = f"""❯ Reply with just OK

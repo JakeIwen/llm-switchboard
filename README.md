@@ -1,20 +1,20 @@
-# claude-always-remote
+# llm-switchboard
 
-Keeps chosen Claude Code sessions running on the Pi, in tmux, with Remote
-Control on, so they can always be reached from the Claude app or
-claude.ai/code. A web page on the Pi picks which sessions those are, and
-manages Claude Code and Codex sessions in bulk: search, filter by folder,
-rename, fork, move, delete with undo, and start new ones.
+One web page on the Pi for every Claude Code and Codex session on it: search,
+sort, filter by folder, rename, fork, move, delete with undo, and start new
+ones, one at a time or in bulk. It also keeps chosen Claude Code sessions
+running in tmux with Remote Control on, so they can always be reached from
+the Claude app or claude.ai/code.
 
-Illustrated guide: http://vanpi.lan:8791/guides/always-remote.html (source in
+Illustrated guide: http://vanpi.lan:8791/guides/llm-switchboard.html (source in
 `JakeIwen/visual-guides`; keep it current with any change in behaviour, see AGENTS.md).
 
 ## How it works
 
-- A user systemd service (`claude-always-remote`, started at boot through
+- A user systemd service (`llm-switchboard`, started at boot through
   linger) runs a supervisor and the picker web app on port 8777.
 - Each enabled session gets a window in a dedicated tmux server
-  (`tmux -L claude-always-remote`). The window runs
+  (`tmux -L llm-switchboard`). The window runs
   `bash -lic 'cd <cwd> && claudepd --resume <id> --remote-control <name>'`,
   so it uses the same `claudepd` function as an interactive shell (bypass
   permissions, no Model Gateway, which is what allows Remote Control).
@@ -26,7 +26,7 @@ Illustrated guide: http://vanpi.lan:8791/guides/always-remote.html (source in
 - The tmux server lives in its own systemd scope, so restarting or stopping
   the service leaves running sessions alone; the restarted supervisor adopts
   them.
-- Enabled sessions are stored in `~/.config/claude-always-remote/sessions.json`.
+- Enabled sessions are stored in `~/.config/llm-switchboard/sessions.json`.
 
 ## Picker
 
@@ -49,7 +49,7 @@ session (▾) for:
 
 The **×** on each session deletes it: a kept session is stopped first, and
 the transcript (with its companion folder) moves to
-`~/.local/share/claude-always-remote/trash/`, with Undo and a "Recently
+`~/.local/share/llm-switchboard/trash/`, with Undo and a "Recently
 deleted" list (Restore, or Empty now); entries expire after 30 days.
 
 Rename, move and delete are refused while the session is open in another
@@ -69,7 +69,7 @@ The session starts through `claudepd --session-id <id> --name <name>
 says when it's ready (with an Open in Claude button), and a push notification
 goes out through `~/scripts/ntfy_send.sh` with the claude.ai link (or a
 "needs attention" one if it doesn't come up). From a shell:
-`claude-always-remote new --list`, then `claude-always-remote new ~/dev/obd-things "name"`.
+`llm-switchboard new --list`, then `llm-switchboard new ~/dev/obd-things "name"`.
 
 ### Codex sessions
 
@@ -130,18 +130,18 @@ Picker: `http://vanpi:8777` (from the LAN or Tailscale).
 ## CLI
 
 ```
-claude-always-remote list                 # sessions, enabled first
-claude-always-remote status               # enabled sessions and their state
-claude-always-remote enable c96934f7 [--name "van telemetrics"]
-claude-always-remote disable c96934f7
-claude-always-remote restart c96934f7
-claude-always-remote attach c96934f7      # open its tmux window (detach: Ctrl-b d)
-claude-always-remote new --list           # folders a new session can use
-claude-always-remote new ~/dev/obd-things "what it's for"
-claude-always-remote new ~/dev/obd-things "logger" --codex "add a logger"   # a Codex session
-claude-always-remote fork c96934f7 "try another approach" [--folder ~/dev] [--keep]
-claude-always-remote stop-all             # kill the tmux server
-journalctl --user -u claude-always-remote -f
+llm-switchboard list                 # sessions, enabled first
+llm-switchboard status               # enabled sessions and their state
+llm-switchboard enable c96934f7 [--name "van telemetrics"]
+llm-switchboard disable c96934f7
+llm-switchboard restart c96934f7
+llm-switchboard attach c96934f7      # open its tmux window (detach: Ctrl-b d)
+llm-switchboard new --list           # folders a new session can use
+llm-switchboard new ~/dev/obd-things "what it's for"
+llm-switchboard new ~/dev/obd-things "logger" --codex "add a logger"   # a Codex session
+llm-switchboard fork c96934f7 "try another approach" [--folder ~/dev] [--keep]
+llm-switchboard stop-all             # kill the tmux server
+journalctl --user -u llm-switchboard -f
 ```
 
 Ids can be any unique prefix; Codex sessions also go by the short id `list` shows.

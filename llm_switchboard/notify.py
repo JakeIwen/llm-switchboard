@@ -1,7 +1,7 @@
 """Push notifications through an external script, ~/scripts/ntfy_send.sh by
 default, called as: <script> <title> <message> <priority> <tags>.
 
-CLAUDE_ALWAYS_REMOTE_NOTIFY points at a different script; set it empty to turn
+LLM_SWITCHBOARD_NOTIFY points at a different script; set it empty to turn
 notifications off. Sending happens in a background thread, so a slow or
 failing notifier never holds up the supervisor.
 """
@@ -20,7 +20,7 @@ DEFAULT_SCRIPT = HOME / "scripts" / "ntfy_send.sh"
 
 
 def default_script() -> Path | None:
-    configured = os.environ.get("CLAUDE_ALWAYS_REMOTE_NOTIFY")
+    configured = os.environ.get("LLM_SWITCHBOARD_NOTIFY")
     if configured is not None:
         return Path(configured) if configured else None
     return DEFAULT_SCRIPT if DEFAULT_SCRIPT.is_file() else None

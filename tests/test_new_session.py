@@ -8,14 +8,14 @@ import time
 import unittest
 from pathlib import Path
 
-from claude_always_remote.catalog import session_rows
-from claude_always_remote.folders import new_session_folders
-from claude_always_remote.live_registry import LiveProcess
-from claude_always_remote.notify import Notifier
-from claude_always_remote.session_actions import Conflict, SessionActions
-from claude_always_remote.store import Store
-from claude_always_remote.supervisor import RC_GRACE_S, State, Supervisor
-from claude_always_remote.trash import Trash
+from llm_switchboard.catalog import session_rows
+from llm_switchboard.folders import new_session_folders
+from llm_switchboard.live_registry import LiveProcess
+from llm_switchboard.notify import Notifier
+from llm_switchboard.session_actions import Conflict, SessionActions
+from llm_switchboard.store import Store
+from llm_switchboard.supervisor import RC_GRACE_S, State, Supervisor
+from llm_switchboard.trash import Trash
 
 from fakes import Clock, FakeConnectivity, FakeIndex, FakeTmux, transcript
 

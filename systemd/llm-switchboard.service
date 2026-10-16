@@ -1,10 +1,10 @@
 # Template: install.sh replaces @REPO@ and installs this as a user unit.
 [Unit]
-Description=Keep chosen Claude Code sessions running with Remote Control (picker web app)
+Description=LLM Switchboard: Claude Code and Codex sessions, kept-running ones with Remote Control (web app)
 
 [Service]
 Type=simple
-ExecStart=@REPO@/bin/claude-always-remote serve
+ExecStart=@REPO@/bin/llm-switchboard serve
 Restart=always
 RestartSec=5
 Environment=LANG=C.UTF-8

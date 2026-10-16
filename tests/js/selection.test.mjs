@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { Selection } from "../../claude_always_remote/static/selection.js";
+import { Selection } from "../../llm_switchboard/static/selection.js";
 
 const order = ["a", "b", "c", "d", "e"];
 const sorted = (sel) => sel.list(order);

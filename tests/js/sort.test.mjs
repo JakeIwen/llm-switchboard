@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { DEFAULT_SORT, SORTS, sortRows } from "../../claude_always_remote/static/sort.js";
+import { DEFAULT_SORT, SORTS, sortRows } from "../../llm_switchboard/static/sort.js";
 
 const rows = [
   { id: "a", title: "beta notes", project: "~/dev/beta", mtime: 300, size: 10, enabled: false },

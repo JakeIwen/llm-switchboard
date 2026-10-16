@@ -59,7 +59,7 @@ const watching = new Map();  // id -> title of sessions created here, until they
 let menu = null;
 // The chosen folder is a per-browser convenience; storage can be unavailable.
 let sort = DEFAULT_SORT;
-try { dir = localStorage.getItem("car.dir"); tool = localStorage.getItem("car.tool") || "all"; sort = localStorage.getItem("car.sort") || sort; } catch {}
+try { dir = localStorage.getItem("switchboard.dir"); tool = localStorage.getItem("switchboard.tool") || "all"; sort = localStorage.getItem("switchboard.sort") || sort; } catch {}
 
 const byId = (id) => data.sessions.find((s) => s.id === id);
 
@@ -98,7 +98,7 @@ function matches(s, now) {
 
 function setDir(d) {
   dir = d;
-  try { d === null ? localStorage.removeItem("car.dir") : localStorage.setItem("car.dir", d); } catch {}
+  try { d === null ? localStorage.removeItem("switchboard.dir") : localStorage.setItem("switchboard.dir", d); } catch {}
   render();
 }
 
@@ -197,7 +197,7 @@ function panel(s) {
   const screen = screens.get(s.id);
   const lock = lockAttr(s);
   const exit = st.last_exit ? `<div class="hint">Last exit: status ${esc(st.last_exit.status)} after ${Math.round(st.last_exit.ran_s)}s, ${age(st.last_exit.at)} · launches: ${st.launches}</div>` : "";
-  const attach = `claude-always-remote attach ${s.short_id}`;
+  const attach = `llm-switchboard attach ${s.short_id}`;
   return `<div class="panel">
     <div class="actions">
       ${s.remote_url ? `<a class="btn" href="${esc(s.remote_url)}" target="_blank" rel="noopener">Open in Claude ↗</a>` : ""}
@@ -758,7 +758,7 @@ for (const [btn, value] of Object.entries(TOOLS)) {
   $(btn).classList.toggle("on", value === tool);
   $(btn).addEventListener("click", () => {
     tool = value;
-    try { localStorage.setItem("car.tool", tool); } catch {}
+    try { localStorage.setItem("switchboard.tool", tool); } catch {}
     for (const b of Object.keys(TOOLS)) $(b).classList.toggle("on", b === btn);
     render();
   });
@@ -767,7 +767,7 @@ setHTML($("sort"), SORTS.map((s) => `<option value="${s.key}">${s.label}</option
 $("sort").value = SORTS.some((s) => s.key === sort) ? sort : DEFAULT_SORT;
 $("sort").addEventListener("change", () => {
   sort = $("sort").value;
-  try { localStorage.setItem("car.sort", sort); } catch {}
+  try { localStorage.setItem("switchboard.sort", sort); } catch {}
   render();
 });
 $("help-btn").addEventListener("click", () => {

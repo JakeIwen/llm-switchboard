@@ -2,7 +2,7 @@
 import puppeteer from "puppeteer-core";
 import fs from "node:fs";
 
-const BASE = process.env.CAR_BASE || "http://127.0.0.1:8796/";
+const BASE = process.env.SWITCHBOARD_BASE || "http://127.0.0.1:8796/";
 const HOME = process.argv[2];
 const SHOTS = process.argv[3];
 let failures = 0;
@@ -70,7 +70,7 @@ await search("");
 await page.select("#sort", "name"); await sleep(50);
 const byName = await titles();
 check("Name A–Z sorts the list", byName.join("|") === [...byName].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" })).join("|"), byName.join("|"));
-check("sort is remembered", (await page.evaluate(() => localStorage.getItem("car.sort"))) === "name");
+check("sort is remembered", (await page.evaluate(() => localStorage.getItem("switchboard.sort"))) === "name");
 await page.select("#sort", "kept"); await sleep(50);
 await search("");
 await page.$eval("#q", (el) => el.blur());
@@ -116,7 +116,7 @@ if (SHOTS) await page.screenshot({ path: `${SHOTS}/dialog.png` });
 await page.keyboard.press("Enter");
 check("Enter confirms and deletes", await waitFor(async () => (await count()) === 8));
 check("deleted ones are gone", !(await titles()).some((t) => doomed.includes(t)));
-const trashDir = `${HOME}/.local/share/claude-always-remote/trash`;
+const trashDir = `${HOME}/.local/share/llm-switchboard/trash`;
 check("transcripts are in the trash", fs.readdirSync(trashDir).length === 2);
 check("toast offers Undo", await page.$eval("#toast-action", (e) => !e.hidden && !e.parentElement.hidden));
 await page.click("#toast-action");

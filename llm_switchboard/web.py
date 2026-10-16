@@ -170,7 +170,7 @@ def make_app(store: Store, index: TranscriptIndex, supervisor: Supervisor, tmux:
 
 def make_handler(app: App):
     class Handler(BaseHTTPRequestHandler):
-        server_version = "claude-always-remote"
+        server_version = "llm-switchboard"
 
         def do_GET(self):
             if self.path in ("/", "/index.html"):

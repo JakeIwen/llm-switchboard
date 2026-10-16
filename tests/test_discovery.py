@@ -6,10 +6,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from claude_always_remote.live_registry import live_processes
-from claude_always_remote.paths import MANAGED_ENV_VAR
-from claude_always_remote.store import Store
-from claude_always_remote.transcripts import TranscriptIndex
+from llm_switchboard.live_registry import live_processes
+from llm_switchboard.paths import MANAGED_ENV_VAR
+from llm_switchboard.store import Store
+from llm_switchboard.transcripts import TranscriptIndex
 
 from fakes import SID, SID2
 

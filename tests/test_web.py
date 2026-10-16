@@ -6,10 +6,10 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from claude_always_remote.store import Store
-from claude_always_remote.supervisor import Supervisor
-from claude_always_remote.trash import Trash
-from claude_always_remote.web import App, make_server
+from llm_switchboard.store import Store
+from llm_switchboard.supervisor import Supervisor
+from llm_switchboard.trash import Trash
+from llm_switchboard.web import App, make_server
 
 from fakes import SID, SID2, Clock, FakeConnectivity, FakeIndex, FakeTmux, transcript
 
@@ -76,7 +76,7 @@ class WebTest(unittest.TestCase):
 
     def test_serves_the_page_and_its_modules(self):
         with urllib.request.urlopen(self.base + "/") as resp:
-            self.assertIn(b"Always Remote", resp.read())
+            self.assertIn(b"LLM Switchboard", resp.read())
         with urllib.request.urlopen(self.base + "/static/app.js") as resp:
             self.assertEqual(resp.headers["Content-Type"], "text/javascript; charset=utf-8")
         for path in ("/static/nope.js", "/static/../web.py", "/static/index.html", "/static/%2e%2e/web.py"):

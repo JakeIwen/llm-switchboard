@@ -31,8 +31,8 @@ def main(argv: list[str] | None = None) -> int:
 
 def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="claude-always-remote",
-        description="Keep chosen Claude Code sessions running in tmux with Remote Control on.",
+        prog="llm-switchboard",
+        description="Manage Claude Code and Codex sessions, and keep chosen Claude Code sessions running in tmux with Remote Control on.",
     )
     p.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"web/API port (default {DEFAULT_PORT})")
     sub = p.add_subparsers(required=True, metavar="command")
@@ -186,7 +186,7 @@ def _new(args) -> int:
               f"Open it with: cd {folder} && codexp resume {result['id']}")
         return 0
     result = _post(args.port, "/api/sessions/new", {"cwd": folder, "name": args.name})
-    print(f"Starting {result['id']} ({result['title']}); `claude-always-remote status` shows when it's ready.")
+    print(f"Starting {result['id']} ({result['title']}); `llm-switchboard status` shows when it's ready.")
     return 0
 
 
@@ -199,14 +199,14 @@ def _fork(args) -> int:
     folder = os.path.normpath(os.path.abspath(os.path.expanduser(args.folder))) if args.folder else ""
     result = _post(args.port, f"/api/sessions/{sid}/fork", {"cwd": folder, "title": args.name, "keep": args.keep})
     print(f"Forked as {result['id']} ({result['title']}) in {result['cwd']}"
-          + ("; `claude-always-remote status` shows when it's ready." if args.keep else "."))
+          + ("; `llm-switchboard status` shows when it's ready." if args.keep else "."))
     return 0
 
 
 def _stop_all(args) -> int:
     Tmux().kill_server()
     print("Killed the tmux server. Enabled sessions come back on the next supervisor pass "
-          "unless the service is stopped: systemctl --user stop claude-always-remote")
+          "unless the service is stopped: systemctl --user stop llm-switchboard")
     return 0
 
 

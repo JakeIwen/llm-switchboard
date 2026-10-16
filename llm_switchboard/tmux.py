@@ -116,5 +116,5 @@ def _own_scope() -> list[str]:
     """
     if not os.environ.get("INVOCATION_ID") or not shutil.which("systemd-run"):
         return []
-    unit = f"claude-always-remote-tmux-{int(time.time())}"
+    unit = f"llm-switchboard-tmux-{int(time.time())}"
     return ["systemd-run", "--user", "--scope", "--quiet", "--collect", f"--unit={unit}"]

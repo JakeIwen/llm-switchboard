@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { compileQuery } from "../../claude_always_remote/static/search.js";
+import { compileQuery } from "../../llm_switchboard/static/search.js";
 
 const NOW = 1_000_000;
 const S = (o) => ({ title: "", first_prompt: "", project: "", cwd: "", id: "", rc_name: "", enabled: false,

@@ -3,8 +3,8 @@
 from dataclasses import replace
 from pathlib import Path
 
-from claude_always_remote.tmux import Window
-from claude_always_remote.transcripts import Transcript
+from llm_switchboard.tmux import Window
+from llm_switchboard.transcripts import Transcript
 
 SID = "c96934f7-dd47-4470-a139-7d699146f4de"
 SID2 = "0c598c4d-e1af-4b9a-a82e-1e348a4a1424"

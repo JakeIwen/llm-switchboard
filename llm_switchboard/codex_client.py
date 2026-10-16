@@ -22,7 +22,7 @@ import struct
 from .paths import CODEX_SOCKET
 
 _TIMEOUT_S = 20
-_CLIENT = {"name": "claude-always-remote", "version": "1"}
+_CLIENT = {"name": "llm-switchboard", "version": "1"}
 
 
 class CodexUnavailable(Exception):

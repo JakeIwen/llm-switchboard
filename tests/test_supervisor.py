@@ -3,10 +3,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from claude_always_remote.live_registry import LiveProcess
-from claude_always_remote.paths import MANAGED_ENV_VAR
-from claude_always_remote.store import Store
-from claude_always_remote.supervisor import RC_GRACE_S, State, Supervisor
+from llm_switchboard.live_registry import LiveProcess
+from llm_switchboard.paths import MANAGED_ENV_VAR
+from llm_switchboard.store import Store
+from llm_switchboard.supervisor import RC_GRACE_S, State, Supervisor
 
 from fakes import SID, SID2, Clock, FakeConnectivity, FakeIndex, FakeTmux, transcript
 

@@ -3,14 +3,14 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from claude_always_remote.conversation import recent_messages
-from claude_always_remote.live_registry import LiveProcess
-from claude_always_remote.relocate import project_dir_name
-from claude_always_remote.session_actions import Conflict, SessionActions
-from claude_always_remote.store import Store
-from claude_always_remote.supervisor import Supervisor
-from claude_always_remote.transcripts import TranscriptIndex
-from claude_always_remote.trash import RETENTION_S, Trash
+from llm_switchboard.conversation import recent_messages
+from llm_switchboard.live_registry import LiveProcess
+from llm_switchboard.relocate import project_dir_name
+from llm_switchboard.session_actions import Conflict, SessionActions
+from llm_switchboard.store import Store
+from llm_switchboard.supervisor import Supervisor
+from llm_switchboard.transcripts import TranscriptIndex
+from llm_switchboard.trash import RETENTION_S, Trash
 
 from fakes import SID, Clock, FakeConnectivity, FakeTmux
 
