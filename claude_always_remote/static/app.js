@@ -1,4 +1,5 @@
 import { compileQuery } from "./search.js";
+import { DEFAULT_SORT, SORTS, sortRows } from "./sort.js";
 import { Selection } from "./selection.js";
 import { confirmDialog, formDialog, promptDialog } from "./dialog.js";
 
@@ -57,7 +58,8 @@ const watching = new Map();  // id -> title of sessions created here, until they
 // (opening it redraws the panel's fields).
 let menu = null;
 // The chosen folder is a per-browser convenience; storage can be unavailable.
-try { dir = localStorage.getItem("car.dir"); tool = localStorage.getItem("car.tool") || "all"; } catch {}
+let sort = DEFAULT_SORT;
+try { dir = localStorage.getItem("car.dir"); tool = localStorage.getItem("car.tool") || "all"; sort = localStorage.getItem("car.sort") || sort; } catch {}
 
 const byId = (id) => data.sessions.find((s) => s.id === id);
 
@@ -276,7 +278,7 @@ function render() {
   // Don't redraw under someone typing in a session's field.
   if (document.activeElement && document.activeElement.matches("#list input[type=text]")) return;
   const now = nowS();
-  const rows = data.sessions.filter((s) => matches(s, now) && (dir === null || dirOf(s) === dir));
+  const rows = sortRows(data.sessions.filter((s) => matches(s, now) && (dir === null || dirOf(s) === dir)), sort);
   order = rows.map((s) => s.id);
   sel.prune(order);
   const on = data.sessions.filter((s) => s.enabled);
@@ -757,6 +759,13 @@ for (const [btn, value] of Object.entries(TOOLS)) {
     render();
   });
 }
+setHTML($("sort"), SORTS.map((s) => `<option value="${s.key}">${s.label}</option>`).join(""));
+$("sort").value = SORTS.some((s) => s.key === sort) ? sort : DEFAULT_SORT;
+$("sort").addEventListener("change", () => {
+  sort = $("sort").value;
+  try { localStorage.setItem("car.sort", sort); } catch {}
+  render();
+});
 $("help-btn").addEventListener("click", () => {
   $("help").hidden = !$("help").hidden;
   $("help-btn").setAttribute("aria-expanded", String(!$("help").hidden));

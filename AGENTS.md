@@ -47,6 +47,7 @@ Sharing the socket would let its supervisor close the real windows.
 | `claude_always_remote/static/index.html`, `app.css` | The picker's markup and styles |
 | `claude_always_remote/static/app.js` | Picker: rendering, actions, events (ES module, no build step) |
 | `claude_always_remote/static/search.js` | Search syntax (`-neg`, `"phrase"`, `dir:`, `is:`, `age:`) |
+| `claude_always_remote/static/sort.js` | List orders (`SORTS`, `sortRows`): kept first, activity, name, folder, size |
 | `claude_always_remote/static/selection.js` | Multi-select: click, cmd/shift ranges, keyboard cursor |
 | `claude_always_remote/static/dialog.js` | Modal confirm/prompt/form (text, select, checkbox fields; `validate`; Enter confirms, Esc cancels) |
 | `tests/fake_codex.py` | In-memory Codex daemon for the unit and browser tests |

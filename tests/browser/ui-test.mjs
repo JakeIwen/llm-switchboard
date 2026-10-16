@@ -67,6 +67,12 @@ await search("age:<2h"); check("age:<2h", (await count()) === 2, String(await co
 await search("is:nope");
 check("bad is: value shows an error", (await page.$eval("#qerr", (e) => e.textContent)).includes("is: takes"));
 await search("");
+await page.select("#sort", "name"); await sleep(50);
+const byName = await titles();
+check("Name A–Z sorts the list", byName.join("|") === [...byName].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" })).join("|"), byName.join("|"));
+check("sort is remembered", (await page.evaluate(() => localStorage.getItem("car.sort"))) === "name");
+await page.select("#sort", "kept"); await sleep(50);
+await search("");
 await page.$eval("#q", (el) => el.blur());
 
 // --- mouse selection

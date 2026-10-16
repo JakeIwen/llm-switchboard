@@ -114,7 +114,9 @@ prompts, folders, ids and Remote Control names; `"two words"` is a phrase;
 `-word` excludes (also `-dir:tmp`, `-"a phrase"`). Prefixes: `dir:` (or
 `folder:`, `in:`), `title:`, `id:`, `is:kept|off|running|open|busy|attention|elsewhere|claude|codex`,
 `state:<supervisor state>`, `age:<2d` / `age:>1w` (units m h d w). The **?**
-next to the search box shows this.
+next to the search box shows this. The drop-down after the filters sorts what's
+shown: kept first (default), recent or oldest activity, name, folder, or size;
+the choice is remembered per browser.
 
 ## Install
 

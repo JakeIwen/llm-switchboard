@@ -146,6 +146,7 @@ body.bulk .toast { bottom: calc(96px + env(safe-area-inset-bottom)); }
 .btn.danger-fill { background: var(--bad); border-color: var(--bad); color: #fff; }
 .searchrow { display: flex; gap: 6px; flex: 1 1 260px; min-width: 0; }
 .searchrow input { flex: 1; }
+select.sort { border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--text); font: inherit; padding: 8px 10px; cursor: pointer; }
 .help-btn { flex: none; width: 38px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface); color: var(--muted); font: inherit; cursor: pointer; }
 .help { font-size: 13px; color: var(--muted); background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 10px 14px; margin: -4px 0 12px; }
 .help[hidden] { display: none; }
