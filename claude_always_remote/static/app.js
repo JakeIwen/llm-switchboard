@@ -207,7 +207,8 @@ function panel(s) {
     </div>
     ${elsewhereNote(s) ? `<div class="hint">${esc(elsewhereNote(s))}</div>` : ""}
     ${messagesBlock(s.id)}
-    ${screen !== undefined ? `<pre>${esc(screen || "(nothing to show)")}</pre>` : ""}
+    ${screen !== undefined ? `<div class="screen"><pre>${esc(screen || "(nothing to show)")}</pre>
+      <button type="button" class="screen-close" data-act="screen-close" data-id="${s.id}" aria-label="Close terminal screen" title="Close">×</button></div>` : ""}
     ${field(s, "title", "Title", s.title, `<button class="btn" data-act="rename" data-id="${s.id}" ${lock}>Rename</button>`)}
     ${field(s, "cwd", "Working folder (Move takes the transcript there and a kept session restarts there; ▾ Fork copies it instead)",
             menu?.id === s.id ? menu.cwd : s.cwd, moveSplit(s, lock), `list="cwds" spellcheck="false"`)}
@@ -581,6 +582,9 @@ async function onAction(el) {
     case "screen":
       try { screens.set(id, (await api(`/api/sessions/${id}/screen`)).screen); }
       catch (e) { screens.set(id, "error: " + e.message); }
+      return render();
+    case "screen-close":
+      screens.delete(id);
       return render();
     case "peek":
       try { peeks.set(id, (await api(`/api/sessions/${id}/messages`)).messages); }

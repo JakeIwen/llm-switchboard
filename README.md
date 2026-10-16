@@ -35,7 +35,7 @@ session (▾) for:
 
 - **Open in Claude**: its claude.ai/code link (from its last Remote Control connection)
 - **Recent messages**: the last few prompts and replies
-- **Terminal screen** and **Restart** (kept-running sessions)
+- **Terminal screen** (× closes it) and **Restart** (kept-running sessions)
 - **Title / Rename**: types `/rename` into a running kept session (when idle),
   or appends Claude Code's own `custom-title` record to a closed one
 - **Working folder / Move**: moves the transcript under another folder's

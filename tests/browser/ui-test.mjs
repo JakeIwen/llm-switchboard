@@ -163,6 +163,12 @@ check("it shows as new and kept running", await page.$$eval("#list .card", (els)
 check("a failed start is reported", await waitFor(async () =>
   (await page.$eval("#toast-msg", (e) => e.textContent)).includes("needs attention"), 30000));
 const newId = await page.$$eval("#list .card", (els) => els.find((e) => e.textContent.includes("Brand new thing")).dataset.card);
+await clickSettled(`[data-card="${newId}"] .more`); await sleep(100);
+await clickSettled(`[data-card="${newId}"] [data-act=screen]`);
+check("Terminal screen opens", await waitFor(() => page.$(`[data-card="${newId}"] .screen pre`).then(Boolean)));
+await clickSettled(`[data-card="${newId}"] .screen-close`);
+check("× closes the terminal screen", await waitFor(async () => !(await page.$(`[data-card="${newId}"] .screen`))
+  && (await page.$eval(`[data-card="${newId}"] [data-act=screen]`, (e) => e.textContent)) === "Terminal screen"));
 await page.click(`[data-card="${newId}"] .x`); await sleep(100);
 await page.keyboard.press("Enter");
 check("deleting a never-started session removes it", await waitFor(async () => (await count()) === before));
