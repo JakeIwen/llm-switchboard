@@ -12,4 +12,4 @@ systemctl --user restart llm-switchboard.service
 if [ "$(loginctl show-user "$USER" -p Linger --value)" != "yes" ]; then
   echo "Linger is off, so the service won't start until you log in. Fix: loginctl enable-linger $USER" >&2
 fi
-echo "Picker: http://$(hostname):8777"
+echo "Picker: http://$(tailscale ip -4 2>/dev/null || echo '<tailscale address>'):8777 (Tailscale and localhost only)"

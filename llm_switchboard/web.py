@@ -21,6 +21,7 @@ from .codex_threads import CodexCatalog, codex_names, codex_short_id
 from .codex_trash import CodexTrash
 from .conversation import recent_messages
 from .folders import new_session_folders
+from .listen import allowed_peer
 from .live_registry import live_processes
 from .names import Names, claude_names
 from .session_actions import Conflict, SessionActions
@@ -264,7 +265,17 @@ def make_handler(app: App):
     return Handler
 
 
+class _Server(ThreadingHTTPServer):
+    daemon_threads = True
+
+    def verify_request(self, request, client_address) -> bool:
+        return allowed_peer(client_address[0])
+
+
+class _Server6(_Server):
+    address_family = socket.AF_INET6
+
+
 def make_server(app: App, host: str, port: int) -> ThreadingHTTPServer:
-    server = ThreadingHTTPServer((host, port), make_handler(app))
-    server.daemon_threads = True
-    return server
+    """Serve `app` on one address, answering only localhost and Tailscale peers."""
+    return (_Server6 if ":" in host else _Server)((host, port), make_handler(app))

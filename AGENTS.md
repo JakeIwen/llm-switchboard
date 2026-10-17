@@ -42,6 +42,7 @@ Sharing the socket would let its supervisor close the real windows.
 | `llm_switchboard/codex_threads.py` | Listing Codex threads (cached), their messages, `CodexState`, short ids |
 | `llm_switchboard/codex_actions.py` | Rename / delete (archive) / restore / fork / create Codex sessions |
 | `llm_switchboard/codex_trash.py` | Which Codex sessions were deleted here, for Recently deleted and the 30-day purge |
+| `llm_switchboard/listen.py` | Where `serve` listens (localhost + Tailscale, bound once Tailscale is up) and which peers it answers |
 | `llm_switchboard/web.py` | HTTP API and static page; `make_app` wires both session sources |
 | `llm_switchboard/cli.py` | argparse entry point |
 | `llm_switchboard/static/index.html`, `app.css` | The picker's markup and styles |

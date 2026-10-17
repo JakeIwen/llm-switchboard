@@ -125,7 +125,12 @@ the choice is remembered per browser.
 loginctl enable-linger "$USER"   # once, so user services start at boot
 ```
 
-Picker: `http://vanpi:8777` (from the LAN or Tailscale).
+Picker: `http://vanpi.tail059b13.ts.net:8777` (or `http://100.82.91.76:8777`) over
+Tailscale, or `http://127.0.0.1:8777` on the Pi. Not from the van LAN: `serve`
+listens only on localhost and the Tailscale address, and answers only localhost
+and Tailscale peers. It binds the Tailscale address once Tailscale is up, so it
+can start first at boot. `serve --host ADDR` (repeatable; `tailscale` stands for
+the Tailscale address) changes where it listens.
 
 ## CLI
 

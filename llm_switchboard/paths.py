@@ -46,5 +46,6 @@ TMUX_CONF = Path(__file__).resolve().parent / "tmux.conf"
 # through /proc/<pid>/environ.
 MANAGED_ENV_VAR = "LLM_SWITCHBOARD_SESSION"
 
-DEFAULT_HOST = "0.0.0.0"
+# Never the LAN: "tailscale" is this machine's Tailscale address (listen.py).
+DEFAULT_HOSTS = ("127.0.0.1", "tailscale")
 DEFAULT_PORT = 8777

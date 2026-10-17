@@ -15,7 +15,8 @@ from .catalog import session_rows, sort_rows
 from .connectivity import Connectivity
 from .live_registry import live_processes
 from .notify import Notifier, default_script
-from .paths import CODEX_SOCKET, DEFAULT_HOST, DEFAULT_PORT
+from .listen import Listeners
+from .paths import CODEX_SOCKET, DEFAULT_HOSTS, DEFAULT_PORT
 from .store import Store
 from .supervisor import Supervisor
 from .tmux import Tmux
@@ -38,7 +39,10 @@ def _parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(required=True, metavar="command")
 
     s = sub.add_parser("serve", help="run the supervisor and the picker web app (what the service runs)")
-    s.add_argument("--host", default=DEFAULT_HOST, help=f"address to listen on (default {DEFAULT_HOST})")
+    s.add_argument("--host", action="append", metavar="ADDR",
+                   help="address to listen on; repeat for more; `tailscale` means this machine's Tailscale "
+                        f"address (default: {' and '.join(DEFAULT_HOSTS)}). Only localhost and Tailscale "
+                        "peers are answered on any of them")
     s.add_argument("--interval", type=float, default=5.0, help="seconds between supervisor passes")
     s.set_defaults(func=_serve)
 
@@ -86,20 +90,20 @@ def _serve(args) -> int:
     store, index, tmux = Store(), TranscriptIndex(), Tmux()
     supervisor = Supervisor(store, index, tmux, Connectivity(), interval_s=args.interval,
                             notifier=Notifier(default_script()))
-    server = make_server(make_app(store, index, supervisor, tmux, Trash(), CODEX_SOCKET), args.host, args.port)
+    app = make_app(store, index, supervisor, tmux, Trash(), CODEX_SOCKET)
+    listeners = Listeners(args.host or list(DEFAULT_HOSTS), args.port, lambda host, port: make_server(app, host, port))
     stop = threading.Event()
 
     def shutdown(*_):
         stop.set()
         supervisor.wake()
-        threading.Thread(target=server.shutdown, daemon=True).start()
+        threading.Thread(target=listeners.shutdown, daemon=True).start()
 
     signal.signal(signal.SIGTERM, shutdown)
     signal.signal(signal.SIGINT, shutdown)
     worker = threading.Thread(target=supervisor.run_forever, args=(stop,), name="supervisor")
     worker.start()
-    logging.info("picker on http://%s:%d", args.host, args.port)
-    server.serve_forever()
+    listeners.serve()
     worker.join(timeout=10)
     # The tmux server is left running on purpose: restarting this service
     # must not interrupt the Claude sessions. `stop-all` closes them.
