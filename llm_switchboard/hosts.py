@@ -75,7 +75,10 @@ class Hosts:
     def snapshot(self) -> dict:
         hosts, rows, trash, actions = [], [], [], []
         for path in sorted(self.root.glob("*.json")):
-            host = host_name(path.stem)
+            try:
+                host = host_name(path.stem)
+            except ValueError:
+                continue  # JsonFile's hidden temp file mid-write (.m4mac-*.json), or a stray file
             file = JsonFile(path)
             with file.locked():
                 data = file.load()

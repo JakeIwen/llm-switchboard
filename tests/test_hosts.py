@@ -58,6 +58,13 @@ class HostTests(unittest.TestCase):
         self.assertFalse(self.hosts.snapshot()["hosts"][0]["online"])
         self.assertEqual(self.hosts.snapshot()["hosts"][0]["last_seen"], 10000)
 
+    def test_snapshot_skips_a_temp_file_written_beside_a_host(self):
+        self.hosts.exchange("m4mac", {"version": 1, "rows": [sample()]})
+        (self.root / "hosts" / ".m4mac-k2j4x9.json").write_text("{")
+        snap = self.hosts.snapshot()
+        self.assertEqual([h["host"] for h in snap["hosts"]], ["m4mac"])
+        self.assertFalse((self.root / "hosts" / ".m4mac-k2j4x9.lock").exists())
+
     def test_exchange_invalid_data_and_cap(self):
         for raw in [b"x" * (MAX_METADATA_BYTES + 1), b"[]",
                     json.dumps({"version": 1, "rows": [sample()] * (MAX_ROWS + 1)}).encode(),
