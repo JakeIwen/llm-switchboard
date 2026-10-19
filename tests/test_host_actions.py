@@ -114,12 +114,20 @@ class HostQueueTests(unittest.TestCase):
         self.assertEqual(result["state"], "failed")
         self.assertEqual(result["message"], "Mapped folder vanished")
 
+    def test_result_for_a_forgotten_action_is_acknowledged_and_the_push_lands(self):
+        forgotten = str(uuid.uuid4())
+        renamed = {**sample(), "title": "Renamed on the Mac"}
+        reply = self.hosts.exchange("m4mac", {**self.payload, "rows": [renamed],
+                                              "results": [{"id": forgotten, "ok": True, "message": "done"}]})
+        self.assertEqual(reply["acknowledged"], [forgotten])
+        self.assertEqual(self.hosts.snapshot()["sessions"][0]["title"], "Renamed on the Mac")
+
     def test_prevalidate_all_results_before_import(self):
         q = self.hosts.queue("m4mac", SID, "fork-pi", {"title": "Copy"})
         self.hosts.exchange("m4mac", self.payload)
         with self.assertRaises(ValueError):
             self.hosts.exchange("m4mac", {**self.payload, "results": [
-                {"id": q["action_id"], "ok": True, "message": ""}, {"id": SID2, "ok": True, "message": ""}],
+                {"id": q["action_id"], "ok": True, "message": ""}, {"id": q["action_id"], "ok": False, "message": ""}],
                 "uploads": [{"action_id": q["action_id"], "transcript": ""}]})
         self.importer.receive.assert_not_called()
 

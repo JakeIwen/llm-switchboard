@@ -71,8 +71,11 @@ def apply_results(data: dict, results: list[dict], uploads: list[dict], now: flo
     by_id = {a["id"]: a for a in data.get("actions", [])}
     if len({r["id"] for r in results}) != len(results):
         raise ValueError("duplicate action result")
-    if any(r["id"] not in by_id for r in results):
-        raise ValueError("unsolicited action result")
+    # A result for an action this file no longer holds (pruned history, reset
+    # state) is acknowledged and dropped: rejecting it would make the Mac resend
+    # it forever, failing every later push.
+    forgotten = [r["id"] for r in results if r["id"] not in by_id]
+    results = [r for r in results if r["id"] in by_id]
     successful = {r["id"] for r in results if r["ok"]}
     uploaded = {}
     for upload in uploads:
@@ -91,11 +94,9 @@ def apply_results(data: dict, results: list[dict], uploads: list[dict], now: flo
         item = by_id[aid]
         if item["state"] == ActionState.SENT and item["action"] == ActionKind.FORK_PI and aid not in uploaded:
             raise ValueError("fork onto Pi is missing its transcript")
-    acknowledged = []
+    acknowledged = forgotten
     for result in results:
-        item = by_id.get(result["id"])
-        if item is None:
-            raise ValueError("unsolicited action result")
+        item = by_id[result["id"]]
         acknowledged.append(item["id"])
         if item["state"] != ActionState.SENT:
             continue
