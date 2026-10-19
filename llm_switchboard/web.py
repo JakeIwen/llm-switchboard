@@ -48,7 +48,8 @@ _STATIC_TYPES = {"js": "text/javascript; charset=utf-8", "css": "text/css; chars
 
 class App:
     def __init__(self, store: Store, index: TranscriptIndex, supervisor: Supervisor, tmux: Tmux, trash: Trash,
-                 registry=live_processes, actions: SessionActions | None = None, codex: CodexActions | None = None, hosts: Hosts | None = None):
+                 registry=live_processes, actions: SessionActions | None = None, codex: CodexActions | None = None,
+                 hosts: Hosts | None = None):
         self.store = store
         self.index = index
         self.supervisor = supervisor
@@ -58,7 +59,16 @@ class App:
         self.actions = actions or SessionActions(store, index, supervisor, tmux, trash, registry=registry)
         # Codex sessions, when Codex support is on (codex_actions.py).
         self.codex = codex
-        self.hosts = hosts or Hosts()
+        # Other machines' pushed sessions (hosts.py); None leaves them out.
+        self.hosts = hosts
+
+    def remote(self) -> dict:
+        return self.hosts.snapshot() if self.hosts else {"hosts": [], "sessions": [], "trash": [], "actions": []}
+
+    def queue_remote(self, host: str, sid: str, action: str, body: dict) -> dict:
+        if not self.hosts:
+            raise LookupError("no other machines are connected")
+        return self.hosts.queue(host, sid, action, body)
 
     def codex_threads(self) -> list:
         return self.codex.catalog.threads() if self.codex else []
@@ -69,10 +79,11 @@ class App:
         if self.codex:
             rows += codex_rows(self.codex.catalog.threads())
             codex["error"] = self.codex.catalog.error
-        remote = self.hosts.snapshot()
+        remote = self.remote()
         rows += remote["sessions"]
-        return {"host_actions": remote["actions"], "hosts": remote["hosts"], "host": socket.gethostname(), "now": time.time(), "sessions": sort_rows(rows),
-                "notifications": self.supervisor.notifier.enabled, "codex": codex}
+        return {"host": socket.gethostname(), "now": time.time(), "sessions": sort_rows(rows),
+                "notifications": self.supervisor.notifier.enabled, "codex": codex,
+                "hosts": remote["hosts"], "host_actions": remote["actions"]}
 
     def list_folders(self) -> dict:
         return {"folders": [
@@ -93,7 +104,7 @@ class App:
                  "project": i.project, "deleted_at": i.deleted_at}
                 for i in self.codex.trash_items()
             ]
-        items += self.hosts.snapshot()["trash"]
+        items += self.remote()["trash"]
         return {"trash": sorted(items, key=lambda i: i["deleted_at"], reverse=True)}
 
     def empty_trash(self) -> dict:
@@ -160,9 +171,9 @@ class App:
 
 def make_app(store: Store, index: TranscriptIndex, supervisor: Supervisor, tmux: Tmux, trash: Trash,
              codex_socket: Path | None, registry=live_processes, codex_trash: CodexTrash | None = None,
-             folders=new_session_folders) -> App:
+             folders=new_session_folders, hosts: Hosts | None = None) -> App:
     """The App with both session sources wired up, sharing one name check.
-    codex_socket None leaves Codex out."""
+    codex_socket None leaves Codex out; hosts None leaves other machines out."""
     names = Names(claude_names(index, store))
     codex = None
     if codex_socket is not None:
@@ -172,7 +183,7 @@ def make_app(store: Store, index: TranscriptIndex, supervisor: Supervisor, tmux:
     threads = (lambda: codex.catalog.threads()) if codex else (lambda: [])
     actions = SessionActions(store, index, supervisor, tmux, trash, registry=registry, names=names,
                              folders=lambda transcripts: folders(transcripts, codex=threads()))
-    return App(store, index, supervisor, tmux, trash, registry=registry, actions=actions, codex=codex)
+    return App(store, index, supervisor, tmux, trash, registry=registry, actions=actions, codex=codex, hosts=hosts)
 
 
 def make_handler(app: App):
@@ -208,7 +219,7 @@ def make_handler(app: App):
                 if not self._is_json():
                     return self._send_json({"error": "send application/json"}, HTTPStatus.UNSUPPORTED_MEDIA_TYPE)
                 host, sid, action = remote
-                return self._guarded(lambda body: app.hosts.queue(host, sid, action, body), f"{host} {action}")
+                return self._guarded(lambda body: app.queue_remote(host, sid, action, body), f"{host} {action}")
             if self.path in ("/api/trash/empty", "/api/sessions/new"):
                 if not self._is_json():
                     return self._send_json({"error": "send application/json"}, HTTPStatus.UNSUPPORTED_MEDIA_TYPE)

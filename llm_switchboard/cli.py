@@ -11,9 +11,10 @@ import time
 import urllib.error
 import urllib.request
 
-from .host_cli import add_parsers
 from .catalog import session_rows, sort_rows
 from .connectivity import Connectivity
+from .host_cli import add_parsers
+from .hosts import Hosts
 from .live_registry import live_processes
 from .notify import Notifier, default_script
 from .listen import Listeners
@@ -92,7 +93,7 @@ def _serve(args) -> int:
     store, index, tmux = Store(), TranscriptIndex(), Tmux()
     supervisor = Supervisor(store, index, tmux, Connectivity(), interval_s=args.interval,
                             notifier=Notifier(default_script()))
-    app = make_app(store, index, supervisor, tmux, Trash(), CODEX_SOCKET)
+    app = make_app(store, index, supervisor, tmux, Trash(), CODEX_SOCKET, hosts=Hosts())
     listeners = Listeners(args.host or list(DEFAULT_HOSTS), args.port, lambda host, port: make_server(app, host, port))
     stop = threading.Event()
 
