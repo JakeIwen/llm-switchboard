@@ -137,6 +137,20 @@ class SearchIndexTest(unittest.TestCase):
         self.assertEqual([r["id"] for r in self.search("russet")], [claude_fork])
         self.assertEqual([r["id"] for r in self.search("amber")], [CLAUDE_ID])
 
+    def test_encrypted_reasoning_and_inline_images_are_not_indexed(self):
+        append_jsonl(codex_path(self.root), [
+            {"type": "response_item", "payload": {"type": "reasoning", "summary": [],
+                                                  "encrypted_content": "gAAAAB secretblobword"}},
+            {"type": "response_item", "payload": {"type": "function_call_output", "output": [
+                {"type": "input_text", "text": "jade screenshot caption"},
+                {"type": "input_image", "image_url": "data:image/png;base64,iVBORw0K imageblobword"},
+            ]}},
+        ])
+        self.run_index()
+        self.assertEqual(self.search("secretblobword"), [])
+        self.assertEqual(self.search("imageblobword"), [])
+        self.assertEqual(len(self.search("jade")), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

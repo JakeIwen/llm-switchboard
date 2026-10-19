@@ -118,13 +118,22 @@ def _claude_content(value, default_role: SearchRole) -> Iterator[ExtractedText]:
 
 def _all_strings(value) -> Iterator[str]:
     if isinstance(value, str):
-        yield value
+        if not _is_inline_data(value):
+            yield value
     elif isinstance(value, list):
         for item in value:
             yield from _all_strings(item)
     elif isinstance(value, dict):
-        for item in value.values():
-            yield from _all_strings(item)
+        for key, item in value.items():
+            # Codex's encrypted reasoning is opaque base64; it reads as nothing
+            # and floods the index with one-off tokens.
+            if key != "encrypted_content":
+                yield from _all_strings(item)
+
+
+def _is_inline_data(text: str) -> bool:
+    """A data: URL carrying base64 (pasted screenshots in Codex tool output)."""
+    return text.startswith("data:") and ";base64," in text[:100]
 
 
 def _codex_role(record: dict) -> SearchRole:
