@@ -4,7 +4,8 @@ Python 3.11 standard library only. Run tests with
 `python3 -m unittest discover -s tests` (this also runs the node unit tests in
 `tests/js` when node is installed). After UI changes, run the browser test,
 `tests/browser/run.sh [screenshot-dir]` (needs /usr/bin/chromium; installs
-puppeteer-core into tests/browser on first run). The service runs from this checkout
+puppeteer-core into tests/browser on first run; `SWITCHBOARD_TEST_PORT` picks
+another port so two runs can go at once). The service runs from this checkout
 (`bin/llm-switchboard` → `python3 -m llm_switchboard`), so after a
 code change: `systemctl --user restart llm-switchboard` (sessions keep
 running; the supervisor adopts their windows).
