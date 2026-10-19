@@ -23,7 +23,9 @@ export function actionPath(id, action) {
     : `/api/hosts/${id.slice(0, colon)}/sessions/${id.slice(colon + 1)}/${action}`;
 }
 export const hasRemote = (ids) => ids.some((id) => id.includes(":"));
-export const actionSummary = (actions = []) => actions.slice(-20).reverse().map((a) =>
+// Recent actions only: the server keeps a longer history than the page needs.
+const RECENT_S = 600;
+export const actionSummary = (actions = [], now) => actions.filter((a) => a.queued_at > now - RECENT_S).slice(-20).reverse().map((a) =>
   `<div>${esc(a.host)} · ${esc(a.title)} · ${esc(a.action)}: <strong>${esc(ACTION_STATE[a.state] || a.state)}</strong>${a.message ? " — " + esc(a.message) : ""}</div>`).join("");
 export const trashHost = (t) => t.host ? `<span>${esc(t.host)} · ${esc(hostStatus({ online: t.host_online, last_seen: t.last_seen }))}</span>` : "";
 export const restoreLock = (t) => hostLock(t) ? `disabled title="${esc(hostLock(t))}"` : "";

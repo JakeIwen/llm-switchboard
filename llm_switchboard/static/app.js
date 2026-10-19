@@ -272,7 +272,7 @@ function render() {
   $("summary").textContent = `${data.host} · ${on.length} kept running · ${rc} with Remote Control${data.hosts?.length ? " · " + hostSummary(data.hosts) : ""}`;
   $("tools").hidden = !data.codex?.enabled && !data.sessions.some((s) => s.tool === "codex");
   $("qerr").textContent = [...query.errors, data.codex?.error && `Codex sessions unavailable: ${data.codex.error}`].filter(Boolean).join(" · ");
-  setHTML($("host-actions"), actionSummary(data.host_actions));
+  setHTML($("host-actions"), actionSummary(data.host_actions, data.now));
   renderDirs(now);
   setHTML($("list"), rows.length ? rows.map(card).join("") : `<div class="empty">No sessions match.</div>`);
   renderTrash();
