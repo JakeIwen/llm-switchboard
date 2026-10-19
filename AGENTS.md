@@ -43,6 +43,20 @@ Sharing the socket would let its supervisor close the real windows.
 | `llm_switchboard/codex_threads.py` | Listing Codex threads (cached), their messages, `CodexState`, short ids |
 | `llm_switchboard/codex_actions.py` | Rename / delete (archive) / restore / fork / create Codex sessions |
 | `llm_switchboard/codex_trash.py` | Which Codex sessions were deleted here, for Recently deleted and the 30-day purge |
+| `llm_switchboard/json_file.py` | `JsonFile`: locked, atomic JSON files shared by the service and short-lived commands (store, hosts, Mac ledger) |
+| `llm_switchboard/host_protocol.py` | The Mac → Pi exchange: version, timing (`PUSH_INTERVAL`, `OFFLINE_AFTER`), `SessionState`, row validation |
+| `llm_switchboard/host_actions_protocol.py` | Mac actions: `ActionKind` allow-list, `ActionState`, TTL and size caps, body/result/trash validation (both machines) |
+| `llm_switchboard/hosts.py` | `Hosts`: per-host snapshots under `~/.local/share/llm-switchboard/hosts/`, the exchange, page rows for other machines |
+| `llm_switchboard/host_queue.py` | The Mac action queue: enqueue, dispatch, results, expiry (at-most-once delivery) |
+| `llm_switchboard/host_exchange.py`, `host_authorize.py` | The SSH forced command, and installing a host's restricted key in `~/.ssh/authorized_keys` |
+| `llm_switchboard/host_import.py` | Fork onto the Pi: folder mapping, checks, writing the uploaded transcript as a new not-running session |
+| `llm_switchboard/host_web.py` | The `/api/hosts/<host>/sessions/<id>/<action>` route |
+| `llm_switchboard/host_cli.py` | `host-exchange`, `host-authorize`, `host-agent`, `host-install` (light imports; `__main__` dispatches them before cli.py) |
+| `llm_switchboard/host_agent.py`, `host_transport.py` | Mac side: the 10 s push loop, and bounded `ssh` I/O |
+| `llm_switchboard/host_launchd.py` | Mac side: the launchd job (`dev.llm-switchboard.host-agent`) |
+| `llm_switchboard/mac_catalog.py`, `mac_registry.py` | Mac side: metadata-only rows (no prompts), macOS live-process check |
+| `llm_switchboard/mac_actions.py`, `mac_action_runner.py` | Mac side: running allowed actions with its own checks; the durable ledger that never repeats one |
+| `llm_switchboard/mac_uploads.py` | Mac side: the one transcript export path (notification, log, 10/hour quota) |
 | `llm_switchboard/listen.py` | Where `serve` listens (localhost + Tailscale, bound once Tailscale is up) and which peers it answers |
 | `llm_switchboard/web.py` | HTTP API and static page; `make_app` wires both session sources |
 | `llm_switchboard/cli.py` | argparse entry point |
@@ -54,9 +68,11 @@ Sharing the socket would let its supervisor close the real windows.
 | `llm_switchboard/static/search.js` | Search syntax (`-neg`, `"phrase"`, `dir:`, `is:`, `age:`) |
 | `llm_switchboard/static/sort.js` | List orders (`SORTS`, `sortRows`): kept first, activity, name, folder, size |
 | `llm_switchboard/static/selection.js` | Multi-select: click, cmd/shift ranges, keyboard cursor |
+| `llm_switchboard/static/hosts.js`, `hosts.css` | Other machines' rows: badge, panel, locks, action routes and status |
 | `llm_switchboard/static/dialog.js` | Modal confirm/prompt/form (text, select, checkbox fields; `validate`; Enter confirms, Esc cancels) |
 | `tests/fake_codex.py` | In-memory Codex daemon for the unit and browser tests |
 | `systemd/`, `install.sh` | User unit template and installer |
+| `scripts/setup-mac.sh` | Mac setup: key, `host-authorize` over SSH, one push, launchd job |
 
 ## User guide
 
@@ -92,5 +108,10 @@ the report instead of leaving it silently stale.
   that sets or moves a name goes through `Names.refuse_duplicate` (names.py).
 - State names are the `State` enum in `supervisor.py`; the page's `STATE`
   table in `app.js` mirrors them for labels.
+- Mac sessions: the Mac pushes; the Pi never connects to it. Rows from a
+  host carry metadata only (no prompts, messages or screens), and only the
+  actions in `ActionKind` can be queued; the Mac re-checks every one. Nothing
+  queued may start a process or send a prompt there. A transcript leaves the
+  Mac only through `fork-pi` (mac_uploads.py).
 - The page polls every 4s; only rewrite DOM through `setHTML` (skips
   unchanged markup) so clicks aren't lost to a redraw mid-click.

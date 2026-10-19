@@ -98,6 +98,47 @@ If the daemon isn't running, the page says so above the list and the Claude
 side works as usual (`codex app-server daemon start` starts it). The daemon's
 API is marked experimental, so a Codex update can break this half.
 
+### Mac sessions
+
+The Mac's (`m4mac`) Claude Code and Codex sessions show beside the Pi's,
+tagged **Mac**, while the Mac is awake. The Mac runs this same package as a
+launchd job (`host-agent`) that opens no port: every 10 s it computes its own
+rows and pushes them to the Pi over SSH with a dedicated key, which the Pi's
+`~/.ssh/authorized_keys` restricts to one command
+(`restrict,command="…/bin/llm-switchboard host-exchange m4mac"`). The Pi has
+no way into the Mac. The header shows `m4mac: online`, or `offline, last seen
+HH:MM` after 35 s without a push, and the Mac's rows grey out.
+
+- Rows carry only ids, titles, folder, times, size and open/busy status.
+  Prompts, replies and terminal screens never leave the Mac, so Mac rows have
+  no Recent messages, Terminal screen, keep-running switch or Restart, and
+  match the search box by title and folder only. Untitled sessions show as
+  `(untitled)` rather than their first prompt.
+- **Rename**, **Move**, **Fork on the Mac…**, **Delete** (to the Mac's own
+  trash, restorable from Recently deleted) are queued for the Mac, which runs
+  them on its next push after checking them itself. Nothing that starts a
+  process or sends a prompt can be queued. A queued action expires after 60 s;
+  the box above the list shows each one as queued, delivered, done, failed
+  (with the Mac's reason) or expired. An action the Mac received but never
+  answered expires as "outcome unknown"; it is never sent twice.
+- **Fork onto the Pi…** (Claude only) is the one way a transcript leaves the
+  Mac: the Mac posts a notification, logs it, and uploads that one transcript
+  (at most 16 MiB, 10 per hour). It lands as a new, not-running Pi session in
+  `/home/pi/<rest>` for a Mac folder `/Users/jacobr/<rest>`, which must
+  already exist on the Pi.
+- Mac Codex sessions need the Mac's Codex daemon for actions; without it they
+  are listed from disk, read-only.
+- The resume command to copy uses plain `claude --resume` / `codex resume`.
+- **Empty Pi trash now** leaves the Mac's trash alone.
+
+Setting up the Mac: clone this repo there and run `scripts/setup-mac.sh`
+(Homebrew Python 3.11+). It makes the key `~/.ssh/llm-switchboard-m4mac`,
+installs it with `ssh vanpi …/llm-switchboard host-authorize m4mac < key.pub`
+over the normal SSH login, does one push, and loads the launchd job
+`dev.llm-switchboard.host-agent` (logs in `~/Library/Logs/llm-switchboard/`).
+The Pi keeps what the Mac pushed, and the action queue, in
+`~/.local/share/llm-switchboard/hosts/m4mac.json`.
+
 ### Selecting several
 
 Click a session to select it, cmd/ctrl-click to add, shift-click for a
@@ -146,6 +187,11 @@ llm-switchboard new ~/dev/obd-things "what it's for"
 llm-switchboard new ~/dev/obd-things "logger" --codex "add a logger"   # a Codex session
 llm-switchboard fork c96934f7 "try another approach" [--folder ~/dev] [--keep]
 llm-switchboard stop-all             # kill the tmux server
+llm-switchboard host-authorize m4mac < key.pub   # install a Mac's restricted key (run over SSH)
+llm-switchboard host-exchange m4mac  # the restricted key's forced command (JSON on stdin)
+# On the Mac (python3 -m llm_switchboard …):
+#   host-agent [--once] [--pi vanpi] [--host-name m4mac] [--identity ~/.ssh/llm-switchboard-m4mac]
+#   host-install [--unload]           # write and load (or unload) the launchd job
 journalctl --user -u llm-switchboard -f
 ```
 
@@ -169,7 +215,7 @@ Ids can be any unique prefix; Codex sessions also go by the short id `list` show
 - If you `/clear` inside a kept session, Claude Code starts a new session id;
   the supervisor still relaunches the originally enabled id after an exit.
 - The picker has no login. POSTs must be `application/json`, which blocks
-  cross-site requests from browsers, but anyone on the LAN/tailnet can use it.
+  cross-site requests from browsers, but anyone on the tailnet can use it.
 
 ## Tests
 
