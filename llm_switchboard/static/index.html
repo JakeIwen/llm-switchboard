@@ -20,6 +20,7 @@
   <div class="toolbar">
     <div class="searchrow">
       <input type="search" id="q" placeholder='Search  ( -exclude  "phrase"  dir:  is:kept  age:<2d )' autocomplete="off" spellcheck="false">
+      <button type="button" class="btn mode-btn" id="fulltext-btn" aria-pressed="false">Transcripts</button>
       <button type="button" class="help-btn" id="help-btn" aria-label="Search syntax" aria-expanded="false">?</button>
     </div>
     <div class="seg" role="tablist">
@@ -44,10 +45,19 @@
       <li><code>age:&lt;2d</code> active in the last 2 days · <code>age:&gt;1w</code> older than a week (units m h d w)</li>
       <li><code>state:backoff</code> exact supervisor state</li>
     </ul>
+    <strong>Inside transcripts:</strong> choose <b>Transcripts</b>, type a query, then press Enter.
+    <ul>
+      <li>Several words are all required; <code>"two words"</code> is a phrase; <code>-word</code> excludes</li>
+      <li><code>tool:claude</code> or <code>tool:codex</code> · <code>dir:obd</code></li>
+      <li><code>by:me</code> your prompts · <code>by:reply</code> replies and thinking · <code>by:tool</code> tool output</li>
+      <li><code>age:&lt;2d</code> / <code>age:&gt;1w</code> · <code>after:2026-10-01</code> · <code>before:2026-10-18</code></li>
+      <li>Enter searches; Esc or clearing the query returns to the session list.</li>
+    </ul>
     <p class="keys">Keys: <kbd>↑</kbd><kbd>↓</kbd> move · <kbd>Space</kbd> select · <kbd>⇧</kbd>+<kbd>↑</kbd><kbd>↓</kbd> extend · <kbd>⌘/Ctrl</kbd>+<kbd>A</kbd> all · <kbd>Enter</kbd> details · <kbd>⌫</kbd> delete · <kbd>Esc</kbd> clear · <kbd>/</kbd> search · <kbd>n</kbd> new session.
       Click selects; <kbd>⌘/Ctrl</kbd>-click adds; <kbd>⇧</kbd>-click selects a range.</p>
   </div>
   <div class="qerr" id="qerr"></div>
+  <div class="index-status" id="index-status">Transcript index: checking…</div>
   <div class="dirs" id="dirs" aria-label="Filter by folder"></div>
   <div class="host-actions" id="host-actions" aria-live="polite"></div>
   <div class="list" id="list"></div>

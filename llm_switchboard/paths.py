@@ -33,7 +33,10 @@ STORE_FILE = STATE_DIR / "sessions.json"
 # Codex sessions deleted here are archived in Codex; this remembers which ones,
 # so they show under "Recently deleted" and are deleted for good after 30 days.
 CODEX_TRASH_FILE = STATE_DIR / "codex-trash.json"
-TRASH_DIR = Path(os.environ.get("XDG_DATA_HOME") or HOME / ".local" / "share") / "llm-switchboard" / "trash"
+DATA_DIR = Path(os.environ.get("XDG_DATA_HOME") or HOME / ".local" / "share") / "llm-switchboard"
+TRASH_DIR = DATA_DIR / "trash"
+# Shared by the page and CLI; WAL lets searches continue while the child indexer writes.
+SEARCH_INDEX_FILE = DATA_DIR / "transcript-search.sqlite3"
 
 HOSTS_DIR = TRASH_DIR.parent / "hosts"
 

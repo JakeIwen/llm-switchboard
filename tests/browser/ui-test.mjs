@@ -67,6 +67,22 @@ await search("age:<2h"); check("age:<2h", (await count()) === 2, String(await co
 await search("is:nope");
 check("bad is: value shows an error", (await page.$eval("#qerr", (e) => e.textContent)).includes("is: takes"));
 await search("");
+
+// --- transcript full-text search (a separate mode from the list filter)
+await page.click("#fulltext-btn");
+await page.type("#q", '"reply about Alpha CAN decoder"');
+await page.keyboard.press("Enter");
+check("transcript search finds the matching session", await waitFor(() => page.$("#list .search-card").then(Boolean)));
+check("transcript result shows an excerpt", (await page.$eval("#list .search-excerpt", (e) => e.textContent)).includes("reply about Alpha CAN decoder"));
+await page.click("[data-search-open]");
+check("opening a transcript result shows context", await waitFor(() => page.$("#list .search-detail").then(Boolean)));
+check("matching context includes a resume command", (await page.$eval("#list .search-detail", (e) => e.textContent)).includes("claudepd --resume"));
+await page.$eval("#q", (el) => { el.value = ""; el.dispatchEvent(new Event("input")); });
+check("clearing transcript search returns to the normal list", await waitFor(async () => (await count()) === 10));
+await search("alpha -can");
+check("normal list filter still works after transcript search", (await count()) === 3);
+await search("");
+
 await page.select("#sort", "name"); await sleep(50);
 const byName = await titles();
 check("Name A–Z sorts the list", byName.join("|") === [...byName].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" })).join("|"), byName.join("|"));
@@ -138,8 +154,8 @@ check("X + Enter deletes that one", await waitFor(async () => (await count()) ==
 
 // --- new session: trusted folders only, name required, Enter creates
 const before = await count();
-await page.keyboard.press("n"); await sleep(150);
-check("n opens the new-session dialog", await dialogOpen());
+await page.keyboard.press("n");
+check("n opens the new-session dialog", await waitFor(dialogOpen));
 const options = await page.$$eval("dialog[open] select[name=cwd] option", (els) => els.map((e) => e.textContent));
 check("folders with sessions are offered", options.length === 3 && options.some((o) => o.includes("~/scratch")), options.join(" | "));
 check("tool defaults to Claude Code", (await page.$eval("dialog[open] select[name=tool]", (e) => e.value)) === "claude");
@@ -277,7 +293,8 @@ check("deletes a Codex session", await waitFor(async () => !(await api()).some((
 check("it's in Recently deleted", await waitFor(() => page.$eval("#trash-list", (e) => e.textContent.includes("investigate the beta flake"))));
 await page.click("#toast-action");
 check("Undo brings the Codex session back", await waitFor(async () => (await api()).some((s) => s.id === doomedCx)));
-await page.keyboard.press("n"); await sleep(150);
+await page.click("#new-btn");
+check("New button opens the Codex session dialog", await waitFor(dialogOpen));
 await page.waitForSelector("dialog[open] select[name=tool]");
 await page.select("dialog[open] select[name=tool]", "codex"); await sleep(50);
 check("Codex asks for a first message", !(await page.$eval("dialog[open] input[name=prompt]", (e) => e.closest(".dlg-field").hidden)));

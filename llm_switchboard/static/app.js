@@ -1,5 +1,6 @@
 import { hostBadge, hostPanel, hostSummary, hostLock, hostAction, actionPath, actionSummary, hasRemote, trashHost, restoreLock } from "./hosts.js";
 import { compileQuery } from "./search.js";
+import { initFullText } from "./fulltext.js";
 import { DEFAULT_SORT, SORTS, sortRows } from "./sort.js";
 import { Selection } from "./selection.js";
 import { confirmDialog, formDialog, promptDialog } from "./dialog.js";
@@ -32,6 +33,7 @@ const dirOf = (s) => s.project || UNKNOWN_DIR;
 // ---- state -----------------------------------------------------------------
 
 let data = null, trash = [], tab = "all", tool = "all", dir = null, query = compileQuery("");
+let fulltext = null;
 let order = [];            // ids of the rows on screen, in order
 let bulkProgress = "";     // non-empty while a bulk action runs
 const expanded = new Set(), screens = new Map(), peeks = new Map();
@@ -64,6 +66,7 @@ async function refresh() {
   try {
     [data, { trash }] = await Promise.all([api("/api/sessions"), api("/api/trash")]);
     if (!pointerDown) render();
+    fulltext?.poll();
     checkWatched();
   } catch (e) {
     setHTML($("list"), `<div class="err">Can't reach the service: ${esc(e.message)}</div>`);
@@ -260,7 +263,7 @@ function renderCwds() {
 }
 
 function render() {
-  if (!data) return;
+  if (!data || fulltext?.active) return;
   // Don't redraw under someone typing in a session's field.
   if (document.activeElement && document.activeElement.matches("#list input[type=text]")) return;
   const now = nowS();
@@ -724,5 +727,6 @@ $("help-btn").addEventListener("click", () => {
   $("help-btn").setAttribute("aria-expanded", String(!$("help").hidden));
 });
 
+fulltext = initFullText({ api, setHTML, esc, age, copyText, toast, normalRender: render });
 refresh();
 setInterval(refresh, 4000);

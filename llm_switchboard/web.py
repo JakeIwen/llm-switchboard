@@ -26,6 +26,8 @@ from .host_web import action_route
 from .listen import allowed_peer
 from .live_registry import live_processes
 from .names import Names, claude_names
+from .paths import SEARCH_INDEX_FILE
+from .search_api import SearchHandlers, route_search_get
 from .session_actions import Conflict, SessionActions
 from .session_id import is_session_id, short_id
 from .store import Store
@@ -49,7 +51,7 @@ _STATIC_TYPES = {"js": "text/javascript; charset=utf-8", "css": "text/css; chars
 class App:
     def __init__(self, store: Store, index: TranscriptIndex, supervisor: Supervisor, tmux: Tmux, trash: Trash,
                  registry=live_processes, actions: SessionActions | None = None, codex: CodexActions | None = None,
-                 hosts: Hosts | None = None):
+                 hosts: Hosts | None = None, search: SearchHandlers | None = None):
         self.store = store
         self.index = index
         self.supervisor = supervisor
@@ -59,6 +61,7 @@ class App:
         self.actions = actions or SessionActions(store, index, supervisor, tmux, trash, registry=registry)
         # Codex sessions, when Codex support is on (codex_actions.py).
         self.codex = codex
+        self.search = search or SearchHandlers(SEARCH_INDEX_FILE)
         # Other machines' pushed sessions (hosts.py); None leaves them out.
         self.hosts = hosts
 
@@ -191,6 +194,9 @@ def make_handler(app: App):
         server_version = "llm-switchboard"
 
         def do_GET(self):
+            search = route_search_get(self.path, app.search, lambda: app.list_sessions()["sessions"])
+            if search is not None:
+                return self._send_json(*search)
             if self.path in ("/", "/index.html"):
                 return self._send_file(STATIC_DIR / "index.html", "text/html; charset=utf-8")
             static = _STATIC_RE.match(self.path)

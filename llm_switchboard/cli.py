@@ -18,7 +18,9 @@ from .hosts import Hosts
 from .live_registry import live_processes
 from .notify import Notifier, default_script
 from .listen import Listeners
-from .paths import CODEX_SOCKET, DEFAULT_HOSTS, DEFAULT_PORT
+from .paths import CODEX_DIR, CODEX_SOCKET, DEFAULT_HOSTS, DEFAULT_PORT, PROJECTS_DIR, SEARCH_INDEX_FILE
+from .search_cli import run_index_command, run_search
+from .search_process import SearchIndexScheduler
 from .store import Store
 from .supervisor import Supervisor
 from .tmux import Tmux
@@ -82,6 +84,15 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("--keep", action="store_true", help="keep the copy running with Remote Control")
     s.set_defaults(func=_fork)
 
+    s = sub.add_parser("search", help="search inside Claude Code and Codex transcripts")
+    s.add_argument("query", nargs="+", help="words, phrases and filters to search for")
+    s.add_argument("--session", metavar="TOOL:ID", help="show matching excerpts in one result")
+    s.add_argument("--limit", type=int, default=20, help="maximum sessions to show (default 20)")
+    s.set_defaults(func=_search)
+
+    s = sub.add_parser("index", help="update the transcript search index now")
+    s.set_defaults(func=_index_transcripts)
+
     s = sub.add_parser("stop-all", help="kill the tmux server and every session in it")
     s.set_defaults(func=_stop_all)
     add_parsers(sub)
@@ -96,6 +107,7 @@ def _serve(args) -> int:
     app = make_app(store, index, supervisor, tmux, Trash(), CODEX_SOCKET, hosts=Hosts())
     listeners = Listeners(args.host or list(DEFAULT_HOSTS), args.port, lambda host, port: make_server(app, host, port))
     stop = threading.Event()
+    index_worker = SearchIndexScheduler().start(stop)
 
     def shutdown(*_):
         stop.set()
@@ -108,6 +120,7 @@ def _serve(args) -> int:
     worker.start()
     listeners.serve()
     worker.join(timeout=10)
+    index_worker.join(timeout=10)
     # The tmux server is left running on purpose: restarting this service
     # must not interrupt the Claude sessions. `stop-all` closes them.
     return 0
@@ -208,6 +221,14 @@ def _fork(args) -> int:
     print(f"Forked as {result['id']} ({result['title']}) in {result['cwd']}"
           + ("; `llm-switchboard status` shows when it's ready." if args.keep else "."))
     return 0
+
+
+def _search(args) -> int:
+    return run_search(args, SEARCH_INDEX_FILE, _age)
+
+
+def _index_transcripts(args) -> int:
+    return run_index_command(SEARCH_INDEX_FILE, PROJECTS_DIR, CODEX_DIR)
 
 
 def _stop_all(args) -> int:
