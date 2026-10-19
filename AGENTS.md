@@ -47,6 +47,9 @@ Sharing the socket would let its supervisor close the real windows.
 | `llm_switchboard/cli.py` | argparse entry point |
 | `llm_switchboard/static/index.html`, `app.css` | The picker's markup and styles |
 | `llm_switchboard/static/app.js` | Picker: rendering, actions, events (ES module, no build step) |
+| `llm_switchboard/static/api.js` | The page's JSON calls to the server (`api`) |
+| `llm_switchboard/static/format.js` | Text formatting for the page: `esc`, `age`, `size`, `plural`, `nowS` |
+| `llm_switchboard/static/feedback.js` | Toasts, dialog bodies listing sessions, the clipboard |
 | `llm_switchboard/static/search.js` | Search syntax (`-neg`, `"phrase"`, `dir:`, `is:`, `age:`) |
 | `llm_switchboard/static/sort.js` | List orders (`SORTS`, `sortRows`): kept first, activity, name, folder, size |
 | `llm_switchboard/static/selection.js` | Multi-select: click, cmd/shift ranges, keyboard cursor |

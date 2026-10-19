@@ -2,6 +2,9 @@ import { compileQuery } from "./search.js";
 import { DEFAULT_SORT, SORTS, sortRows } from "./sort.js";
 import { Selection } from "./selection.js";
 import { confirmDialog, formDialog, promptDialog } from "./dialog.js";
+import { api } from "./api.js";
+import { copyText, summaryBody, toast } from "./feedback.js";
+import { age, esc, nowS, plural, size } from "./format.js";
 
 // Labels for the supervisor's State enum (supervisor.py).
 const STATE = {
@@ -23,28 +26,7 @@ const TOOL_NAME = { claude: "Claude Code", codex: "Codex" };
 const isCodex = (s) => s.tool === "codex";
 
 const $ = (id) => document.getElementById(id);
-const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const dirOf = (s) => s.project || UNKNOWN_DIR;
-const nowS = () => Date.now() / 1000;
-const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
-
-function age(t) {
-  if (!t) return "";
-  const s = nowS() - t;
-  if (s < 60) return "just now";
-  if (s < 3600) return Math.floor(s / 60) + "m ago";
-  if (s < 86400) return Math.floor(s / 3600) + "h ago";
-  return Math.floor(s / 86400) + "d ago";
-}
-const size = (b) => b == null ? "" : b < 1048576 ? (b / 1024).toFixed(0) + " KB" : (b / 1048576).toFixed(1) + " MB";
-
-async function api(path, body) {
-  const opts = body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
-  const r = await fetch(path, opts);
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(j.error || r.statusText);
-  return j;
-}
 
 // ---- state -----------------------------------------------------------------
 
@@ -292,49 +274,6 @@ function render() {
   renderTrash();
   renderBulkbar();
   renderCwds();
-}
-
-// ---- feedback --------------------------------------------------------------
-
-let toastTimer = null;
-// action: a function (shown as "Undo"), or { label, run } / { label, href }.
-function toast(msg, action, ms) {
-  if (typeof action === "function") action = { label: "Undo", run: action };
-  $("toast-msg").textContent = msg;
-  $("toast-action").hidden = !action;
-  if (action) {
-    $("toast-action").textContent = action.label;
-    $("toast-action").onclick = () => {
-      $("toast").hidden = true;
-      action.href ? window.open(action.href, "_blank", "noopener") : action.run();
-    };
-  }
-  $("toast").hidden = false;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { $("toast").hidden = true; }, ms || (action ? 10000 : 5000));
-}
-
-// A dialog body listing session titles (at most 8) and some notes.
-function summaryBody(sessions, notes) {
-  const box = document.createElement("div");
-  const ul = document.createElement("ul");
-  for (const s of sessions.slice(0, 8)) ul.append(Object.assign(document.createElement("li"), { textContent: s.title }));
-  if (sessions.length > 8) ul.append(Object.assign(document.createElement("li"), { textContent: `…and ${sessions.length - 8} more` }));
-  if (sessions.length > 1) box.append(ul);
-  for (const n of notes.filter(Boolean)) box.append(Object.assign(document.createElement("p"), { textContent: n }));
-  return box;
-}
-
-async function copyText(text) {
-  // navigator.clipboard needs a secure (https) page; plain http on the LAN falls back to execCommand.
-  try { await navigator.clipboard.writeText(text); return true; } catch {}
-  const ta = document.createElement("textarea");
-  ta.value = text; ta.setAttribute("readonly", ""); ta.style.position = "fixed"; ta.style.opacity = "0";
-  document.body.appendChild(ta); ta.select(); ta.setSelectionRange(0, text.length);
-  let ok = false;
-  try { ok = document.execCommand("copy"); } catch {}
-  ta.remove();
-  return ok;
 }
 
 // ---- actions ---------------------------------------------------------------
