@@ -217,7 +217,8 @@ select.dlg-input {
 /* Full-text transcript search is a separate mode from the ordinary list filter. */
 .mode-btn { flex: none; padding: 8px 10px; background: var(--surface); }
 .mode-btn.on { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
-.index-status { color: var(--muted); font-size: 12px; margin: -6px 0 10px; }
+.index-status { display: none; color: var(--muted); font-size: 12px; margin: -6px 0 10px; }
+.fulltext-mode .index-status { display: block; }
 .fulltext-mode .toolbar > .seg, .fulltext-mode .toolbar > .sort,
 .fulltext-mode #dirs, .fulltext-mode #trash, .fulltext-mode #bulkbar,
 .fulltext-mode .wrap > .hint { display: none; }

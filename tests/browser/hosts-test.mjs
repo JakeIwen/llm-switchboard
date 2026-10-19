@@ -52,4 +52,12 @@ export async function checkHosts({ page, home, check, waitFor }) {
   expiring.actions.at(-1).queued_at -= 61;
   fs.writeFileSync(`${root}/m4mac.json`, JSON.stringify(expiring));
   check("undelivered Mac action expires", await waitFor(() => page.$eval("#host-actions", (el) => el.textContent.includes("rename: expired"))));
+
+  await page.click("#fulltext-btn");
+  await page.type("#q", "mac-only");
+  await page.keyboard.press("Enter");
+  check("transcript search finds a Mac session by folder only", await waitFor(() => page.$eval("#list", (el) =>
+    el.textContent.includes("title/folder match only") && el.textContent.includes("claude --resume")
+    && !el.querySelector("[data-search-open]"))));
+  await page.click("#fulltext-btn");
 }

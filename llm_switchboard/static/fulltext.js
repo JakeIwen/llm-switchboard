@@ -9,6 +9,7 @@ class FullTextMode {
     Object.assign(this, deps);
     this.state = { active: false, searched: false, query: "", results: [], details: new Map(), status: null };
     this.savedListQuery = "";
+    this.listPlaceholder = $("q").placeholder;
     this.request = 0;
     this.lastUpdated = null;
   }
@@ -31,7 +32,6 @@ class FullTextMode {
       if (this.active && event.key === "Enter") { event.preventDefault(); this.search(); }
     });
     $("list").addEventListener("click", (event) => this.onResultClick(event));
-    this.poll();
     return this;
   }
 
@@ -62,6 +62,7 @@ class FullTextMode {
     $("qerr").textContent = "";
     this.setHTML($("list"), '<div class="empty">Type a transcript search and press Enter.</div>');
     $("q").focus();
+    this.poll();
   }
 
   deactivate() {
@@ -71,7 +72,7 @@ class FullTextMode {
     this.state.results = [];
     this.state.details.clear();
     $("q").value = this.savedListQuery;
-    $("q").placeholder = 'Search  ( -exclude  "phrase"  dir:  is:kept  age:<2d )';
+    $("q").placeholder = this.listPlaceholder;
     $("fulltext-btn").classList.remove("on");
     $("fulltext-btn").setAttribute("aria-pressed", "false");
     document.body.classList.remove("fulltext-mode");
@@ -90,16 +91,19 @@ class FullTextMode {
         <div class="meta"><span>${this.esc(result.project)}</span><span>${this.esc(count)}</span><span>${this.age(result.matched_at)}</span><code>${this.esc(result.short_id)}</code></div>
         <div class="badges">${host}</div></div>${open}</div>
       <div class="search-excerpt">${this.esc(result.excerpt)}</div>
-      ${detail ? this.detailBlock(detail) : ""}
+      ${detail ? this.detailBlock(detail) : result.title_only && result.resume_cmd ? this.commandLine(result.resume_cmd) : ""}
     </article>`;
   }
 
   detailBlock(detail) {
-    const command = detail.result.resume_cmd;
     const contexts = detail.contexts.map((context) => `<div class="search-context">${context.lines.map((line) =>
       `<div class="search-line ${line.match ? "match" : ""}"><span>${this.esc(ROLE_NAME[line.role] || line.role)}</span>${this.esc(line.text)}</div>`).join("")}</div>`).join("");
-    return `<div class="search-detail"><div class="cmdline"><div class="cmd">${this.esc(command)}</div>
-      <button class="btn" data-search-copy="${this.esc(command)}">Copy</button></div>${contexts || '<div class="hint">No context available.</div>'}</div>`;
+    return `<div class="search-detail">${this.commandLine(detail.result.resume_cmd)}${contexts || '<div class="hint">No context available.</div>'}</div>`;
+  }
+
+  commandLine(command) {
+    return `<div class="cmdline"><div class="cmd">${this.esc(command)}</div>
+      <button class="btn" data-search-copy="${this.esc(command)}">Copy</button></div>`;
   }
 
   renderResults() {
@@ -155,6 +159,8 @@ class FullTextMode {
   }
 
   async poll() {
+    // The status line shows only in this mode; activate() fetches it fresh.
+    if (!this.active) return;
     try {
       const payload = await this.api("/api/search/status");
       const changed = this.active && this.state.query && payload.index.state === INDEX_STATE.ready &&
