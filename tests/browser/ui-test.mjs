@@ -283,7 +283,8 @@ check("Codex fork dialog has no keep-running box", await dialogOpen() && !(await
 await page.$eval("dialog[open] input[name=title]", (el) => { el.value = ""; });
 await page.type("dialog[open] input[name=title]", "Codex alpha fork");
 await page.keyboard.press("Enter");
-check("forks a Codex session", await waitFor(async () => (await api()).some((s) => s.tool === "codex" && s.title === "Codex alpha fork")));
+check("forks a Codex session", await waitFor(async () => (await api()).some((s) => s.tool === "codex" && s.title === "Codex alpha fork")),
+  `dialog open: ${await dialogOpen()}; toast: ${await page.$eval("#toast-msg", (e) => e.textContent)}`);
 await search("is:codex");
 await page.$eval("#q", (el) => el.blur());
 const doomedCx = await page.$$eval("#list .card", (els) => els.find((e) => e.textContent.includes("investigate the beta flake")).dataset.card);

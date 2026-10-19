@@ -9,7 +9,13 @@ export async function checkHosts({ page, home, check, waitFor }) {
   const row = { id, tool: "claude", title: "Mac private project", cwd: "/Users/jacobr/dev/mac-only",
     mtime: 100, size: 40, state: "closed", mutable: true };
   const state = { version: 1, rows: [row], last_seen: Date.now() / 1000 };
-  const write = () => fs.writeFileSync(`${root}/m4mac.json`, JSON.stringify(state));
+  // Atomic like JsonFile: the page polls this file, and a half-written one
+  // would fail the request.
+  const save = (data) => {
+    fs.writeFileSync(`${root}/.m4mac.tmp`, JSON.stringify(data));
+    fs.renameSync(`${root}/.m4mac.tmp`, `${root}/m4mac.json`);
+  };
+  const write = () => save(state);
   write();
   const card = `[data-card="m4mac:${id}"]`;
   check("Mac push appears alongside Pi sessions", await waitFor(() => page.$(card).then(Boolean)));
@@ -50,7 +56,7 @@ export async function checkHosts({ page, home, check, waitFor }) {
   await waitFor(() => page.$eval("#host-actions", (el) => el.textContent.includes("rename: queued")));
   const expiring = JSON.parse(fs.readFileSync(`${root}/m4mac.json`, "utf8"));
   expiring.actions.at(-1).queued_at -= 61;
-  fs.writeFileSync(`${root}/m4mac.json`, JSON.stringify(expiring));
+  save(expiring);
   check("undelivered Mac action expires", await waitFor(() => page.$eval("#host-actions", (el) => el.textContent.includes("rename: expired"))));
 
   await page.click("#fulltext-btn");
