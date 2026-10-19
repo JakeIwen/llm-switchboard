@@ -159,6 +159,29 @@ next to the search box shows this. The drop-down after the filters sorts what's
 shown: kept first (default), recent or oldest activity, name, folder, or size;
 the choice is remembered per browser.
 
+### Transcript search
+
+**Transcripts**, next to the search box, searches inside the Pi's Claude Code
+and Codex conversations together, newest match first. Press Enter to search;
+Esc or clearing the box goes back to the session list. Each result shows the
+match count and the latest matching excerpt; **Open matches** shows each
+match with the records around it and the resume command. Mac sessions match
+on title and folder only, since their text never leaves the Mac.
+
+All words must appear in one record; `"two words"` is a phrase; `-word`
+excludes sessions containing it. Filters: `tool:claude|codex`, `dir:`,
+`by:me` (your prompts), `by:reply` (replies and thinking), `by:tool` (tool
+output), `age:<2d` / `age:>1w`, `after:2026-10-01`, `before:2026-10-18`. A
+query that would take over 5 s is stopped; add a more specific word.
+
+The index is `~/.local/share/llm-switchboard/transcript-search.sqlite3`.
+`serve` updates it every 30 s in a low-priority child process that reads only
+what was appended; the first build reads every transcript and takes a while
+(the line under the search box says so). What counts as conversation text
+follows `~/scripts/claudesearch.sh` and `codexsearch.sh` (tests check the
+index against `llmsearch.sh` when it is installed), except that Codex's
+encrypted reasoning and inline images are left out.
+
 ## Install
 
 ```
@@ -186,6 +209,8 @@ llm-switchboard new --list           # folders a new session can use
 llm-switchboard new ~/dev/obd-things "what it's for"
 llm-switchboard new ~/dev/obd-things "logger" --codex "add a logger"   # a Codex session
 llm-switchboard fork c96934f7 "try another approach" [--folder ~/dev] [--keep]
+llm-switchboard search '"some phrase" by:me tool:codex' [--limit 20] [--session codex:019f]
+llm-switchboard index                # update the transcript index now
 llm-switchboard stop-all             # kill the tmux server
 llm-switchboard host-authorize m4mac < key.pub   # install a Mac's restricted key (run over SSH)
 llm-switchboard host-exchange m4mac  # the restricted key's forced command (JSON on stdin)

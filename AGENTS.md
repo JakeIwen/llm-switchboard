@@ -57,6 +57,13 @@ Sharing the socket would let its supervisor close the real windows.
 | `llm_switchboard/mac_catalog.py`, `mac_registry.py` | Mac side: metadata-only rows (no prompts), macOS live-process check |
 | `llm_switchboard/mac_actions.py`, `mac_action_runner.py` | Mac side: running allowed actions with its own checks; the durable ledger that never repeats one |
 | `llm_switchboard/mac_uploads.py` | Mac side: the one transcript export path (notification, log, 10/hour quota) |
+| `llm_switchboard/search_records.py` | Transcript search vocabulary (`SearchTool`, `SearchRole`, `IndexState`) and API record shapes |
+| `llm_switchboard/search_query.py` | Transcript search syntax; user terms become quoted, bound FTS5 parameters |
+| `llm_switchboard/search_extract.py` | What counts as conversation text in Claude Code and Codex JSONL (mirrors `~/scripts/claudesearch.sh`, `codexsearch.sh`) |
+| `llm_switchboard/search_index.py` | The SQLite FTS5 schema, status, results grouped per session, context around a match |
+| `llm_switchboard/search_indexer.py` | Incremental indexing: offsets, rebuilds on shrink or new inode, removals, the bulk first build |
+| `llm_switchboard/search_process.py` | `serve`'s 30 s low-priority indexer child |
+| `llm_switchboard/search_api.py`, `search_cli.py` | Search routes (plus Mac title/folder matches) and the `search` / `index` commands |
 | `llm_switchboard/listen.py` | Where `serve` listens (localhost + Tailscale, bound once Tailscale is up) and which peers it answers |
 | `llm_switchboard/web.py` | HTTP API and static page; `make_app` wires both session sources |
 | `llm_switchboard/cli.py` | argparse entry point |
@@ -65,9 +72,10 @@ Sharing the socket would let its supervisor close the real windows.
 | `llm_switchboard/static/api.js` | The page's JSON calls to the server (`api`) |
 | `llm_switchboard/static/format.js` | Text formatting for the page: `esc`, `age`, `size`, `plural`, `nowS` |
 | `llm_switchboard/static/feedback.js` | Toasts, dialog bodies listing sessions, the clipboard |
-| `llm_switchboard/static/search.js` | Search syntax (`-neg`, `"phrase"`, `dir:`, `is:`, `age:`) |
+| `llm_switchboard/static/search.js` | The list filter's syntax (`-neg`, `"phrase"`, `dir:`, `is:`, `age:`) |
 | `llm_switchboard/static/sort.js` | List orders (`SORTS`, `sortRows`): kept first, activity, name, folder, size |
 | `llm_switchboard/static/selection.js` | Multi-select: click, cmd/shift ranges, keyboard cursor |
+| `llm_switchboard/static/fulltext.js` | The Transcripts search mode: results, context, index status |
 | `llm_switchboard/static/hosts.js`, `hosts.css` | Other machines' rows: badge, panel, locks, action routes and status |
 | `llm_switchboard/static/dialog.js` | Modal confirm/prompt/form (text, select, checkbox fields; `validate`; Enter confirms, Esc cancels) |
 | `tests/fake_codex.py` | In-memory Codex daemon for the unit and browser tests |
