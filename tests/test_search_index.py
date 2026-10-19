@@ -119,6 +119,24 @@ class SearchIndexTest(unittest.TestCase):
         self.assertEqual(self.search("forbidden-injected-context"), [])
         self.assertEqual(self.search("forbidden-subagent"), [])
 
+    def test_a_fork_keeps_its_own_id_despite_copied_ancestor_lines(self):
+        fork_id = "44444444-4444-4444-4444-444444444444"
+        copied_meta = codex_records()[0]
+        append_jsonl(codex_path(self.root, fork_id), [
+            {"type": "session_meta", "payload": {"id": fork_id, "forked_from_id": CODEX_ID, "cwd": "/work/fork"}},
+            copied_meta,
+            {"type": "response_item", "payload": {"type": "agent_message", "message": "lilac fork reply"}},
+        ])
+        claude_fork = "55555555-5555-5555-5555-555555555555"
+        append_jsonl(claude_path(self.root, claude_fork), [
+            {**claude_records()[0], "message": {"content": "russet copied line"}},
+        ])
+        self.run_index()
+        self.assertEqual([(r["tool"], r["id"]) for r in self.search("lilac")], [("codex", fork_id)])
+        self.assertEqual([r["id"] for r in self.search("ochre")], [CODEX_ID])
+        self.assertEqual([r["id"] for r in self.search("russet")], [claude_fork])
+        self.assertEqual([r["id"] for r in self.search("amber")], [CLAUDE_ID])
+
 
 if __name__ == "__main__":
     unittest.main()

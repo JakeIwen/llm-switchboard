@@ -159,6 +159,9 @@ def _append_lines(conn: sqlite3.Connection, tool: SearchTool, path: Path, offset
                   session_id: str, cwd: str, title: str, title_rank: int) -> tuple[int, int, str, str, str, int]:
     extractor = extract_claude_record if tool == SearchTool.CLAUDE else extract_codex_record
     start_offset = offset
+    # A rollout's first session_meta names it. Forks and subagents copy their
+    # ancestors' meta lines after it, so later ones must not rename the file.
+    named = offset > 0
     with path.open("rb") as source:
         source.seek(offset)
         while True:
@@ -173,7 +176,8 @@ def _append_lines(conn: sqlite3.Connection, tool: SearchTool, path: Path, offset
             except (ValueError, UnicodeDecodeError):
                 continue
             extracted = extractor(record)
-            session_id = extracted.session_id or session_id
+            if extracted.session_id and not named:
+                session_id, named = extracted.session_id, True
             cwd = cwd or extracted.cwd
             if extracted.title and (extracted.title_rank > title_rank or
                                     (extracted.title_rank == title_rank and title_rank > 1)):

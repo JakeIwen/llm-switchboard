@@ -33,9 +33,9 @@ def extract_claude_record(record: dict) -> LineExtraction:
         title, title_rank = str(record.get("aiTitle") or ""), _CLAUDE_TITLE_RANK["ai-title"]
     elif record_type == "summary":
         title, title_rank = str(record.get("summary") or ""), _CLAUDE_TITLE_RANK["summary"]
+    # No session_id: the file name is the session, as in claudesearch.sh.
     return LineExtraction(
         chunks=_combine_roles(chunks),
-        session_id=str(record.get("sessionId") or ""),
         cwd=str(record.get("cwd") or ""),
         title=one_line(title),
         title_rank=title_rank,
