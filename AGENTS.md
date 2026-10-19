@@ -121,5 +121,14 @@ the report instead of leaving it silently stale.
   actions in `ActionKind` can be queued; the Mac re-checks every one. Nothing
   queued may start a process or send a prompt there. A transcript leaves the
   Mac only through `fork-pi` (mac_uploads.py).
+- Transcript search: what counts as conversation text mirrors
+  `~/scripts/claudesearch.sh` and `codexsearch.sh`, so the rules live in two
+  places; `tests/test_search_oracle.py` compares the index with them (and
+  `llmsearch.sh`) when they are installed. Codex's `encrypted_content` and
+  base64 `data:` URLs are left out on purpose. A Codex rollout is named by
+  its first `session_meta` (forks copy their ancestors' after it), a Claude
+  transcript by its file name. Indexing runs only in `serve`'s niced child
+  (`search_process.py`), never in the supervisor or a request thread; to
+  rebuild, stop the service and delete `transcript-search.sqlite3*`.
 - The page polls every 4s; only rewrite DOM through `setHTML` (skips
   unchanged markup) so clicks aren't lost to a redraw mid-click.
