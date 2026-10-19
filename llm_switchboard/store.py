@@ -6,13 +6,9 @@ exclusive lock and replaces the file atomically. The supervisor only reads it.
 
 from dataclasses import dataclass, asdict
 from pathlib import Path
-import contextlib
-import fcntl
-import json
-import os
-import tempfile
 import time
 
+from .json_file import JsonFile
 from .paths import STORE_FILE
 from .session_id import is_session_id
 
@@ -33,12 +29,10 @@ class Entry:
 class Store:
     def __init__(self, path: Path = STORE_FILE):
         self.path = Path(path)
+        self.file = JsonFile(self.path)
 
     def load(self) -> dict[str, Entry]:
-        try:
-            raw = json.loads(self.path.read_text())
-        except FileNotFoundError:
-            return {}
+        raw = self.file.load()
         entries = {}
         for sid, fields in raw.get("sessions", {}).items():
             if not is_session_id(sid):
@@ -64,7 +58,7 @@ class Store:
         return self._update(session_id, enabled=True, cwd=cwd, title=title)
 
     def remove(self, session_id: str) -> None:
-        with self._locked():
+        with self.file.locked():
             entries = self.load()
             if entries.pop(session_id, None) is not None:
                 self._write(entries)
@@ -72,24 +66,13 @@ class Store:
     def _update(self, session_id: str, **changes) -> Entry:
         if not is_session_id(session_id):
             raise ValueError(f"not a session id: {session_id!r}")
-        with self._locked():
+        with self.file.locked():
             entries = self.load()
             current = entries.get(session_id, Entry(session_id=session_id, enabled=False))
             fields = {**asdict(current), **changes, "updated_at": time.time()}
             entries[session_id] = Entry(**fields)
             self._write(entries)
             return entries[session_id]
-
-    @contextlib.contextmanager
-    def _locked(self):
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        lock_path = self.path.with_suffix(".lock")
-        with open(lock_path, "a") as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(lock, fcntl.LOCK_UN)
 
     def _write(self, entries: dict[str, Entry]) -> None:
         payload = {
@@ -99,13 +82,4 @@ class Store:
                 for sid, e in sorted(entries.items())
             },
         }
-        fd, tmp = tempfile.mkstemp(dir=self.path.parent, prefix=".sessions-", suffix=".json")
-        try:
-            with os.fdopen(fd, "w") as f:
-                json.dump(payload, f, indent=2)
-                f.write("\n")
-            os.replace(tmp, self.path)
-        except BaseException:
-            with contextlib.suppress(FileNotFoundError):
-                os.unlink(tmp)
-            raise
+        self.file.write(payload)
