@@ -11,6 +11,7 @@ import unittest
 from unittest.mock import Mock
 
 from llm_switchboard.host_agent import HostAgent
+from llm_switchboard.mac_action_runner import MacActionRunner
 from llm_switchboard.host_authorize import authorize
 from llm_switchboard.host_exchange import exchange
 from llm_switchboard.host_launchd import job
@@ -63,7 +64,7 @@ class HostTests(unittest.TestCase):
                     json.dumps({"version": 1, "rows": [], "uploads": [{}]}).encode()]:
             with self.assertRaises(ValueError):
                 exchange(io.BytesIO(raw), io.StringIO(), "m4mac", self.hosts)
-        for changes in [{"id": "../bad"}, {"id": []}, {"title": "x\nhello"}, {"cwd": "relative"},
+        for changes in [{"id": "../bad"}, {"id": SID + "\n"}, {"id": []}, {"mtime": 10**1000}, {"title": "x\nhello"}, {"cwd": "relative"},
                         {"size": True}, {"mtime": float("nan")}, {"state": "arbitrary"}, {"mutable": 1}]:
             with self.assertRaises(ValueError):
                 self.hosts.exchange("m4mac", {"version": 1, "rows": [{**sample(), **changes}]})
@@ -124,8 +125,11 @@ class HostTests(unittest.TestCase):
         self.assertEqual(mac_live_processes(self.root, kill=kill), [])
         catalog = Mock()
         catalog.rows.return_value = [sample()]
-        run = Mock(return_value=subprocess.CompletedProcess([], 0, '{"version":1,"actions":[{"action":"new"}]}', ""))
-        HostAgent("vanpi", "m4mac", self.root / "key", catalog, run).cycle()
+        run = Mock(return_value=subprocess.CompletedProcess([], 0, '{"version":1,"actions":[]}', ""))
+        executor = Mock()
+        executor.trash_rows.return_value = []
+        runner = MacActionRunner(executor, self.root / "ledger.json")
+        HostAgent("vanpi", "m4mac", self.root / "key", catalog, run, executor, runner).cycle()
         self.assertEqual(run.call_count, 1)
         self.assertEqual(run.call_args.args[0][0], "ssh")
         self.assertIn("ControlMaster=auto", run.call_args.args[0])

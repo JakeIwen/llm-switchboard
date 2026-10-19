@@ -1,4 +1,4 @@
-import { hostBadge, hostPanel, hostSummary, hostLock } from "./hosts.js";
+import { hostBadge, hostPanel, hostSummary, hostLock, hostAction, actionPath, actionSummary, hasRemote, trashHost, restoreLock } from "./hosts.js";
 import { compileQuery } from "./search.js";
 import { DEFAULT_SORT, SORTS, sortRows } from "./sort.js";
 import { Selection } from "./selection.js";
@@ -73,7 +73,7 @@ async function refresh() {
 // Every filter except the folder one, so folder counts follow the search and tab.
 function matches(s, now) {
   // The tool switch is hidden (and ignored) while Codex support is off.
-  if (tool !== "all" && data.codex?.enabled && s.tool !== tool) return false;
+  if (tool !== "all" && (data.codex?.enabled || data.sessions.some((r) => r.tool === "codex")) && s.tool !== tool) return false;
   if (tab === "on" && !s.enabled) return false;
   if (tab === "open" && !(s.enabled || s.open_elsewhere.length)) return false;
   return query.test(s, now);
@@ -238,11 +238,12 @@ function card(s) {
 
 function renderTrash() {
   $("trash").hidden = !trash.length;
+  $("trash-empty").disabled = trash.every((t) => t.host);
   $("trash-sum").textContent = `Recently deleted (${trash.length}) · kept 30 days`;
   setHTML($("trash-list"), trash.map((t) => `<div class="card">
     <div class="main"><div class="title">${esc(t.title)}</div>
-      <div class="meta"><span>${esc(t.project)}</span><span>deleted ${age(t.deleted_at)}</span><code>${esc(t.short_id)}</code>${t.tool === "codex" ? "<span>Codex</span>" : ""}</div></div>
-    <button class="btn" data-restore="${t.id}">Restore</button></div>`).join(""));
+      <div class="meta"><span>${esc(t.project)}</span><span>deleted ${age(t.deleted_at)}</span><code>${esc(t.short_id)}</code>${t.tool === "codex" ? "<span>Codex</span>" : ""}${trashHost(t)}</div></div>
+    <button class="btn" data-restore="${t.id}" ${restoreLock(t)}>Restore</button></div>`).join(""));
 }
 
 function renderBulkbar() {
@@ -269,8 +270,9 @@ function render() {
   const on = data.sessions.filter((s) => s.enabled);
   const rc = on.filter((s) => s.status && s.status.state === "running").length;
   $("summary").textContent = `${data.host} · ${on.length} kept running · ${rc} with Remote Control${data.hosts?.length ? " · " + hostSummary(data.hosts) : ""}`;
-  $("tools").hidden = !data.codex?.enabled;
+  $("tools").hidden = !data.codex?.enabled && !data.sessions.some((s) => s.tool === "codex");
   $("qerr").textContent = [...query.errors, data.codex?.error && `Codex sessions unavailable: ${data.codex.error}`].filter(Boolean).join(" · ");
+  setHTML($("host-actions"), actionSummary(data.host_actions));
   renderDirs(now);
   setHTML($("list"), rows.length ? rows.map(card).join("") : `<div class="empty">No sessions match.</div>`);
   renderTrash();
@@ -282,7 +284,7 @@ function render() {
 
 async function act(id, action, body = {}) {
   try {
-    await api(`/api/sessions/${id}/${action}`, body);
+    await api(actionPath(id, action), body);
     return true;
   } catch (e) {
     toast(`${action[0].toUpperCase() + action.slice(1)} failed: ${e.message}`);
@@ -317,7 +319,7 @@ function splitBlocked(ids) {
 
 async function deleteSessions(ids) {
   const { targets, blocked } = splitBlocked(ids);
-  if (!targets.length) return toast("Open in another claude process; close it there first.");
+  if (!targets.length) return toast("Selected sessions are open, offline or list-only; close them or wait for the Mac.");
   const kept = targets.filter((s) => s.enabled).length;
   const busy = targets.filter((s) => s.status?.busy).length;
   const one = targets.length === 1;
@@ -327,18 +329,18 @@ async function deleteSessions(ids) {
       `${one ? "It goes" : "They go"} to Recently deleted for 30 days.`,
       kept && (one ? "It's kept running and will be stopped." : `${kept} kept running will be stopped.`),
       busy && (one ? "It's working on a turn right now." : `${busy} are working on a turn right now.`),
-      blocked.length && `${plural(blocked.length, "session")} open in another claude process will be skipped.`,
+      blocked.length && `${plural(blocked.length, "session")} open, offline or list-only will be skipped.`,
     ]),
     confirm: "Delete",
     danger: true,
   });
   if (!ok) return;
-  const done = await runBulk("Deleting", targets.map((s) => s.id), (id) => api(`/api/sessions/${id}/delete`, {}));
+  const done = await runBulk("Deleting", targets.map((s) => s.id), (id) => api(actionPath(id, "delete"), {}));
   for (const id of done) { expanded.delete(id); sel.ids.delete(id); }
   render();
   if (done.length) {
     const what = done.length === 1 ? `“${targets.find((s) => s.id === done[0]).title}”` : plural(done.length, "session");
-    toast(`Deleted ${what}.`, () => restoreMany(done));
+    toast(hasRemote(done) ? `Local deletes done; Mac deletes queued. Watch their action status.` : `Deleted ${what}.`, hasRemote(done) ? null : () => restoreMany(done));
   }
 }
 
@@ -457,17 +459,17 @@ async function forkSession(id, cwd) {
 }
 
 async function restoreMany(ids) {
-  const done = await runBulk("Restoring", ids, (id) => api(`/api/sessions/${id}/restore`, {}));
-  if (done.length) toast(`Restored ${plural(done.length, "session")}.`);
+  const done = await runBulk("Restoring", ids, (id) => api(actionPath(id, "restore"), {}));
+  if (done.length) toast(hasRemote(done) ? "Mac restores queued; watch their action status." : `Restored ${plural(done.length, "session")}.`);
 }
 
 async function setKept(ids, on) {
   const skipped = ids.map(byId).filter((s) => s?.host).length;
   ids = ids.filter((id) => !byId(id)?.host);
-  if (skipped) toast(`${skipped} Mac sessions skipped: the Pi cannot keep them running.`);
-  if (!ids.length) return;
+  if (!ids.length) return toast(`${skipped} Mac sessions skipped: the Pi cannot keep them running.`);
   const targets = ids.map(byId).filter((s) => s && !isCodex(s) && s.enabled !== on);
   if (!targets.length) {
+    if (skipped) return toast(`${skipped} Mac sessions skipped; no selected Pi Claude session needs this change.`);
     if (ids.map(byId).every((s) => s && isCodex(s))) return toast("Codex sessions have no keep-running; the Codex daemon holds them all.");
     return toast(on ? "Already kept running." : "None of these are kept running.");
   }
@@ -480,7 +482,7 @@ async function setKept(ids, on) {
     body: `${plural(busy, "session")} working on a turn right now.`, confirm: "Stop", danger: true })) return;
   const done = await runBulk(on ? "Enabling" : "Stopping", targets.map((s) => s.id),
                              (id) => api(`/api/sessions/${id}/${on ? "enable" : "disable"}`, {}));
-  if (done.length) toast(`${on ? "Keeping" : "Stopped keeping"} ${plural(done.length, "session")}${on ? " running" : ""}.`);
+  if (done.length) toast(`${on ? "Keeping" : "Stopped keeping"} ${plural(done.length, "session")}${on ? " running" : ""}.${skipped ? ` Skipped ${skipped} Mac sessions.` : ""}`);
 }
 
 async function moveSessions(ids, cwd) {
@@ -494,7 +496,7 @@ async function moveSessions(ids, cwd) {
     const body = summaryBody(targets, [
       `${one ? "Its transcript moves" : "Their transcripts move"} under the new folder, so claudepd --resume works from there.`,
       targets.some((s) => s.enabled) && "Kept-running sessions restart in the new folder.",
-      blocked.length && `${plural(blocked.length, "session")} open in another claude process will be skipped.`,
+      blocked.length && `${plural(blocked.length, "session")} open, offline or list-only will be skipped.`,
       codex && `${plural(codex, "Codex session")} will be skipped; Codex can't move one (fork it instead).`,
     ]);
     cwd = await promptDialog({
@@ -505,13 +507,14 @@ async function moveSessions(ids, cwd) {
   }
   cwd = cwd.trim();
   if (!cwd) return;
-  const done = await runBulk("Moving", targets.map((s) => s.id), (id) => api(`/api/sessions/${id}/move`, { cwd }));
-  if (done.length) toast(`Moved ${plural(done.length, "session")} to ${cwd}.`);
+  const done = await runBulk("Moving", targets.map((s) => s.id), (id) => api(actionPath(id, "move"), { cwd }));
+  if (done.length) toast(hasRemote(done) ? "Local moves done; Mac moves queued. Watch their action status." : `Moved ${plural(done.length, "session")} to ${cwd}.`);
 }
 
 async function onAction(el) {
   const id = el.dataset.id, s = id && byId(id);
-  if (s?.host && !["select", "expand", "copy"].includes(el.dataset.act)) return toast(hostLock(s));
+  if (s?.host && el.dataset.act.startsWith("host-")) return hostAction(el, s, refresh);
+  if (s?.host && !["select", "expand", "copy", "delete"].includes(el.dataset.act)) return toast("This action is unavailable on the Mac.");
   switch (el.dataset.act) {
     case "select": sel.toggle(id); return render();
     case "expand":
@@ -617,9 +620,9 @@ $("trash-list").addEventListener("click", (ev) => {
 });
 
 $("trash-empty").addEventListener("click", async () => {
-  if (!await confirmDialog({ title: `Permanently delete ${plural(trash.length, "session")}?`,
-                             body: "This can't be undone.", confirm: "Delete forever", danger: true })) return;
-  try { await api("/api/trash/empty", {}); toast("Trash emptied."); }
+  if (!await confirmDialog({ title: `Permanently delete ${plural(trash.filter((t) => !t.host).length, "Pi session")}?`,
+                             body: "This clears only the Pi trash and can't be undone. Mac trash is managed on the Mac.", confirm: "Delete forever", danger: true })) return;
+  try { await api("/api/trash/empty", {}); toast("Pi trash emptied. Mac trash stays on the Mac."); }
   catch (e) { toast(`Couldn't empty the trash: ${e.message}`); }
   refresh();
 });

@@ -7,23 +7,29 @@ import time
 from pathlib import Path
 
 from .host_protocol import MAX_METADATA_BYTES, PUSH_INTERVAL, VERSION, host_name
+from .host_transport import bounded_ssh
 from .mac_catalog import MacCatalog
+from .mac_actions import MacActions
+from .mac_action_runner import MacActionRunner
+from .host_actions_protocol import MAX_EXCHANGE_BYTES
 
 log = logging.getLogger(__name__)
 
 
 class HostAgent:
-    def __init__(self, pi: str, host: str, identity: Path, catalog=None, run=subprocess.run):
+    def __init__(self, pi: str, host: str, identity: Path, catalog=None, run=bounded_ssh, executor=None, runner=None):
         self.host = host_name(host)
         if not pi or pi.startswith("-") or any(c.isspace() for c in pi):
             raise ValueError("pi must be an SSH host alias")
         self.pi, self.identity = pi, Path(identity).expanduser().resolve()
         self.catalog, self.run = catalog or MacCatalog(), run
+        self.executor = executor or MacActions(self.catalog)
+        self.runner = runner or MacActionRunner(self.executor)
         self.control = self.identity.parent / "switchboard-%C"
 
     def exchange(self, payload: dict) -> dict:
         raw = json.dumps(payload)
-        if len(raw.encode()) > MAX_METADATA_BYTES:
+        if len(raw.encode()) > (MAX_EXCHANGE_BYTES if payload.get("uploads") else MAX_METADATA_BYTES):
             raise ValueError("host metadata exceeds the exchange size limit")
         argv = ["ssh", "-T", "-i", str(self.identity), "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes",
                 "-o", "ConnectTimeout=5", "-o", "ServerAliveInterval=5", "-o", "ServerAliveCountMax=2",
@@ -33,13 +39,28 @@ class HostAgent:
         if len(result.stdout.encode()) > MAX_METADATA_BYTES:
             raise ValueError("oversized host reply")
         reply = json.loads(result.stdout)
-        if not isinstance(reply, dict) or reply.get("version") != VERSION or not isinstance(reply.get("actions"), list):
+        if not isinstance(reply, dict) or type(reply.get("version")) is not int or reply["version"] != VERSION or not isinstance(reply.get("actions"), list):
             raise ValueError("invalid host reply")
         return reply
 
+    def payload(self, *, results=None, uploads=None, ready=True) -> dict:
+        rows = self.catalog.rows()
+        return {"version": VERSION, "rows": rows, "trash": self.executor.trash_rows(),
+                "results": self.runner.pending() if results is None else results,
+                "uploads": uploads or [], "ready": ready}
+
     def cycle(self) -> dict:
-        # Phase-one publishers never execute anything the Pi sends back.
-        return self.exchange({"version": VERSION, "rows": self.catalog.rows()})
+        payload = self.payload()
+        start, wall = time.monotonic(), time.time()
+        reply = self.exchange(payload)
+        self.runner.acknowledge(reply.get("acknowledged", []))
+        if reply["actions"]:
+            elapsed = max(time.monotonic() - start, time.time() - wall, 0)
+            results, uploads = self.runner.run(reply["actions"], elapsed)
+            # No new delivery during the follow-up: it only acknowledges this batch.
+            reply = self.exchange(self.payload(results=results, uploads=uploads, ready=False))
+            self.runner.acknowledge(reply.get("acknowledged", []))
+        return reply
 
     def run_forever(self) -> None:
         while True:

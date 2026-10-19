@@ -72,7 +72,7 @@ def folder(value) -> str:
 def number(value, name: str, *, integer=False):
     if value is None:
         return None
-    if type(value) not in ((int,) if integer else (int, float)) or value < 0 or not math.isfinite(value):
+    if type(value) not in ((int,) if integer else (int, float)) or value < 0 or value > 2**53 - 1 or not math.isfinite(value):
         raise ValueError(f"invalid {name}")
     return value
 
@@ -82,7 +82,7 @@ def row(raw) -> HostRow:
         raise ValueError("row must be an object")
     if raw.get("tool") not in ("claude", "codex"):
         raise ValueError("unknown session tool")
-    if raw.get("state") not in set(SessionState):
+    if not isinstance(raw.get("state"), str) or raw["state"] not in set(SessionState):
         raise ValueError("unknown session state")
     if type(raw.get("mutable")) is not bool:
         raise ValueError("mutable must be boolean")

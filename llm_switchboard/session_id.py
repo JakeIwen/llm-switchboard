@@ -6,7 +6,7 @@ _SESSION_ID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[
 
 
 def is_session_id(value: str) -> bool:
-    return bool(_SESSION_ID_RE.match(value))
+    return bool(_SESSION_ID_RE.fullmatch(value))
 
 
 def short_id(session_id: str) -> str:

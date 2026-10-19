@@ -22,6 +22,7 @@ from .codex_trash import CodexTrash
 from .conversation import recent_messages
 from .folders import new_session_folders
 from .hosts import Hosts
+from .host_web import action_route
 from .listen import allowed_peer
 from .live_registry import live_processes
 from .names import Names, claude_names
@@ -70,7 +71,7 @@ class App:
             codex["error"] = self.codex.catalog.error
         remote = self.hosts.snapshot()
         rows += remote["sessions"]
-        return {"hosts": remote["hosts"], "host": socket.gethostname(), "now": time.time(), "sessions": sort_rows(rows),
+        return {"host_actions": remote["actions"], "hosts": remote["hosts"], "host": socket.gethostname(), "now": time.time(), "sessions": sort_rows(rows),
                 "notifications": self.supervisor.notifier.enabled, "codex": codex}
 
     def list_folders(self) -> dict:
@@ -92,6 +93,7 @@ class App:
                  "project": i.project, "deleted_at": i.deleted_at}
                 for i in self.codex.trash_items()
             ]
+        items += self.hosts.snapshot()["trash"]
         return {"trash": sorted(items, key=lambda i: i["deleted_at"], reverse=True)}
 
     def empty_trash(self) -> dict:
@@ -201,6 +203,12 @@ def make_handler(app: App):
             self._send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
 
         def do_POST(self):
+            remote = action_route(self.path)
+            if remote:
+                if not self._is_json():
+                    return self._send_json({"error": "send application/json"}, HTTPStatus.UNSUPPORTED_MEDIA_TYPE)
+                host, sid, action = remote
+                return self._guarded(lambda body: app.hosts.queue(host, sid, action, body), f"{host} {action}")
             if self.path in ("/api/trash/empty", "/api/sessions/new"):
                 if not self._is_json():
                     return self._send_json({"error": "send application/json"}, HTTPStatus.UNSUPPORTED_MEDIA_TYPE)

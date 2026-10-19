@@ -24,11 +24,25 @@ def public_key(raw: bytes) -> tuple[str, str]:
         raise ValueError("unsupported public key or key options supplied")
     try:
         blob = base64.b64decode(parts[1], validate=True)
-        n = struct.unpack(">I", blob[:4])[0]
-        if blob[4:4 + n].decode("ascii") != parts[0] or len(blob) <= n + 8:
+        fields = []
+        while blob:
+            n = struct.unpack(">I", blob[:4])[0]
+            if n > len(blob) - 4:
+                raise ValueError("truncated key")
+            fields.append(blob[4:4 + n])
+            blob = blob[4 + n:]
+        if not fields or fields[0].decode("ascii") != parts[0]:
             raise ValueError("key type does not match its blob")
-        if parts[0] == "ssh-ed25519" and (len(blob) != n + 40 or blob[n + 4:n + 8] != struct.pack(">I", 32)):
-            raise ValueError("invalid Ed25519 key length")
+        if parts[0] == "ssh-ed25519":
+            valid = len(fields) == 2 and len(fields[1]) == 32
+        elif parts[0] == "ssh-rsa":
+            valid = len(fields) == 3 and all(int.from_bytes(f, "big") > 0 for f in fields[1:])
+        else:
+            curve = parts[0].removeprefix("ecdsa-sha2-").encode()
+            point_length = {b"nistp256": 65, b"nistp384": 97, b"nistp521": 133}[curve]
+            valid = len(fields) == 3 and fields[1] == curve and len(fields[2]) == point_length and fields[2][0] == 4
+        if not valid:
+            raise ValueError("invalid public key fields")
     except (ValueError, UnicodeError, struct.error) as e:
         raise ValueError("invalid SSH public key blob") from e
     return parts[0], parts[1]
