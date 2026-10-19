@@ -150,6 +150,12 @@ class MacActionsTests(unittest.TestCase):
         self.executor = MacActions(self.catalog, Trash(self.root / "trash"), CodexTrash(self.root / "codex-trash.json"), self.uploads)
         self.runner = MacActionRunner(self.executor, self.root / "ledger.json")
 
+    def test_a_malformed_trash_record_is_left_out_of_the_push(self):
+        self.executor.execute(queued("delete", {}))
+        other = write_transcript(self.projects, self.cwd, SID2, "No folder")
+        self.executor.trash.put(SID2, other, "No folder", "relative/folder")
+        self.assertEqual([r["id"] for r in self.executor.trash_rows()], [SID])
+
     def test_edits_fork_move_delete_and_restore_without_launch(self):
         self.executor.execute(queued())
         self.assertEqual(self.index.get(SID).title, "Renamed")

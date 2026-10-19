@@ -9,7 +9,7 @@ from .codex_threads import CodexState, codex_names
 from .codex_trash import CodexTrash
 from .conflict import Conflict
 from .folders import existing_folder
-from .host_actions_protocol import ActionKind, action
+from .host_actions_protocol import ActionKind, action, trash_items
 from .host_protocol import SessionState
 from .mac_catalog import MacCatalog
 from .mac_uploads import MacUploads
@@ -101,4 +101,15 @@ class MacActions:
             rows.append(dict(id=item.session_id, tool="codex", title=item.title, cwd=cwd,
                              mtime=None, size=None, state=SessionState.CLOSED, mutable=not bool(self.catalog.codex.error),
                              deleted_at=item.deleted_at))
-        return rows
+        return sendable_trash(rows)
+
+
+def sendable_trash(rows: list[dict]) -> list[dict]:
+    """The rows the Pi will accept: one malformed trash record must not fail every push."""
+    valid = []
+    for candidate in rows:
+        try:
+            valid += trash_items([candidate])
+        except ValueError:
+            continue
+    return valid
