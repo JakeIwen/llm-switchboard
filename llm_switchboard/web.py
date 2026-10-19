@@ -21,6 +21,7 @@ from .codex_threads import CodexCatalog, codex_names, codex_short_id
 from .codex_trash import CodexTrash
 from .conversation import recent_messages
 from .folders import new_session_folders
+from .hosts import Hosts
 from .listen import allowed_peer
 from .live_registry import live_processes
 from .names import Names, claude_names
@@ -46,7 +47,7 @@ _STATIC_TYPES = {"js": "text/javascript; charset=utf-8", "css": "text/css; chars
 
 class App:
     def __init__(self, store: Store, index: TranscriptIndex, supervisor: Supervisor, tmux: Tmux, trash: Trash,
-                 registry=live_processes, actions: SessionActions | None = None, codex: CodexActions | None = None):
+                 registry=live_processes, actions: SessionActions | None = None, codex: CodexActions | None = None, hosts: Hosts | None = None):
         self.store = store
         self.index = index
         self.supervisor = supervisor
@@ -56,6 +57,7 @@ class App:
         self.actions = actions or SessionActions(store, index, supervisor, tmux, trash, registry=registry)
         # Codex sessions, when Codex support is on (codex_actions.py).
         self.codex = codex
+        self.hosts = hosts or Hosts()
 
     def codex_threads(self) -> list:
         return self.codex.catalog.threads() if self.codex else []
@@ -66,7 +68,9 @@ class App:
         if self.codex:
             rows += codex_rows(self.codex.catalog.threads())
             codex["error"] = self.codex.catalog.error
-        return {"host": socket.gethostname(), "now": time.time(), "sessions": sort_rows(rows),
+        remote = self.hosts.snapshot()
+        rows += remote["sessions"]
+        return {"hosts": remote["hosts"], "host": socket.gethostname(), "now": time.time(), "sessions": sort_rows(rows),
                 "notifications": self.supervisor.notifier.enabled, "codex": codex}
 
     def list_folders(self) -> dict:

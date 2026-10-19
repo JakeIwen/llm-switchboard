@@ -1,3 +1,4 @@
+import { hostBadge, hostPanel, hostSummary, hostLock } from "./hosts.js";
 import { compileQuery } from "./search.js";
 import { DEFAULT_SORT, SORTS, sortRows } from "./sort.js";
 import { Selection } from "./selection.js";
@@ -103,7 +104,7 @@ function renderDirs(now) {
 }
 
 function badges(s) {
-  const out = [];
+  const out = s.host ? [hostBadge(s)] : [];
   const st = s.status;
   if (s.enabled && st) {
     const [label, cls] = STATE[st.state] || [st.state, "b-idle"];
@@ -122,8 +123,8 @@ function badges(s) {
 }
 
 const copyButton = (text) => `<button class="btn" data-act="copy" data-text="${esc(text)}">Copy</button>`;
-const elsewhereNote = (s) => s.open_elsewhere.length
-  ? `Open in another claude process (pid ${s.open_elsewhere[0].pid}); close it to rename, move or delete.` : "";
+const elsewhereNote = (s) => hostLock(s) || (s.open_elsewhere.length
+  ? `Open in another claude process (pid ${s.open_elsewhere[0].pid}); close it to rename, move or delete.` : "");
 const lockAttr = (s) => elsewhereNote(s) ? `disabled title="${esc(elsewhereNote(s))}"` : "";
 
 function messagesBlock(id) {
@@ -174,6 +175,7 @@ function codexPanel(s) {
 }
 
 function panel(s) {
+  if (s.host) return hostPanel(s);
   if (isCodex(s)) return codexPanel(s);
   const st = s.status || {};
   const screen = screens.get(s.id);
@@ -212,11 +214,11 @@ function panel(s) {
 function card(s) {
   const st = s.status;
   const detail = s.enabled && st && st.detail && st.state !== "running" ? `<div class="detail">${esc(st.detail)}</div>` : "";
-  const cls = ["card", s.enabled && "enabled", sel.has(s.id) && "selected", sel.cursor === s.id && "cursor"].filter(Boolean).join(" ");
+  const cls = ["card", s.host && !s.host_online && "host-offline", s.enabled && "enabled", sel.has(s.id) && "selected", sel.cursor === s.id && "cursor"].filter(Boolean).join(" ");
   return `<div class="${cls}" data-card="${s.id}">
     <div class="row">
       <button type="button" class="check" data-act="select" data-id="${s.id}" aria-label="Select" aria-pressed="${sel.has(s.id)}"></button>
-      ${isCodex(s) ? `<span class="tool-tag" title="A Codex session">Codex</span>` : `<label class="switch" title="${s.enabled ? "Stop keeping this running" : "Keep this running with Remote Control"}">
+      ${s.host ? `<span class="tool-tag">Mac</span>` : isCodex(s) ? `<span class="tool-tag" title="A Codex session">Codex</span>` : `<label class="switch" title="${s.enabled ? "Stop keeping this running" : "Keep this running with Remote Control"}">
         <input type="checkbox" data-act="toggle" data-id="${s.id}" ${s.enabled ? "checked" : ""} aria-label="Keep running">
         <span></span>
       </label>`}
@@ -266,7 +268,7 @@ function render() {
   sel.prune(order);
   const on = data.sessions.filter((s) => s.enabled);
   const rc = on.filter((s) => s.status && s.status.state === "running").length;
-  $("summary").textContent = `${data.host} · ${on.length} kept running · ${rc} with Remote Control`;
+  $("summary").textContent = `${data.host} · ${on.length} kept running · ${rc} with Remote Control${data.hosts?.length ? " · " + hostSummary(data.hosts) : ""}`;
   $("tools").hidden = !data.codex?.enabled;
   $("qerr").textContent = [...query.errors, data.codex?.error && `Codex sessions unavailable: ${data.codex.error}`].filter(Boolean).join(" · ");
   renderDirs(now);
@@ -310,7 +312,7 @@ async function runBulk(verb, ids, fn) {
 // Sessions open in another claude process can't be renamed, moved or deleted.
 function splitBlocked(ids) {
   const list = ids.map(byId).filter(Boolean);
-  return { targets: list.filter((s) => !s.open_elsewhere.length), blocked: list.filter((s) => s.open_elsewhere.length) };
+  return { targets: list.filter((s) => !elsewhereNote(s)), blocked: list.filter((s) => elsewhereNote(s)) };
 }
 
 async function deleteSessions(ids) {
@@ -416,7 +418,7 @@ function checkWatched() {
 const nameKey = (t) => t.trim().split(/\s+/).join(" ").toLowerCase();
 function nameTaken(cwd, title) {
   const folder = cwd.trim().replace(/(.)\/+$/, "$1");
-  const other = data.sessions.find((s) => (s.cwd === folder || s.project === folder) && nameKey(s.title) === nameKey(title));
+  const other = data.sessions.find((s) => !s.host && (s.cwd === folder || s.project === folder) && nameKey(s.title) === nameKey(title));
   return other ? `${other.project} already has a session named “${other.title}”.` : "";
 }
 
@@ -460,6 +462,10 @@ async function restoreMany(ids) {
 }
 
 async function setKept(ids, on) {
+  const skipped = ids.map(byId).filter((s) => s?.host).length;
+  ids = ids.filter((id) => !byId(id)?.host);
+  if (skipped) toast(`${skipped} Mac sessions skipped: the Pi cannot keep them running.`);
+  if (!ids.length) return;
   const targets = ids.map(byId).filter((s) => s && !isCodex(s) && s.enabled !== on);
   if (!targets.length) {
     if (ids.map(byId).every((s) => s && isCodex(s))) return toast("Codex sessions have no keep-running; the Codex daemon holds them all.");
@@ -505,6 +511,7 @@ async function moveSessions(ids, cwd) {
 
 async function onAction(el) {
   const id = el.dataset.id, s = id && byId(id);
+  if (s?.host && !["select", "expand", "copy"].includes(el.dataset.act)) return toast(hostLock(s));
   switch (el.dataset.act) {
     case "select": sel.toggle(id); return render();
     case "expand":

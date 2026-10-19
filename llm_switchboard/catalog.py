@@ -28,6 +28,7 @@ def codex_rows(threads: list[CodexThread]) -> list[dict]:
     return [{
         "id": t.thread_id,
         "tool": "codex",
+        "host": "",
         "short_id": codex_short_id(t.thread_id),
         "title": t.title,
         "first_prompt": t.first_prompt,
@@ -60,6 +61,7 @@ def _row(sid: str, t: Transcript | None, entry: Entry | None, live: list[LivePro
     row = {
         "id": sid,
         "tool": "claude",
+        "host": "",
         "short_id": short_id(sid),
         "title": t.title if t else (entry.title if pending else "(transcript not found)"),
         "first_prompt": t.first_prompt if t else "",

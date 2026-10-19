@@ -49,7 +49,7 @@ def codex_short_id(thread_id: str) -> str:
     return thread_id[-8:]
 
 
-def thread_from_api(t: dict) -> CodexThread | None:
+def thread_from_api(t: dict, *, metadata_only: bool = False) -> CodexThread | None:
     """One thread from thread/list, or None for ones the picker doesn't show
     (subagent threads and ephemeral ones)."""
     if t.get("parentThreadId") or t.get("ephemeral") or not t.get("id"):
@@ -62,7 +62,7 @@ def thread_from_api(t: dict) -> CodexThread | None:
             mtime, size = st.st_mtime, st.st_size
         except OSError:
             pass
-    preview = one_line(str(t.get("preview") or ""))
+    preview = "" if metadata_only else one_line(str(t.get("preview") or ""))
     return CodexThread(
         thread_id=t["id"],
         cwd=str(t.get("cwd") or ""),
@@ -75,8 +75,9 @@ def thread_from_api(t: dict) -> CodexThread | None:
 
 
 class CodexCatalog:
-    def __init__(self, client: CodexClient, ttl_s: float = _TTL_S, clock=time.monotonic):
+    def __init__(self, client: CodexClient, ttl_s: float = _TTL_S, clock=time.monotonic, *, metadata_only: bool = False):
         self.client = client
+        self.metadata_only = metadata_only
         self.ttl_s = ttl_s
         self.clock = clock
         self.error = ""
@@ -121,7 +122,7 @@ class CodexCatalog:
                 while True:
                     page = conn.call("thread/list", {"limit": _PAGE, "cursor": cursor, "useStateDbOnly": True}) or {}
                     for raw in page.get("data") or []:
-                        thread = thread_from_api(raw)
+                        thread = thread_from_api(raw, metadata_only=self.metadata_only)
                         if thread:
                             found[thread.thread_id] = thread
                     cursor = page.get("nextCursor")

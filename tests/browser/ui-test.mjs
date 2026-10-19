@@ -278,6 +278,7 @@ check("it's in Recently deleted", await waitFor(() => page.$eval("#trash-list", 
 await page.click("#toast-action");
 check("Undo brings the Codex session back", await waitFor(async () => (await api()).some((s) => s.id === doomedCx)));
 await page.keyboard.press("n"); await sleep(150);
+await page.waitForSelector("dialog[open] select[name=tool]");
 await page.select("dialog[open] select[name=tool]", "codex"); await sleep(50);
 check("Codex asks for a first message", !(await page.$eval("dialog[open] input[name=prompt]", (e) => e.closest(".dlg-field").hidden)));
 await page.type("dialog[open] input[name=name]", "Codex new thing");
@@ -306,6 +307,8 @@ if (SHOTS) {
   await sleep(200);
   await page.screenshot({ path: `${SHOTS}/mobile.png`, fullPage: false });
 }
+
+await (await import("./hosts-test.mjs")).checkHosts({ page, home: HOME, check, waitFor });
 
 check("no page errors", errors.length === 0, errors.join(" | "));
 await browser.close();

@@ -35,6 +35,8 @@ STORE_FILE = STATE_DIR / "sessions.json"
 CODEX_TRASH_FILE = STATE_DIR / "codex-trash.json"
 TRASH_DIR = Path(os.environ.get("XDG_DATA_HOME") or HOME / ".local" / "share") / "llm-switchboard" / "trash"
 
+HOSTS_DIR = TRASH_DIR.parent / "hosts"
+
 # A dedicated tmux server keeps these windows apart from any tmux the user runs.
 # A second instance (development, browser tests) must use its own socket, or its
 # supervisor would close the real instance's windows as "not enabled".

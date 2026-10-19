@@ -11,6 +11,7 @@ import time
 import urllib.error
 import urllib.request
 
+from .host_cli import add_parsers
 from .catalog import session_rows, sort_rows
 from .connectivity import Connectivity
 from .live_registry import live_processes
@@ -82,6 +83,7 @@ def _parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("stop-all", help="kill the tmux server and every session in it")
     s.set_defaults(func=_stop_all)
+    add_parsers(sub)
     return p
 
 

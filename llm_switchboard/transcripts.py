@@ -53,7 +53,7 @@ def display_path(path: str) -> str:
     return path
 
 
-def summarize(path: Path) -> Transcript | None:
+def summarize(path: Path, *, metadata_only: bool = False) -> Transcript | None:
     """Read one transcript. Returns None for files with no conversation in them."""
     stat = path.stat()
     cwd = first_prompt = custom_title = ai_title = summary = bridge_id = ""
@@ -65,13 +65,13 @@ def summarize(path: Path) -> Transcript | None:
                 custom_title = str(_loads(line).get("customTitle") or custom_title)
             elif _AI_TITLE in line:
                 ai_title = str(_loads(line).get("aiTitle") or ai_title)
-            elif _SUMMARY in line:
+            elif not metadata_only and _SUMMARY in line:
                 summary = str(_loads(line).get("summary") or summary)
             elif BRIDGE_RECORD in line:
                 bridge_id = str(_loads(line).get("bridgeSessionId") or bridge_id)
-            elif not first_prompt and _USER in line:
+            elif not metadata_only and not first_prompt and _USER in line:
                 first_prompt = prompt_text(_loads(line))
-    title = custom_title or ai_title or summary or first_prompt
+    title = custom_title or ai_title or ("(untitled)" if metadata_only else summary or first_prompt)
     if not title:
         return None
     return Transcript(
@@ -129,8 +129,9 @@ def one_line(text: str) -> str:
 class TranscriptIndex:
     """All transcripts under the projects folder, cached by size and mtime."""
 
-    def __init__(self, projects_dir: Path = PROJECTS_DIR):
+    def __init__(self, projects_dir: Path = PROJECTS_DIR, *, metadata_only: bool = False):
         self.projects_dir = Path(projects_dir)
+        self.metadata_only = metadata_only
         self._cache: dict[Path, tuple[tuple[int, int], Transcript | None]] = {}
         self._lock = threading.Lock()
 
@@ -172,7 +173,7 @@ class TranscriptIndex:
         if cached and cached[0] == key:
             return cached[1]
         try:
-            transcript = summarize(path)
+            transcript = summarize(path, metadata_only=self.metadata_only)
         except OSError:
             transcript = None
         self._cache[path] = (key, transcript)
