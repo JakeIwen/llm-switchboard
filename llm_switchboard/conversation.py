@@ -3,7 +3,7 @@
 from pathlib import Path
 import json
 
-from .transcripts import prompt_text
+from .transcripts import prompt_text, reply_text
 
 # Enough of the file's end to hold several recent turns, even with large tool output.
 _TAIL_BYTES = 768 * 1024
@@ -40,10 +40,7 @@ def _text(record: dict) -> str:
         return prompt_text(record)
     if record.get("type") != "assistant":
         return ""
-    content = (record.get("message") or {}).get("content")
-    if not isinstance(content, list):
-        return ""
-    return "\n".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text").strip()
+    return reply_text(record)
 
 
 def clip_message(text: str) -> str:

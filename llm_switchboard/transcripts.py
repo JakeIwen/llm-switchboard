@@ -121,6 +121,14 @@ def prompt_text(record: dict) -> str:
     return "" if text.startswith("<") else text
 
 
+def reply_text(record: dict) -> str:
+    """The text an assistant record shows, without thinking or tool calls."""
+    content = (record.get("message") or {}).get("content")
+    if not isinstance(content, list):
+        return ""
+    return "\n".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text").strip()
+
+
 def one_line(text: str) -> str:
     text = " ".join(text.split())
     return text if len(text) <= _TITLE_LEN else text[: _TITLE_LEN - 1] + "…"

@@ -43,6 +43,11 @@ class CodexThread:
         return display_path(self.cwd)
 
 
+def is_subagent_meta(meta: dict) -> bool:
+    """Whether a rollout's session_meta payload belongs to a subagent thread."""
+    return isinstance(meta.get("source"), dict) and "subagent" in meta["source"]
+
+
 def codex_short_id(thread_id: str) -> str:
     """Codex ids are time-ordered (UUIDv7), so threads started within a minute
     or so share their first 8 characters; the last 8 are random."""

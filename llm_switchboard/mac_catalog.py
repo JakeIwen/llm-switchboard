@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from .codex_client import CodexClient
-from .codex_threads import CodexCatalog, CodexState
+from .codex_threads import CodexCatalog, CodexState, is_subagent_meta
 from .host_protocol import MAX_ROWS, SessionState, row, session_id
 from .mac_registry import mac_live_processes
 from .paths import CODEX_DIR, CODEX_SOCKET
@@ -58,7 +58,7 @@ def codex_disk_rows(root: Path) -> list[dict]:
             meta = header.get("payload", {})
             if header.get("type") != "session_meta" or not isinstance(meta, dict):
                 continue
-            if isinstance(meta.get("source"), dict) and "subagent" in meta["source"]:
+            if is_subagent_meta(meta):
                 continue
             sid = session_id(meta.get("id"))
             stat = path.stat()
