@@ -7,7 +7,6 @@ import os
 import signal
 import sys
 import threading
-import time
 import urllib.error
 import urllib.request
 
@@ -18,13 +17,13 @@ from .hosts import Hosts
 from .live_registry import live_processes
 from .notify import Notifier, default_script
 from .listen import Listeners
-from .paths import CODEX_DIR, CODEX_SOCKET, DEFAULT_HOSTS, DEFAULT_PORT, PROJECTS_DIR, SEARCH_INDEX_FILE
-from .search_cli import run_index_command, run_search
+from .paths import CODEX_SOCKET, DEFAULT_HOSTS, DEFAULT_PORT
+from .search_cli import add_parsers as add_search_parsers
 from .search_process import SearchIndexScheduler
 from .store import Store
 from .supervisor import Supervisor
 from .tmux import Tmux
-from .transcripts import TranscriptIndex
+from .transcripts import TranscriptIndex, age_label
 from .trash import Trash
 from .web import make_app, make_server
 
@@ -84,16 +83,7 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("--keep", action="store_true", help="keep the copy running with Remote Control")
     s.set_defaults(func=_fork)
 
-    s = sub.add_parser("search", help="search inside Claude Code and Codex transcripts")
-    s.add_argument("query", nargs="+", help="words, phrases and filters to search for")
-    s.add_argument("--session", metavar="TOOL:ID", help="show matching excerpts in one result")
-    s.add_argument("--limit", type=int, default=20, help="maximum sessions to show (default 20)")
-    s.add_argument("--json", action="store_true",
-                   help="one JSON object per result, for scripts; exits 3 until the index is built")
-    s.set_defaults(func=_search)
-
-    s = sub.add_parser("index", help="update the transcript search index now")
-    s.set_defaults(func=_index_transcripts)
+    add_search_parsers(sub)
 
     s = sub.add_parser("stop-all", help="kill the tmux server and every session in it")
     s.set_defaults(func=_stop_all)
@@ -135,7 +125,7 @@ def _list(args) -> int:
         mark = "●" if r["enabled"] else ("○" if r["open_elsewhere"] else " ")
         state = (r["status"] or {}).get("state", "")
         state = state or ("codex" if r.get("tool") == "codex" else "")
-        print(f"{mark} {r['short_id']}  {_age(r['mtime']):>4}  {state:<9}  {r['project'][:28]:<28}  {r['title'][:60]}")
+        print(f"{mark} {r['short_id']}  {age_label(r['mtime']):>4}  {state:<9}  {r['project'][:28]:<28}  {r['title'][:60]}")
     if len(shown) < len(rows):
         print(f"… {len(rows) - len(shown)} more (-n 0 for all)")
     print("● kept running   ○ open in another claude process")
@@ -225,14 +215,6 @@ def _fork(args) -> int:
     return 0
 
 
-def _search(args) -> int:
-    return run_search(args, SEARCH_INDEX_FILE, _age)
-
-
-def _index_transcripts(args) -> int:
-    return run_index_command(SEARCH_INDEX_FILE, PROJECTS_DIR, CODEX_DIR)
-
-
 def _stop_all(args) -> int:
     Tmux().kill_server()
     print("Killed the tmux server. Enabled sessions come back on the next supervisor pass "
@@ -272,13 +254,3 @@ def _post(port: int, path: str, body: dict | None = None) -> dict:
         sys.exit(f"{path}: {json.load(e).get('error', e.reason)}")
     except urllib.error.URLError as e:
         sys.exit(f"service not reachable on port {port}: {e}")
-
-
-def _age(mtime: float | None) -> str:
-    if not mtime:
-        return "-"
-    secs = time.time() - mtime
-    for unit, size in (("d", 86400), ("h", 3600), ("m", 60)):
-        if secs >= size:
-            return f"{int(secs // size)}{unit}"
-    return "now"

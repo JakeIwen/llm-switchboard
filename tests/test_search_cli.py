@@ -23,7 +23,7 @@ class SearchCliTest(unittest.TestCase):
 
     def run_cli(self, *args, index_file=None):
         output, errors = io.StringIO(), io.StringIO()
-        with patch("llm_switchboard.cli.SEARCH_INDEX_FILE", index_file or self.index_file), \
+        with patch("llm_switchboard.search_cli.SEARCH_INDEX_FILE", index_file or self.index_file), \
                 contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
             code = main(list(args))
         self.errors = errors.getvalue()

@@ -4,9 +4,32 @@ from pathlib import Path
 import json
 import sys
 
+from .paths import CODEX_DIR, PROJECTS_DIR, SEARCH_INDEX_FILE
 from .search_api import SearchHandlers
 from .search_indexer import run_index
 from .search_query import QueryError
+from .transcripts import age_label
+
+
+def add_parsers(sub) -> None:
+    s = sub.add_parser("search", help="search inside Claude Code and Codex transcripts")
+    s.add_argument("query", nargs="+", help="words, phrases and filters to search for")
+    s.add_argument("--session", metavar="TOOL:ID", help="show matching excerpts in one result")
+    s.add_argument("--limit", type=int, default=20, help="maximum sessions to show (default 20)")
+    s.add_argument("--json", action="store_true",
+                   help="one JSON object per result, for scripts; exits 3 until the index is built")
+    s.set_defaults(func=_search)
+
+    s = sub.add_parser("index", help="update the transcript search index now")
+    s.set_defaults(func=_index)
+
+
+def _search(args) -> int:
+    return run_search(args, SEARCH_INDEX_FILE, age_label)
+
+
+def _index(args) -> int:
+    return run_index_command(SEARCH_INDEX_FILE, PROJECTS_DIR, CODEX_DIR)
 
 
 def run_search(args, index_file: Path, format_age) -> int:

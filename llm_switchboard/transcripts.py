@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import json
 import threading
+import time
 
 from .paths import PROJECTS_DIR, HOME
 from .session_id import is_session_id
@@ -127,6 +128,17 @@ def reply_text(record: dict) -> str:
     if not isinstance(content, list):
         return ""
     return "\n".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text").strip()
+
+
+def age_label(mtime: float | None) -> str:
+    """How long ago, in the largest whole unit: 3d, 5h, 12m or now."""
+    if not mtime:
+        return "-"
+    secs = time.time() - mtime
+    for unit, size in (("d", 86400), ("h", 3600), ("m", 60)):
+        if secs >= size:
+            return f"{int(secs // size)}{unit}"
+    return "now"
 
 
 def one_line(text: str) -> str:
