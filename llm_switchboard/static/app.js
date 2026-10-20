@@ -1,5 +1,6 @@
 import { hostBadge, hostPanel, hostSummary, hostLock, hostAction, actionPath, actionSummary, hasRemote, trashHost, restoreLock } from "./hosts.js";
 import { compileQuery } from "./search.js";
+import { hasChip } from "./dirs.js";
 import { initFullText } from "./fulltext.js";
 import { DEFAULT_SORT, SORTS, sortRows } from "./sort.js";
 import { Selection } from "./selection.js";
@@ -91,7 +92,7 @@ function setDir(d) {
 // ---- rendering -------------------------------------------------------------
 
 function renderDirs(now) {
-  // Folders ordered by their most recent session.
+  // Folders ordered by their most recent session; deep or outside-home ones get no chip (dirs.js).
   const dirs = new Map();
   for (const s of data.sessions) {
     const d = dirs.get(dirOf(s)) || { latest: 0, n: 0 };
@@ -102,7 +103,8 @@ function renderDirs(now) {
   if (dir !== null && !dirs.has(dir)) dirs.set(dir, { latest: 0, n: 0 });
   const total = data.sessions.filter((s) => matches(s, now)).length;
   const chip = (d, label, n) => `<button type="button" class="chip ${dir === d ? "on" : ""} ${n ? "" : "zero"}" data-dir="${esc(d ?? "")}" ${d === null ? "data-all" : ""}>${esc(label)}<span class="n">${n}</span></button>`;
-  const sorted = [...dirs].sort((a, b) => b[1].latest - a[1].latest);
+  // The selected folder keeps its chip even when it has none, so it can be turned off.
+  const sorted = [...dirs].filter(([d]) => hasChip(d) || d === dir).sort((a, b) => b[1].latest - a[1].latest);
   setHTML($("dirs"), chip(null, "All folders", total) + sorted.map(([d, v]) => chip(d, d, v.n)).join(""));
 }
 
