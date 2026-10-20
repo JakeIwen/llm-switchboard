@@ -8,8 +8,6 @@ import sys
 
 from .host_protocol import host_name
 
-COMMANDS = {"host-exchange", "host-authorize", "host-agent", "host-install"}
-
 
 def add_parsers(sub) -> None:
     for name in ("host-exchange", "host-authorize"):

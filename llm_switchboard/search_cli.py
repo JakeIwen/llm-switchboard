@@ -1,6 +1,7 @@
 """Terminal output for transcript search and the manual index command."""
 
 from pathlib import Path
+import argparse
 import json
 import sys
 
@@ -9,6 +10,14 @@ from .search_api import SearchHandlers
 from .search_indexer import run_index
 from .search_query import QueryError
 from .transcripts import age_label
+
+
+def main(argv=None) -> int:
+    """`search` and `index` without cli.py's imports (see __main__.py)."""
+    parser = argparse.ArgumentParser(prog="llm-switchboard")
+    add_parsers(parser.add_subparsers(required=True))
+    args = parser.parse_args(argv)
+    return args.func(args)
 
 
 def add_parsers(sub) -> None:

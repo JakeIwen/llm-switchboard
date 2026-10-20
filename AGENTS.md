@@ -63,7 +63,7 @@ Sharing the socket would let its supervisor close the real windows.
 | `llm_switchboard/search_index.py` | The SQLite FTS5 schema, status, results grouped per session, context around a match |
 | `llm_switchboard/search_indexer.py` | Incremental indexing: offsets, rebuilds on shrink or new inode, removals, the bulk first build |
 | `llm_switchboard/search_process.py` | `serve`'s 30 s low-priority indexer child |
-| `llm_switchboard/search_api.py`, `search_cli.py` | Search routes (plus Mac title/folder matches) and the `search` / `index` commands |
+| `llm_switchboard/search_api.py`, `search_cli.py` | Search routes (plus Mac title/folder matches) and the `search` / `index` commands (light imports; `__main__` dispatches them before cli.py) |
 | `llm_switchboard/listen.py` | Where `serve` listens (localhost + Tailscale, bound once Tailscale is up) and which peers it answers |
 | `llm_switchboard/web.py` | HTTP API and static page; `make_app` wires both session sources |
 | `llm_switchboard/cli.py` | argparse entry point |

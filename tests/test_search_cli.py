@@ -1,6 +1,9 @@
 import contextlib
 import io
 import json
+import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -59,6 +62,20 @@ class SearchCliTest(unittest.TestCase):
         code, output = self.run_cli("search", "--json", "amber", index_file=self.root / "absent.sqlite3")
         self.assertEqual((code, output), (3, ""))
         self.assertIn("isn't built yet", self.errors)
+
+    def test_the_command_line_search_does_not_import_the_web_app(self):
+        # llmsearch.sh and serve's 30 s indexer start this command each time.
+        with tempfile.TemporaryDirectory() as home:
+            env = {k: v for k, v in os.environ.items() if not k.startswith("XDG_")}
+            result = subprocess.run(
+                [sys.executable, "-X", "importtime", "-m", "llm_switchboard", "search", "--json", "amber"],
+                cwd=Path(__file__).resolve().parents[1], env={**env, "HOME": home},
+                capture_output=True, text=True, timeout=60)
+        self.assertEqual(result.returncode, 3, result.stderr[-500:])
+        imported = {line.rsplit("|", 1)[-1].strip() for line in result.stderr.splitlines()
+                    if line.startswith("import time:")}
+        self.assertIn("llm_switchboard.search_cli", imported)
+        self.assertFalse({"llm_switchboard.cli", "llm_switchboard.web"} & imported)
 
 
 if __name__ == "__main__":
