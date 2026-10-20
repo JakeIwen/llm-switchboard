@@ -180,9 +180,10 @@ The index is `~/.local/share/llm-switchboard/transcript-search.sqlite3`.
 what was appended; the first build reads every transcript and takes a while
 (the line under the search box says so). Thinking, tool calls, tool output,
 injected instructions and Codex subagents are left out: they are nearly all
-of the bytes. To search those, use `~/scripts/llmsearch.sh`, which greps
-everything; for prompts and replies, tests check that the index finds the
-same sessions it does.
+of the bytes. `llmsearch` (in Jacob's scripts repo) searches this index
+through `search --json`, and `llmsearch --grep` greps everything, those
+included; for prompts and replies, tests check that both find the same
+sessions.
 
 ## Install
 
@@ -211,7 +212,7 @@ llm-switchboard new --list           # folders a new session can use
 llm-switchboard new ~/dev/obd-things "what it's for"
 llm-switchboard new ~/dev/obd-things "logger" --codex "add a logger"   # a Codex session
 llm-switchboard fork c96934f7 "try another approach" [--folder ~/dev] [--keep]
-llm-switchboard search '"some phrase" by:me tool:codex' [--limit 20] [--session codex:019f]
+llm-switchboard search '"some phrase" by:me tool:codex' [--limit 20] [--session codex:019f] [--json]
 llm-switchboard index                # update the transcript index now
 llm-switchboard stop-all             # kill the tmux server
 llm-switchboard host-authorize m4mac < key.pub   # install a Mac's restricted key (run over SSH)

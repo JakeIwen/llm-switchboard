@@ -88,6 +88,8 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("query", nargs="+", help="words, phrases and filters to search for")
     s.add_argument("--session", metavar="TOOL:ID", help="show matching excerpts in one result")
     s.add_argument("--limit", type=int, default=20, help="maximum sessions to show (default 20)")
+    s.add_argument("--json", action="store_true",
+                   help="one JSON object per result, for scripts; exits 3 until the index is built")
     s.set_defaults(func=_search)
 
     s = sub.add_parser("index", help="update the transcript search index now")

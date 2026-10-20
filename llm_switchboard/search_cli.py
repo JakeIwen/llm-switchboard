@@ -1,6 +1,7 @@
 """Terminal output for transcript search and the manual index command."""
 
 from pathlib import Path
+import json
 import sys
 
 from .search_api import SearchHandlers
@@ -16,21 +17,33 @@ def run_search(args, index_file: Path, format_age) -> int:
     except QueryError as exc:
         print(f"search: {exc}", file=sys.stderr)
         return 2
+    status = payload["index"]
+    detail = f": {status['error']}" if status["error"] else ""
+    if status["last_updated"] is None:
+        # Scripts such as llmsearch.sh fall back to grep on this exit code.
+        print(f"search: the transcript index isn't built yet ({status['state']}{detail}); "
+              "`llm-switchboard index` builds it", file=sys.stderr)
+        return 3
     results = payload["results"]
     if args.session:
         result = _search_result(results, args.session)
         if result is None:
             print(f"search: no unique result matches {args.session!r}", file=sys.stderr)
             return 1
-        detail = handlers.detail(result["tool"], result["id"], raw)
-        if detail is None:
+        found = handlers.detail(result["tool"], result["id"], raw)
+        if found is None:
             print("search: matching excerpts are unavailable", file=sys.stderr)
             return 1
-        _print_search_detail(detail["detail"])
+        if args.json:
+            print(json.dumps(found["detail"]))
+        else:
+            _print_search_detail(found["detail"])
+        return 0
+    if args.json:
+        for result in results:
+            print(json.dumps(result))
         return 0
     if not results:
-        status = payload["index"]
-        detail = f": {status['error']}" if status["error"] else ""
         note = f" ({status['state']}{detail})" if status["state"] != "ready" else ""
         print("No transcript matches." + note)
         return 0

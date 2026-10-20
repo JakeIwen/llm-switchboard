@@ -129,9 +129,12 @@ the report instead of leaving it silently stale.
   are tracked with an empty session id and never indexed. For words in
   prompts and replies, `tests/test_search_oracle.py` checks that the index
   finds the sessions `~/scripts/claudesearch.sh`, `codexsearch.sh` and
-  `llmsearch.sh` do, when they are installed. A Codex rollout is named by
-  its first `session_meta` (forks copy their ancestors' after it), a Claude
-  transcript by its file name. Indexing runs only in `serve`'s niced child
+  `llmsearch.sh` do, when they are installed (it sets `CLAUDESEARCH_ROOT`
+  and `CODEXSEARCH_ROOT`, which make `llmsearch` grep instead of asking the
+  index). `llmsearch` reads `search --json` lines and falls back to grep on
+  its exit 3 (no index built yet), so keep both stable. A Codex rollout is
+  named by its first `session_meta` (forks copy their ancestors' after it),
+  a Claude transcript by its file name. Indexing runs only in `serve`'s niced child
   (`search_process.py`), never in the supervisor or a request thread; after
   changing what is extracted, rebuild: stop the service and delete
   `transcript-search.sqlite3*`.
