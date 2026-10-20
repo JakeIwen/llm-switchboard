@@ -22,6 +22,9 @@ SCRIPTS_AVAILABLE = all(path.is_file() for path in (CLAUDE_SCRIPT, CODEX_SCRIPT,
 @unittest.skipUnless(SCRIPTS_AVAILABLE,
                      f"search oracle scripts are absent under {SCRIPTS}")
 class SearchOracleTest(unittest.TestCase):
+    """For words in prompts and replies, the index finds the sessions the
+    scripts do. The scripts also search tool output and thinking, which the
+    index leaves out (test_search_index covers that), so no query here uses them."""
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
@@ -31,7 +34,8 @@ class SearchOracleTest(unittest.TestCase):
         append_jsonl(claude_path(self.root),
                      [{"type": "user", "message": {"content": "shared oracle phrase"}}])
         append_jsonl(codex_path(self.root),
-                     [{"type": "event_msg", "payload": {"message": "shared oracle phrase"}}])
+                     [{"type": "event_msg", "payload": {"type": "agent_message",
+                                                        "message": "shared oracle phrase"}}])
         append_jsonl(self.root / "codex" / "session_index.jsonl",
                      [{"id": CODEX_ID, "thread_name": "Oracle Codex"}])
         append_jsonl(claude_path(self.root).with_suffix("") / "subagents" / "agent.jsonl",

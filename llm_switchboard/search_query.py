@@ -148,10 +148,10 @@ def _append_tool_filter(filters: list[ValueFilter], value: str, negative: bool) 
 
 
 def _append_role_filter(filters: list[ValueFilter], value: str, negative: bool) -> None:
-    allowed = {SearchRole.ME.value, SearchRole.REPLY.value, SearchRole.TOOL.value}
+    allowed = {role.value for role in SearchRole}
     choices = [part.lower() for part in re.split(r"[|,]", value) if part]
     if not choices or any(choice not in allowed for choice in choices):
-        raise QueryError("by: takes me, reply, or tool")
+        raise QueryError("by: takes me or reply (tool output isn't indexed)")
     filters.extend(ValueFilter("by", choice, negative) for choice in choices)
 
 

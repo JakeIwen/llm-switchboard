@@ -44,15 +44,44 @@ def claude_records(sid=CLAUDE_ID, cwd="/work/alpha"):
 
 
 def codex_records(sid=CODEX_ID, cwd="/work/codex"):
+    """An older-format rollout: each message is both a response item and an event."""
     return [
         {"timestamp": "2026-10-11T10:00:00Z", "type": "session_meta",
-         "payload": {"session_id": sid, "cwd": cwd}},
-        {"timestamp": "2026-10-11T10:01:00Z", "type": "response_item", "metadata": {},
+         "payload": {"session_id": sid, "id": sid, "cwd": cwd, "source": "cli"}},
+        {"timestamp": "2026-10-11T10:00:30Z", "type": "response_item",
+         "payload": {"type": "message", "role": "user",
+                     "content": [{"type": "input_text", "text": "# AGENTS.md beige injected instructions"}]}},
+        {"timestamp": "2026-10-11T10:01:00Z", "type": "response_item",
          "payload": {"type": "message", "role": "user",
                      "content": [{"type": "input_text", "text": "ochre codex prompt"}]}},
+        {"timestamp": "2026-10-11T10:01:00Z", "type": "event_msg",
+         "payload": {"type": "user_message", "message": "ochre codex prompt", "images": []}},
+        {"timestamp": "2026-10-11T10:01:30Z", "type": "response_item",
+         "payload": {"type": "reasoning", "summary": [{"type": "summary_text", "text": "khaki codex reasoning"}],
+                     "encrypted_content": "gAAAAB secretblobword"}},
         {"timestamp": "2026-10-11T10:02:00Z", "type": "response_item",
          "payload": {"type": "message", "role": "assistant",
                      "content": [{"type": "output_text", "text": "teal codex reply"}]}},
+        {"timestamp": "2026-10-11T10:02:00Z", "type": "event_msg",
+         "payload": {"type": "agent_message", "message": "teal codex reply"}},
+        {"timestamp": "2026-10-11T10:02:30Z", "type": "response_item",
+         "payload": {"type": "function_call", "name": "shell", "arguments": "{\"cmd\": \"sepia tool input\"}"}},
         {"timestamp": "2026-10-11T10:03:00Z", "type": "response_item",
-         "payload": {"type": "custom_tool_call_output", "output": "umber codex tool output"}},
+         "payload": {"type": "custom_tool_call_output",
+                     "output": "umber codex tool output that prints \"agent_message\""}},
+    ]
+
+
+def codex_item_records(sid, cwd="/work/codex-new"):
+    """A newer-format rollout: messages arrive as item_completed events."""
+    def item(kind, text):
+        return {"timestamp": "2026-10-12T10:00:00Z", "type": "event_msg",
+                "payload": {"type": "item_completed", "thread_id": sid,
+                            "item": {"type": kind, "content": [{"type": "text", "text": text}]}}}
+    return [
+        {"timestamp": "2026-10-12T10:00:00Z", "type": "session_meta",
+         "payload": {"session_id": sid, "id": sid, "cwd": cwd, "source": "cli"}},
+        item("UserMessage", "mauve item prompt"),
+        item("AgentMessage", "cerise item reply"),
+        item("CommandExecution", "plum command output"),
     ]

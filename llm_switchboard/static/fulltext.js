@@ -1,5 +1,5 @@
 // Mirrors SearchRole and IndexState in search_records.py.
-const ROLE_NAME = { me: "You", reply: "Reply", tool: "Tool", other: "Other" };
+const ROLE_NAME = { me: "You", reply: "Reply" };
 const SEARCH_TOOL = { claude: "claude", codex: "codex" };
 const INDEX_STATE = { missing: "missing", building: "building", ready: "ready", error: "error" };
 const $ = (id) => document.getElementById(id);

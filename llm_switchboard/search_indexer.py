@@ -8,7 +8,8 @@ import re
 import sqlite3
 import time
 
-from .search_extract import codex_names, extract_claude_record, extract_codex_record
+from .search_extract import (codex_line_may_matter, codex_names, extract_claude_record,
+                             extract_codex_record)
 from .search_index import drop_fts_triggers, open_writer, rebuild_fts, write_status
 from .search_records import IndexState, SearchTool
 from .session_id import is_session_id
@@ -158,6 +159,7 @@ def _index_file(conn: sqlite3.Connection, tool: SearchTool, path: Path) -> tuple
 def _append_lines(conn: sqlite3.Connection, tool: SearchTool, path: Path, offset: int, ordinal: int,
                   session_id: str, cwd: str, title: str, title_rank: int) -> tuple[int, int, str, str, str, int]:
     extractor = extract_claude_record if tool == SearchTool.CLAUDE else extract_codex_record
+    may_matter = codex_line_may_matter if tool == SearchTool.CODEX else None
     start_offset = offset
     # A rollout's first session_meta names it. Forks and subagents copy their
     # ancestors' meta lines after it, so later ones must not rename the file.
@@ -171,13 +173,20 @@ def _append_lines(conn: sqlite3.Connection, tool: SearchTool, path: Path, offset
                 source.seek(line_start)
                 break
             offset = source.tell()
+            if may_matter and not may_matter(line):
+                continue
             try:
                 record = json.loads(line)
             except (ValueError, UnicodeDecodeError):
                 continue
             extracted = extractor(record)
             if extracted.session_id and not named:
-                session_id, named = extracted.session_id, True
+                # A subagent's prompts come from its parent agent, not from
+                # you. With no session id the file is tracked but never
+                # indexed or listed (_refresh_sessions skips it).
+                session_id, named = ("" if extracted.subagent else extracted.session_id), True
+            if not session_id:
+                continue
             cwd = cwd or extracted.cwd
             if extracted.title and (extracted.title_rank > title_rank or
                                     (extracted.title_rank == title_rank and title_rank > 1)):

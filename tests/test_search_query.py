@@ -24,7 +24,7 @@ class SearchQueryTest(unittest.TestCase):
                     self.assertIn('""', literal)
 
     def test_bad_filters_and_unusable_queries_are_rejected(self):
-        for query in ("", "-only", "tool:gpt alpha", "by:system alpha", "age:yesterday alpha"):
+        for query in ("", "-only", "tool:gpt alpha", "by:system alpha", "by:tool alpha", "age:yesterday alpha"):
             with self.subTest(query=query), self.assertRaises(QueryError):
                 parse_query(query)
 

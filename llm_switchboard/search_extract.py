@@ -1,32 +1,43 @@
-"""Extract searchable conversation text from Claude Code and Codex JSONL records."""
+"""Extract your prompts and the visible replies from Claude Code and Codex JSONL.
+
+Thinking, tool calls, tool results and injected context are left out: they
+are most of the bytes, and nobody searches them for a conversation.
+"""
 
 from datetime import datetime
 from pathlib import Path
-from typing import Iterator
 
+from .codex_threads import is_subagent_meta
 from .search_records import ExtractedText, LineExtraction, SearchRole
-from .transcripts import one_line
+from .transcripts import one_line, prompt_text, reply_text
 
 _CLAUDE_TITLE_RANK = {"first": 1, "summary": 2, "ai-title": 3, "custom-title": 4}
 
+# Every Codex line extract_codex_record uses holds one of these, as JSON
+# strings; checking the raw bytes first spares parsing the large tool output.
+_CODEX_MARKERS = (b'"session_meta"', b'"user_message"', b'"agent_message"',
+                  b'"UserMessage"', b'"AgentMessage"')
+_CODEX_ITEM_ROLES = {"UserMessage": SearchRole.ME, "AgentMessage": SearchRole.REPLY}
+
 
 def extract_claude_record(record: dict) -> LineExtraction:
-    """Mirror claudesearch.sh's conversation-text rules for one event."""
     if not isinstance(record, dict):
         return LineExtraction()
     record_type = record.get("type")
-    chunks: list[ExtractedText] = []
+    chunks: tuple[ExtractedText, ...] = ()
     title = ""
     title_rank = 0
-    if record_type == "user" and not record.get("isMeta"):
-        chunks = list(_claude_content((record.get("message") or {}).get("content"), SearchRole.ME))
-        first = _first_prompt(chunks)
-        if first:
-            title, title_rank = first, _CLAUDE_TITLE_RANK["first"]
+    if record_type == "user":
+        prompt = prompt_text(record)
+        if prompt:
+            chunks = (ExtractedText(SearchRole.ME, prompt),)
+            title, title_rank = prompt, _CLAUDE_TITLE_RANK["first"]
     elif record_type == "assistant":
-        chunks = list(_claude_content((record.get("message") or {}).get("content"), SearchRole.REPLY))
+        reply = reply_text(record)
+        chunks = (ExtractedText(SearchRole.REPLY, reply),) if reply else ()
     elif record_type == "attachment" and (record.get("attachment") or {}).get("type") == "queued_command":
-        chunks = list(_claude_content(record["attachment"].get("prompt"), SearchRole.ME))
+        prompt = _text_blocks(record["attachment"].get("prompt"))
+        chunks = (ExtractedText(SearchRole.ME, prompt),) if prompt else ()
     elif record_type == "custom-title":
         title, title_rank = str(record.get("customTitle") or ""), _CLAUDE_TITLE_RANK["custom-title"]
     elif record_type == "ai-title":
@@ -35,7 +46,7 @@ def extract_claude_record(record: dict) -> LineExtraction:
         title, title_rank = str(record.get("summary") or ""), _CLAUDE_TITLE_RANK["summary"]
     # No session_id: the file name is the session, as in claudesearch.sh.
     return LineExtraction(
-        chunks=_combine_roles(chunks),
+        chunks=chunks,
         cwd=str(record.get("cwd") or ""),
         title=one_line(title),
         title_rank=title_rank,
@@ -43,21 +54,28 @@ def extract_claude_record(record: dict) -> LineExtraction:
     )
 
 
+def codex_line_may_matter(line: bytes) -> bool:
+    return any(marker in line for marker in _CODEX_MARKERS)
+
+
 def extract_codex_record(record: dict) -> LineExtraction:
-    """Index every string, as codexsearch.sh does, while tagging its likely author."""
+    """Prompts and replies come from Codex's event stream. Its response items
+    repeat them among reasoning, tool calls and injected instructions, so
+    reading both would index every message twice."""
     if not isinstance(record, dict):
         return LineExtraction()
     payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
-    role = _codex_role(record)
-    text = "\n".join(value for value in _all_strings(record) if value)
-    session_id = cwd = ""
     if record.get("type") == "session_meta":
-        session_id = str(payload.get("session_id") or payload.get("id") or "")
-        cwd = str(payload.get("cwd") or "")
+        return LineExtraction(
+            session_id=str(payload.get("session_id") or payload.get("id") or ""),
+            cwd=str(payload.get("cwd") or ""),
+            subagent=is_subagent_meta(payload),
+        )
+    if record.get("type") != "event_msg":
+        return LineExtraction()
+    message = _codex_message(payload)
     return LineExtraction(
-        chunks=(ExtractedText(role, text),) if text else (),
-        session_id=session_id,
-        cwd=cwd,
+        chunks=(message,) if message and message.text else (),
         timestamp=parse_timestamp(record.get("timestamp")),
     )
 
@@ -93,84 +111,24 @@ def parse_timestamp(value) -> float | None:
         return None
 
 
-def _claude_content(value, default_role: SearchRole) -> Iterator[ExtractedText]:
+def _codex_message(payload: dict) -> ExtractedText | None:
+    # Older rollouts write user_message/agent_message events, newer ones
+    # item_completed; a rollout never has both.
+    kind = payload.get("type")
+    if kind == "user_message":
+        return ExtractedText(SearchRole.ME, str(payload.get("message") or "").strip())
+    if kind == "agent_message":
+        return ExtractedText(SearchRole.REPLY, str(payload.get("message") or "").strip())
+    item = payload.get("item") if kind == "item_completed" else None
+    role = _CODEX_ITEM_ROLES.get(item.get("type")) if isinstance(item, dict) else None
+    return ExtractedText(role, _text_blocks(item.get("content"))) if role else None
+
+
+def _text_blocks(value) -> str:
+    """A plain string, or the text of a list of {type, text} blocks."""
     if isinstance(value, str):
-        if value:
-            yield ExtractedText(default_role, value)
-        return
-    if isinstance(value, list):
-        for item in value:
-            yield from _claude_content(item, default_role)
-        return
-    if not isinstance(value, dict):
-        return
-    kind = value.get("type")
-    if kind == "text" and isinstance(value.get("text"), str):
-        yield ExtractedText(default_role, value["text"])
-    elif kind == "thinking" and isinstance(value.get("thinking"), str):
-        yield ExtractedText(SearchRole.REPLY, value["thinking"])
-    elif kind == "tool_use":
-        for text in _all_strings(value.get("input")):
-            yield ExtractedText(SearchRole.REPLY, text)
-    elif kind == "tool_result":
-        yield from _claude_content(value.get("content"), SearchRole.TOOL)
-
-
-def _all_strings(value) -> Iterator[str]:
-    if isinstance(value, str):
-        if not _is_inline_data(value):
-            yield value
-    elif isinstance(value, list):
-        for item in value:
-            yield from _all_strings(item)
-    elif isinstance(value, dict):
-        for key, item in value.items():
-            # Codex's encrypted reasoning is opaque base64; it reads as nothing
-            # and floods the index with one-off tokens.
-            if key != "encrypted_content":
-                yield from _all_strings(item)
-
-
-def _is_inline_data(text: str) -> bool:
-    """A data: URL carrying base64 (pasted screenshots in Codex tool output)."""
-    return text.startswith("data:") and ";base64," in text[:100]
-
-
-def _codex_role(record: dict) -> SearchRole:
-    record_type = record.get("type")
-    payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
-    payload_type = str(payload.get("type") or "")
-    if record_type == "response_item" and payload_type == "message":
-        role = payload.get("role")
-        # Codex repeats injected project instructions as role=user, but actual
-        # prompts carry response metadata (and also appear as UserMessage events).
-        if role == "user" and record.get("metadata") is not None:
-            return SearchRole.ME
-        if role == "assistant":
-            return SearchRole.REPLY
-    if payload_type in ("reasoning", "agent_message"):
-        return SearchRole.REPLY
-    if payload_type in ("custom_tool_call", "custom_tool_call_output", "function_call", "function_call_output"):
-        return SearchRole.TOOL
-    item = payload.get("item") if isinstance(payload.get("item"), dict) else {}
-    item_type = str(item.get("type") or "").lower()
-    if item_type == "usermessage":
-        return SearchRole.ME
-    if item_type in ("agentmessage", "reasoning"):
-        return SearchRole.REPLY
-    if item_type and item_type not in ("plan",):
-        return SearchRole.TOOL
-    return SearchRole.OTHER
-
-
-def _combine_roles(chunks: list[ExtractedText]) -> tuple[ExtractedText, ...]:
-    grouped: dict[SearchRole, list[str]] = {}
-    for chunk in chunks:
-        if chunk.text:
-            grouped.setdefault(chunk.role, []).append(chunk.text)
-    return tuple(ExtractedText(role, "\n".join(texts)) for role, texts in grouped.items())
-
-
-def _first_prompt(chunks: list[ExtractedText]) -> str:
-    text = " ".join(chunk.text for chunk in chunks if chunk.role == SearchRole.ME).strip()
-    return "" if text.startswith("<") else text
+        return value.strip()
+    if not isinstance(value, list):
+        return ""
+    return "\n".join(str(b.get("text") or "") for b in value
+                     if isinstance(b, dict) and isinstance(b.get("text"), str)).strip()

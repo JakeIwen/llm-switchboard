@@ -13,8 +13,6 @@ class SearchTool(str, Enum):
 class SearchRole(str, Enum):
     ME = "me"
     REPLY = "reply"
-    TOOL = "tool"
-    OTHER = "other"
 
 
 class IndexState(str, Enum):
@@ -38,6 +36,7 @@ class LineExtraction:
     title: str = ""
     title_rank: int = 0
     timestamp: float | None = None
+    subagent: bool = False
 
 
 class SearchStatus(TypedDict):

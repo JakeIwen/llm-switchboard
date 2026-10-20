@@ -59,7 +59,7 @@ Sharing the socket would let its supervisor close the real windows.
 | `llm_switchboard/mac_uploads.py` | Mac side: the one transcript export path (notification, log, 10/hour quota) |
 | `llm_switchboard/search_records.py` | Transcript search vocabulary (`SearchTool`, `SearchRole`, `IndexState`) and API record shapes |
 | `llm_switchboard/search_query.py` | Transcript search syntax; user terms become quoted, bound FTS5 parameters |
-| `llm_switchboard/search_extract.py` | What counts as conversation text in Claude Code and Codex JSONL (mirrors `~/scripts/claudesearch.sh`, `codexsearch.sh`) |
+| `llm_switchboard/search_extract.py` | What is indexed from Claude Code and Codex JSONL: your prompts and the visible replies |
 | `llm_switchboard/search_index.py` | The SQLite FTS5 schema, status, results grouped per session, context around a match |
 | `llm_switchboard/search_indexer.py` | Incremental indexing: offsets, rebuilds on shrink or new inode, removals, the bulk first build |
 | `llm_switchboard/search_process.py` | `serve`'s 30 s low-priority indexer child |
@@ -121,14 +121,19 @@ the report instead of leaving it silently stale.
   actions in `ActionKind` can be queued; the Mac re-checks every one. Nothing
   queued may start a process or send a prompt there. A transcript leaves the
   Mac only through `fork-pi` (mac_uploads.py).
-- Transcript search: what counts as conversation text mirrors
-  `~/scripts/claudesearch.sh` and `codexsearch.sh`, so the rules live in two
-  places; `tests/test_search_oracle.py` compares the index with them (and
-  `llmsearch.sh`) when they are installed. Codex's `encrypted_content` and
-  base64 `data:` URLs are left out on purpose. A Codex rollout is named by
+- Transcript search indexes only your prompts and the visible replies:
+  Claude's through `prompt_text`/`reply_text` (transcripts.py), Codex's from
+  its event stream (`user_message`/`agent_message`, or `item_completed`
+  items in newer rollouts), never from response items, which repeat them
+  among reasoning, tool calls and injected instructions. Subagent rollouts
+  are tracked with an empty session id and never indexed. For words in
+  prompts and replies, `tests/test_search_oracle.py` checks that the index
+  finds the sessions `~/scripts/claudesearch.sh`, `codexsearch.sh` and
+  `llmsearch.sh` do, when they are installed. A Codex rollout is named by
   its first `session_meta` (forks copy their ancestors' after it), a Claude
   transcript by its file name. Indexing runs only in `serve`'s niced child
-  (`search_process.py`), never in the supervisor or a request thread; to
-  rebuild, stop the service and delete `transcript-search.sqlite3*`.
+  (`search_process.py`), never in the supervisor or a request thread; after
+  changing what is extracted, rebuild: stop the service and delete
+  `transcript-search.sqlite3*`.
 - The page polls every 4s; only rewrite DOM through `setHTML` (skips
   unchanged markup) so clicks aren't lost to a redraw mid-click.

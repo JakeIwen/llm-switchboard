@@ -10,7 +10,7 @@ from llm_switchboard.search_indexer import run_index
 from llm_switchboard.search_query import parse_query
 
 from search_fixture import (CLAUDE_ID, CODEX_ID, append_jsonl, claude_path, claude_records,
-                            codex_path, codex_records)
+                            codex_item_records, codex_path, codex_records)
 
 
 class SearchIndexTest(unittest.TestCase):
@@ -77,13 +77,12 @@ class SearchIndexTest(unittest.TestCase):
     def test_who_tool_folder_and_age_filters(self):
         self.assertEqual(len(self.search("by:me amber")), 1)
         self.assertEqual(self.search("by:reply amber"), [])
-        self.assertEqual(len(self.search("by:reply violet")), 1)
-        self.assertEqual(len(self.search("by:tool scarlet")), 1)
+        self.assertEqual(len(self.search("by:reply cobalt")), 1)
         self.assertEqual(len(self.search("by:me gold")), 1)
         self.assertEqual(len(self.search("tool:codex ochre")), 1)
         self.assertEqual(len(self.search("by:me ochre")), 1)
+        self.assertEqual(self.search("by:reply ochre"), [])
         self.assertEqual(len(self.search("by:reply teal")), 1)
-        self.assertEqual(len(self.search("by:tool umber")), 1)
         self.assertEqual(self.search("tool:claude ochre"), [])
         self.assertEqual(len(self.search("dir:alpha amber")), 1)
         self.assertEqual(self.search("dir:elsewhere amber"), [])
@@ -106,7 +105,7 @@ class SearchIndexTest(unittest.TestCase):
 
     def test_excluded_terms_apply_to_the_whole_session(self):
         append_jsonl(claude_path(self.root), [{"type": "assistant",
-                                               "message": {"content": "forbidden elsewhere"}}])
+                                               "message": {"content": [{"type": "text", "text": "forbidden elsewhere"}]}}])
         self.run_index()
         self.assertEqual(self.search("amber -forbidden"), [])
 
@@ -125,7 +124,7 @@ class SearchIndexTest(unittest.TestCase):
         append_jsonl(codex_path(self.root, fork_id), [
             {"type": "session_meta", "payload": {"id": fork_id, "forked_from_id": CODEX_ID, "cwd": "/work/fork"}},
             copied_meta,
-            {"type": "response_item", "payload": {"type": "agent_message", "message": "lilac fork reply"}},
+            {"type": "event_msg", "payload": {"type": "agent_message", "message": "lilac fork reply"}},
         ])
         claude_fork = "55555555-5555-5555-5555-555555555555"
         append_jsonl(claude_path(self.root, claude_fork), [
@@ -137,20 +136,38 @@ class SearchIndexTest(unittest.TestCase):
         self.assertEqual([r["id"] for r in self.search("russet")], [claude_fork])
         self.assertEqual([r["id"] for r in self.search("amber")], [CLAUDE_ID])
 
-    def test_encrypted_reasoning_and_inline_images_are_not_indexed(self):
-        append_jsonl(codex_path(self.root), [
-            {"type": "response_item", "payload": {"type": "reasoning", "summary": [],
-                                                  "encrypted_content": "gAAAAB secretblobword"}},
-            {"type": "response_item", "payload": {"type": "function_call_output", "output": [
-                {"type": "input_text", "text": "jade screenshot caption"},
-                {"type": "input_image", "image_url": "data:image/png;base64,iVBORw0K imageblobword"},
-            ]}},
+    def test_only_prompts_and_replies_are_indexed(self):
+        for word in ("violet", "ivory", "scarlet",  # Claude thinking, tool input, tool result
+                     "khaki", "secretblobword", "sepia", "umber", "beige"):  # Codex equivalents
+            with self.subTest(word=word):
+                self.assertEqual(self.search(word), [])
+        # Codex writes each message as a response item and as an event; one is indexed.
+        [codex] = self.search("teal")
+        self.assertEqual(codex["count"], 1)
+
+    def test_newer_codex_rollouts_index_completed_message_items(self):
+        sid = "66666666-6666-6666-6666-666666666666"
+        append_jsonl(codex_path(self.root, sid), codex_item_records(sid))
+        self.run_index()
+        self.assertEqual([r["id"] for r in self.search("by:me mauve")], [sid])
+        self.assertEqual([r["id"] for r in self.search("by:reply cerise")], [sid])
+        self.assertEqual(self.search("plum"), [])
+
+    def test_codex_subagent_rollouts_are_not_indexed_or_listed(self):
+        sub = "77777777-7777-7777-7777-777777777777"
+        append_jsonl(codex_path(self.root, sub), [
+            {"type": "session_meta", "payload": {
+                "session_id": CODEX_ID, "id": sub, "cwd": "/work/codex",
+                "source": {"subagent": {"thread_spawn": {"parent_thread_id": CODEX_ID}}}}},
+            {"type": "event_msg", "payload": {"type": "user_message", "message": "azure brief from the parent"}},
         ])
         self.run_index()
-        self.assertEqual(self.search("secretblobword"), [])
-        self.assertEqual(self.search("imageblobword"), [])
-        self.assertEqual(len(self.search("jade")), 1)
-
+        self.assertEqual(self.search("azure"), [])
+        append_jsonl(codex_path(self.root, sub), [
+            {"type": "event_msg", "payload": {"type": "agent_message", "message": "azure later reply"}}])
+        self.run_index()
+        self.assertEqual(self.search("azure"), [])
+        self.assertEqual(TranscriptSearch(self.index_file).status()["sessions"], 2)
 
 if __name__ == "__main__":
     unittest.main()
