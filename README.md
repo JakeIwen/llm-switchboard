@@ -181,9 +181,10 @@ what was appended; the first build reads every transcript and takes a while
 (the line under the search box says so). Thinking, tool calls, tool output,
 injected instructions and Codex subagents are left out: they are nearly all
 of the bytes. `llmsearch` (in Jacob's scripts repo) searches this index
-through `search --json`, and `llmsearch --grep` greps everything, those
-included; for prompts and replies, tests check that both find the same
-sessions.
+through `search --json`; `llmsearch --grep` greps the transcripts instead,
+thinking, tool calls and tool output included (and for Codex, injected
+instructions and subagents). For prompts and replies, tests check that both
+find the same sessions.
 
 ## Install
 
