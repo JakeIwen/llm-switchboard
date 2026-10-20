@@ -73,7 +73,7 @@ Sharing the socket would let its supervisor close the real windows.
 | `llm_switchboard/static/format.js` | Text formatting for the page: `esc`, `age`, `size`, `plural`, `nowS` |
 | `llm_switchboard/static/feedback.js` | Toasts, dialog bodies listing sessions, the clipboard |
 | `llm_switchboard/static/search.js` | The list filter's syntax (`-neg`, `"phrase"`, `dir:`, `is:`, `age:`) |
-| `llm_switchboard/static/dirs.js` | Which folders get a chip in the folder bar (`hasChip`: home and two levels below) |
+| `llm_switchboard/static/dirs.js` | The folder bar's chips (`hasChip`: home and two levels below; `dirKey`: one per machine) and the per-machine tint on folder paths |
 | `llm_switchboard/static/sort.js` | List orders (`SORTS`, `sortRows`): kept first, activity, name, folder, size |
 | `llm_switchboard/static/selection.js` | Multi-select: click, cmd/shift ranges, keyboard cursor |
 | `llm_switchboard/static/fulltext.js` | The Transcripts search mode: results, context, index status |

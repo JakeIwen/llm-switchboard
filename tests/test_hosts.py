@@ -16,7 +16,7 @@ from llm_switchboard.host_authorize import authorize
 from llm_switchboard.host_exchange import exchange
 from llm_switchboard.host_launchd import job
 from llm_switchboard.host_protocol import MAX_METADATA_BYTES, MAX_ROWS
-from llm_switchboard.hosts import Hosts
+from llm_switchboard.hosts import Hosts, host_display_path
 from llm_switchboard.mac_catalog import MacCatalog, codex_disk_rows
 from llm_switchboard.mac_registry import mac_live_processes
 from llm_switchboard.transcripts import TranscriptIndex
@@ -52,11 +52,17 @@ class HostTests(unittest.TestCase):
         self.assertEqual(row["host"], "m4mac")
         self.assertNotIn("secret", json.dumps(snap))
         self.assertIn("claude --resume", row["resume_cmd"])
+        self.assertEqual((row["project"], row["cwd"]), ("~/dev/a", "/Users/jacobr/dev/a"))
         self.clock.t += 34.99
         self.assertTrue(self.hosts.snapshot()["hosts"][0]["online"])
         self.clock.t += .01
         self.assertFalse(self.hosts.snapshot()["hosts"][0]["online"])
         self.assertEqual(self.hosts.snapshot()["hosts"][0]["last_seen"], 10000)
+
+    def test_mac_home_shows_as_tilde(self):
+        for cwd, shown in [("/Users/jacobr", "~"), ("/Users/jacobr/dev/a", "~/dev/a"), ("/Users/Shared/x", "/Users/Shared/x"),
+                           ("/private/tmp", "/private/tmp"), ("/Volumes/pihome/dev", "/Volumes/pihome/dev")]:
+            self.assertEqual(host_display_path(cwd), shown)
 
     def test_snapshot_skips_a_temp_file_written_beside_a_host(self):
         self.hosts.exchange("m4mac", {"version": 1, "rows": [sample()]})

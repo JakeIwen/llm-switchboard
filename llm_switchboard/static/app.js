@@ -1,6 +1,6 @@
 import { hostBadge, hostPanel, hostSummary, hostLock, hostAction, actionPath, actionSummary, hasRemote, trashHost, restoreLock } from "./hosts.js";
 import { compileQuery } from "./search.js";
-import { hasChip } from "./dirs.js";
+import { deviceClass, deviceTitle, dirKey, hasChip } from "./dirs.js";
 import { initFullText } from "./fulltext.js";
 import { DEFAULT_SORT, SORTS, sortRows } from "./sort.js";
 import { Selection } from "./selection.js";
@@ -29,7 +29,7 @@ const TOOL_NAME = { claude: "Claude Code", codex: "Codex" };
 const isCodex = (s) => s.tool === "codex";
 
 const $ = (id) => document.getElementById(id);
-const dirOf = (s) => s.project || UNKNOWN_DIR;
+const dirOf = (s) => dirKey(s.host, s.project || UNKNOWN_DIR);
 
 // ---- state -----------------------------------------------------------------
 
@@ -95,17 +95,18 @@ function renderDirs(now) {
   // Folders ordered by their most recent session; deep or outside-home ones get no chip (dirs.js).
   const dirs = new Map();
   for (const s of data.sessions) {
-    const d = dirs.get(dirOf(s)) || { latest: 0, n: 0 };
+    const d = dirs.get(dirOf(s)) || { latest: 0, n: 0, host: s.host || "", project: s.project || UNKNOWN_DIR };
     d.latest = Math.max(d.latest, s.mtime || 0);
     if (matches(s, now)) d.n++;
     dirs.set(dirOf(s), d);
   }
-  if (dir !== null && !dirs.has(dir)) dirs.set(dir, { latest: 0, n: 0 });
+  if (dir !== null && !dirs.has(dir)) dirs.set(dir, { latest: 0, n: 0, host: null, project: dir });
   const total = data.sessions.filter((s) => matches(s, now)).length;
-  const chip = (d, label, n) => `<button type="button" class="chip ${dir === d ? "on" : ""} ${n ? "" : "zero"}" data-dir="${esc(d ?? "")}" ${d === null ? "data-all" : ""}>${esc(label)}<span class="n">${n}</span></button>`;
+  // host is null for All folders, and for a selected folder no row has any more: no machine, no tint.
+  const chip = (d, label, n, host = null) => `<button type="button" class="chip ${dir === d ? "on" : ""} ${n ? "" : "zero"} ${host === null ? "" : deviceClass(host)}" ${host === null ? "" : `title="${esc(deviceTitle(host))}"`} data-dir="${esc(d ?? "")}" ${d === null ? "data-all" : ""}>${esc(label)}<span class="n">${n}</span></button>`;
   // The selected folder keeps its chip even when it has none, so it can be turned off.
-  const sorted = [...dirs].filter(([d]) => hasChip(d) || d === dir).sort((a, b) => b[1].latest - a[1].latest);
-  setHTML($("dirs"), chip(null, "All folders", total) + sorted.map(([d, v]) => chip(d, d, v.n)).join(""));
+  const sorted = [...dirs].filter(([d, v]) => hasChip(v.project) || d === dir).sort((a, b) => b[1].latest - a[1].latest);
+  setHTML($("dirs"), chip(null, "All folders", total) + sorted.map(([d, v]) => chip(d, v.project, v.n, v.host)).join(""));
 }
 
 function badges(s) {
@@ -229,7 +230,7 @@ function card(s) {
       </label>`}
       <div class="main">
         <div class="title">${esc(s.title)}</div>
-        <div class="meta"><button type="button" class="dirlink" data-dir="${esc(dirOf(s))}" title="Show only this folder">${esc(dirOf(s))}</button><span>${age(s.mtime)}</span><code>${esc(s.short_id)}</code><span>${size(s.size)}</span></div>
+        <div class="meta"><button type="button" class="dirlink ${deviceClass(s.host)}" data-dir="${esc(dirOf(s))}" title="${esc(deviceTitle(s.host))}; show only this folder">${esc(s.project || UNKNOWN_DIR)}</button><span>${age(s.mtime)}</span><code>${esc(s.short_id)}</code><span>${size(s.size)}</span></div>
         ${badges(s)}${detail}
       </div>
       <div class="side">
@@ -247,7 +248,7 @@ function renderTrash() {
   $("trash-sum").textContent = `Recently deleted (${trash.length}) · kept 30 days`;
   setHTML($("trash-list"), trash.map((t) => `<div class="card">
     <div class="main"><div class="title">${esc(t.title)}</div>
-      <div class="meta"><span>${esc(t.project)}</span><span>deleted ${age(t.deleted_at)}</span><code>${esc(t.short_id)}</code>${t.tool === "codex" ? "<span>Codex</span>" : ""}${trashHost(t)}</div></div>
+      <div class="meta"><span class="${deviceClass(t.host)}" title="${esc(deviceTitle(t.host))}">${esc(t.project)}</span><span>deleted ${age(t.deleted_at)}</span><code>${esc(t.short_id)}</code>${t.tool === "codex" ? "<span>Codex</span>" : ""}${trashHost(t)}</div></div>
     <button class="btn" data-restore="${t.id}" ${restoreLock(t)}>Restore</button></div>`).join(""));
 }
 

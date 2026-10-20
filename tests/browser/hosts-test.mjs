@@ -19,6 +19,12 @@ export async function checkHosts({ page, home, check, waitFor }) {
   write();
   const card = `[data-card="m4mac:${id}"]`;
   check("Mac push appears alongside Pi sessions", await waitFor(() => page.$(card).then(Boolean)));
+  check("Mac folder shows as ~ with the Mac tint, in the row and its own chip", await page.$eval(card, (el) => {
+    const link = el.querySelector(".dirlink");
+    const chip = [...document.querySelectorAll("#dirs .chip")].find((c) => c.dataset.dir === "m4mac:~/dev/mac-only");
+    return link.textContent === "~/dev/mac-only" && link.classList.contains("dev-host")
+      && chip?.classList.contains("dev-host") && document.querySelector("#dirs .chip.dev-local") !== null;
+  }));
   await page.click(`${card} .more`);
   check("Mac has resume command but no Peek, Terminal or keep switch", await page.$eval(card, (el) =>
     el.textContent.includes("Resume in a shell on the Mac") && el.textContent.includes("claude --resume")

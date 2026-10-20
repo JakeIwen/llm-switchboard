@@ -1,3 +1,5 @@
+import { deviceClass, deviceTitle } from "./dirs.js";
+
 // Mirrors SearchRole and IndexState in search_records.py.
 const ROLE_NAME = { me: "You", reply: "Reply" };
 const SEARCH_TOOL = { claude: "claude", codex: "codex" };
@@ -88,7 +90,7 @@ class FullTextMode {
     const open = result.title_only ? "" : `<button class="btn" data-search-open="${this.esc(key)}">${detail ? "Hide context" : "Open matches"}</button>`;
     return `<article class="search-card">
       <div class="search-head">${tool}<div class="main"><div class="title">${this.esc(result.title)}</div>
-        <div class="meta"><span>${this.esc(result.project)}</span><span>${this.esc(count)}</span><span>${this.age(result.matched_at)}</span><code>${this.esc(result.short_id)}</code></div>
+        <div class="meta"><span class="${deviceClass(result.host)}" title="${this.esc(deviceTitle(result.host))}">${this.esc(result.project)}</span><span>${this.esc(count)}</span><span>${this.age(result.matched_at)}</span><code>${this.esc(result.short_id)}</code></div>
         <div class="badges">${host}</div></div>${open}</div>
       <div class="search-excerpt">${this.esc(result.excerpt)}</div>
       ${detail ? this.detailBlock(detail) : result.title_only && result.resume_cmd ? this.commandLine(result.resume_cmd) : ""}
