@@ -13,6 +13,9 @@ from .transcripts import display_path
 
 SCHEMA_VERSION = 1
 _QUERY_TIMEOUT_S = 5.0
+# The indexer's last close checkpoints the WAL under an exclusive lock, which
+# a loaded SD card can hold for a moment; readers wait rather than fail.
+_READ_LOCK_WAIT_S = 2.0
 
 
 class SearchTimeout(RuntimeError):
@@ -180,7 +183,7 @@ class TranscriptSearch:
         return {"result": _result(summary[0], query.positive_terms), "contexts": contexts}
 
     def _reader(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(f"file:{self.path}?mode=ro", uri=True, timeout=0)
+        conn = sqlite3.connect(f"file:{self.path}?mode=ro", uri=True, timeout=_READ_LOCK_WAIT_S)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA query_only=ON")
         deadline = time.monotonic() + _QUERY_TIMEOUT_S

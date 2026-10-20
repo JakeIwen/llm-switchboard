@@ -1,6 +1,8 @@
 import json
 import os
+import sqlite3
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -144,6 +146,21 @@ class SearchIndexTest(unittest.TestCase):
         # Codex writes each message as a response item and as an event; one is indexed.
         [codex] = self.search("teal")
         self.assertEqual(codex["count"], 1)
+
+    def test_reads_wait_out_a_brief_lock_instead_of_reporting_no_index(self):
+        # Closing the last connection checkpoints the WAL under an exclusive
+        # lock, which a slow disk can hold for a while; exclusive locking mode
+        # holds the same lock on purpose.
+        writer = sqlite3.connect(self.index_file, check_same_thread=False)
+        writer.execute("PRAGMA locking_mode=EXCLUSIVE")
+        writer.execute("UPDATE index_meta SET value=value WHERE key='state'")
+        writer.commit()
+        release = threading.Timer(0.3, writer.close)
+        release.start()
+        self.addCleanup(release.cancel)
+        index = TranscriptSearch(self.index_file)
+        self.assertIsNotNone(index.status()["last_updated"])
+        self.assertEqual(len(index.search(parse_query("amber"))), 1)
 
     def test_newer_codex_rollouts_index_completed_message_items(self):
         sid = "66666666-6666-6666-6666-666666666666"
