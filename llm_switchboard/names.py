@@ -8,20 +8,8 @@ is compared without regard to case or runs of spaces.
 from .conflict import Conflict
 from .transcripts import display_path
 
-MAX_TITLE_LEN = 120
-
-
-def clean_title(title) -> str:
-    if not isinstance(title, str) or not " ".join(title.split()):
-        raise ValueError("a name is required")
-    title = " ".join(title.split())
-    if len(title) > MAX_TITLE_LEN:
-        raise ValueError(f"the name must be at most {MAX_TITLE_LEN} characters")
-    return title
-
-
-def name_key(title: str) -> str:
-    return " ".join(title.split()).casefold()
+# Public compatibility imports; pure validation belongs to session_names.
+from .session_names import MAX_TITLE_LEN, clean_title, name_key
 
 
 class Names:

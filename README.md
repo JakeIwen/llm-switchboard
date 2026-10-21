@@ -251,6 +251,13 @@ Ids can be any unique prefix; Codex sessions also go by the short id `list` show
 - The picker has no login. POSTs must be `application/json`, which blocks
   cross-site requests from browsers, but anyone on the tailnet can use it.
 
+## Development
+
+The checkout runs on Python 3.11+ without Python dependencies. The package is
+shared by Pi and Mac; [AGENTS.md](AGENTS.md) lists module owners and supported
+launch paths. Pure naming and supervisor-state contracts are separate from
+their storage and runtime consumers; existing public imports remain supported.
+
 ## Tests
 
 ```

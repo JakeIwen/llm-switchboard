@@ -6,6 +6,7 @@ import re
 from typing import TypedDict
 
 from .session_id import is_session_id
+from .session_names import MAX_TITLE_LEN
 
 VERSION = 1
 PUSH_INTERVAL = 10
@@ -87,7 +88,7 @@ def row(raw) -> HostRow:
     if type(raw.get("mutable")) is not bool:
         raise ValueError("mutable must be boolean")
     return HostRow(id=session_id(raw.get("id")), tool=raw["tool"],
-                   title=text(raw.get("title"), "title", 120), cwd=folder(raw.get("cwd")),
+                   title=text(raw.get("title"), "title", MAX_TITLE_LEN), cwd=folder(raw.get("cwd")),
                    mtime=number(raw.get("mtime"), "mtime"), size=number(raw.get("size"), "size", integer=True),
                    state=raw["state"], mutable=raw["mutable"])
 

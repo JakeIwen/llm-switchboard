@@ -7,7 +7,6 @@ edit the store and ask for a pass with wake().
 """
 
 from dataclasses import dataclass, field, replace
-from enum import Enum
 import logging
 import os
 import threading
@@ -18,70 +17,22 @@ from .launcher import new_session_command, pane_command
 from .live_registry import LiveProcess, live_processes
 from .notify import Notifier
 from .paths import MANAGED_ENV_VAR
-from .screen import Rc, blocking_prompt, rc_indicator
 from .session_id import short_id
 from .store import Entry, Store
+# Permanent public compatibility imports; state records and rules belong to supervisor_state.
+from .supervisor_state import (
+    BACKOFF_BASE_S, BACKOFF_MAX_S, RC_GRACE_S, SCREEN_TAIL_LINES, STABLE_RUN_S,
+    Exit, ScreenInput, State, Status, backoff_s, observe_screen,
+)
 from .tmux import Tmux, TmuxError
 from .transcripts import TranscriptIndex, display_path
 
 log = logging.getLogger(__name__)
 
-RC_GRACE_S = 45
-# A run at least this long counts as healthy and resets the backoff.
-STABLE_RUN_S = 300
-BACKOFF_BASE_S = 10
-BACKOFF_MAX_S = 600
-SCREEN_TAIL_LINES = 40
-
-
-class State(str, Enum):
-    RUNNING = "running"  # window up, Remote Control connected
-    STARTING = "starting"  # window up, Remote Control not seen yet
-    ATTENTION = "attention"  # window up, but something on screen needs a human
-    ELSEWHERE = "elsewhere"  # open in another claude process; waits for it to close
-    OFFLINE = "offline"  # no route to the API; waits for the network
-    BACKOFF = "backoff"  # exited; relaunch scheduled
-    MISSING = "missing"  # no transcript with this id
-    ERROR = "error"  # tmux itself failed
-
-
-@dataclass(frozen=True)
-class Exit:
-    status: int | None
-    at: float
-    ran_s: float
-    screen: str
-
-
-@dataclass
-class Status:
-    session_id: str
-    state: State = State.STARTING
-    detail: str = ""
-    window_id: str | None = None
-    pid: int | None = None
-    rss_kb: int | None = None
-    rc_active: bool = False
-    busy: bool = False
-    # Another claude process has the same session open as well.
-    duplicate: bool = False
-    started_at: float | None = None
-    next_attempt: float = 0.0
-    failures: int = 0
-    launches: int = 0
-    last_exit: Exit | None = None
-    rc_name: str = ""
-
 
 @dataclass
 class _Requests:
     restart: set[str] = field(default_factory=set)
-
-
-def backoff_s(failures: int) -> float:
-    if failures <= 0:
-        return 0.0
-    return min(BACKOFF_BASE_S * 2 ** (failures - 1), BACKOFF_MAX_S)
 
 
 class Supervisor:
@@ -250,24 +201,11 @@ class Supervisor:
         status.busy = bool(ours and ours.status == "busy")
         status.duplicate = bool(others)
         screen = self.tmux.capture(window.window_id)
-        rc = rc_indicator(screen)
-        prompt = blocking_prompt(screen)
-        status.rc_active = rc == Rc.ACTIVE
-        if prompt:
-            status.state, status.detail = State.ATTENTION, prompt
-        elif rc == Rc.ACTIVE:
-            status.state, status.detail = State.RUNNING, "Remote Control active."
-        elif rc == Rc.FAILED:
-            status.state, status.detail = State.ATTENTION, "Remote Control failed to connect; try Restart."
-        elif rc in (Rc.CONNECTING, Rc.RECONNECTING):
-            status.state, status.detail = State.STARTING, f"Remote Control {rc.value}."
-        elif now - status.started_at < RC_GRACE_S:
-            status.state, status.detail = State.STARTING, "Launched; waiting for Remote Control."
-        else:
-            status.state = State.ATTENTION
-            status.detail = "Running, but no Remote Control indicator on its status line. Check the screen."
-        if status.duplicate:
-            status.detail += f" Also open in another claude process (pid {others[0].pid})."
+        observation = observe_screen(ScreenInput(
+            screen, now - status.started_at, others[0].pid if others else None,
+        ))
+        status.rc_active = observation.rc_active
+        status.state, status.detail = observation.state, observation.detail
 
     def _record_exit(self, status: Status, window, now: float) -> None:
         screen = self.tmux.capture(window.window_id, history=SCREEN_TAIL_LINES)

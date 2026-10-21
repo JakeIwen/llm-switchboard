@@ -9,7 +9,7 @@ from .launcher import codex_resume_command, resume_command
 from .live_registry import LiveProcess
 from .session_id import short_id
 from .store import Entry
-from .supervisor import Status
+from .supervisor_state import Status
 from .transcripts import Transcript, display_path
 
 

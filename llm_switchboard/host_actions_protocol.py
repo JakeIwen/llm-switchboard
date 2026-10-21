@@ -4,7 +4,7 @@ from enum import StrEnum
 from typing import NotRequired, TypedDict
 
 from .host_protocol import HostRow, Push, folder, number, row, session_id, text
-from .names import clean_title
+from .session_names import MAX_TITLE_LEN, clean_title
 
 ACTION_TTL = 60
 MAX_ACTIONS = 20
@@ -86,7 +86,7 @@ def action_body(action: str, tool: str, body) -> dict:
         raise ValueError("unexpected action fields (keep, prompts and commands are never accepted)")
     clean = {}
     if "title" in fields:
-        clean["title"] = clean_title(text(body.get("title"), "title", 120))
+        clean["title"] = clean_title(text(body.get("title"), "title", MAX_TITLE_LEN))
     if "cwd" in fields:
         clean["cwd"] = folder(body.get("cwd"))
     return clean

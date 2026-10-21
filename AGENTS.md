@@ -32,10 +32,12 @@ Sharing the socket would let its supervisor close the real windows.
 | `llm_switchboard/launcher.py` | The pane command (goes through `claudepd`) |
 | `llm_switchboard/screen.py` | Reading a captured Claude Code screen: `/rc` indicator, blocking prompts |
 | `llm_switchboard/connectivity.py` | API reachability gate |
-| `llm_switchboard/supervisor.py` | Reconcile loop, `State` enum, backoff |
+| `llm_switchboard/supervisor_state.py` | Pure `State`/`Status`/`Exit` records, backoff and screen-state decisions |
+| `llm_switchboard/supervisor.py` | Reconcile loop and ordered tmux effects; keeps the state module's former public names available |
 | `llm_switchboard/session_actions.py` | Rename / create / delete / move / fork / restore, aware of running processes (`Conflict` → 409); per-folder unique names |
 | `llm_switchboard/conflict.py` | `Conflict`: an action the session's current state doesn't allow (→ 409) |
-| `llm_switchboard/names.py` | Cleaning names (`clean_title`) and keeping them unique per folder across every source (`Names`) |
+| `llm_switchboard/session_names.py` | Pure title validation (`clean_title`, `MAX_TITLE_LEN`) and comparison keys |
+| `llm_switchboard/names.py` | Per-folder uniqueness across sources (`Names`); compatibility imports for title validation |
 | `llm_switchboard/trash.py` | Deleted transcripts, kept 30 days for restore |
 | `llm_switchboard/folders.py` | Folders a new session may use (existing, trusted per `~/.claude.json`, never `~`); `existing_folder` for typed paths |
 | `llm_switchboard/notify.py` | Push notifications via `~/scripts/ntfy_send.sh` (`LLM_SWITCHBOARD_NOTIFY` overrides; empty disables) |
@@ -88,6 +90,24 @@ Sharing the socket would let its supervisor close the real windows.
 | `systemd/`, `install.sh` | User unit template and installer |
 | `scripts/setup-mac.sh` | Mac setup: key, `host-authorize` over SSH, one push, launchd job |
 
+## Contracts
+
+| Path | Caller | Owner |
+| --- | --- | --- |
+| `bin/llm-switchboard` | Pi systemd, installed CLI link, SSH forced command | `llm_switchboard/__main__.py` |
+| `python3 -m llm_switchboard` | Mac launchd, Mac setup, search index child, shell callers | `llm_switchboard/__main__.py` (light host/search dispatch), `cli.py` |
+| `systemd/llm-switchboard.service` | `install.sh` template input | `install.sh` |
+| `install.sh` | Pi operator installation | `systemd/llm-switchboard.service` and `bin/llm-switchboard` |
+| `scripts/setup-mac.sh` | Mac operator setup | `llm_switchboard/host_cli.py`, `host_launchd.py` |
+
+The package remains shared by Pi and Mac. Public cross-feature boundaries are
+listed in the ownership map; import records from their pure owner rather than
+pulling in the runtime. `supervisor.py` and `names.py` retain their former
+public imports permanently for callers. The `host_*`, `mac_*`, `codex_*` and
+`search_*` families stay flat: they distinguish protocol, transport, storage,
+CLI and runtime roles, and their existing public module paths remain supported.
+Feature grouping is a separate migration, not a prefix-count requirement.
+
 ## User guide
 
 The user-facing guide is a page in the visual-guides repo
@@ -120,7 +140,8 @@ the report instead of leaving it silently stale.
   process owns its title (rename it by typing `/rename` into our window).
 - Session names are unique per folder (case and spacing ignored); every path
   that sets or moves a name goes through `Names.refuse_duplicate` (names.py).
-- State names are the `State` enum in `supervisor.py`; the page's `STATE`
+- State names are the `State` enum in `supervisor_state.py` (also exported
+  by `supervisor.py`); the page's `STATE`
   table in `session-cards.js` mirrors them for labels.
 - Mac sessions: the Mac pushes; the Pi never connects to it. Rows from a
   host carry metadata only (no prompts, messages or screens), and only the
