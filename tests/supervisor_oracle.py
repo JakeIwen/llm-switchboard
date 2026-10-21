@@ -153,10 +153,13 @@ def capture_running_and_new():
     )
     temp.cleanup()
 
-    temp, events, store, tmux, clock, sup = fixture()
+    temp, events, store, tmux, clock, sup = fixture(transcript=False)
     store.real.create(SID, "/fixture/new", "New title")
     sup.reconcile()
     output["new"] = record(sup, events, "starting", ["store", "windows", "start"])
+    command = output["new"]["events"][-1]["command"]
+    assert f"--session-id {SID}" in command and "--resume" not in command, command
+    assert output["new"]["rows"][0]["new"] is True
     temp.cleanup()
     return output
 
