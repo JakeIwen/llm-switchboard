@@ -2,10 +2,13 @@
 
 Python 3.11 standard library only. Run tests with
 `python3 -m unittest discover -s tests` (this also runs the node unit tests in
-`tests/js` when node is installed). After UI changes, run the browser test,
-`tests/browser/run.sh [screenshot-dir]` (needs /usr/bin/chromium; installs
-puppeteer-core into tests/browser on first run; `SWITCHBOARD_TEST_PORT` picks
-another port so two runs can go at once). The service runs from this checkout
+`tests/js` when node is installed). After UI changes, use the existing
+`browser_clean` MCP driver with isolated fixtures from `tests/browser/fixture.py`
+and the behaviors in `tests/browser/ui-test.mjs`. Use separate fixture homes,
+tmux sockets and loopback ports. For refactor comparisons, keep fixture timestamps
+and path lengths equivalent, compute DOM/style hashes inside the page, and return
+only hashes and bounded diagnostics to the driver. Use bounded action timeouts
+and small comparison batches. The service runs from this checkout
 (`bin/llm-switchboard` → `python3 -m llm_switchboard`), so after a
 code change: `systemctl --user restart llm-switchboard` (sessions keep
 running; the supervisor adopts their windows).
