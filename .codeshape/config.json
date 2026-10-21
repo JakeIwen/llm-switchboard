@@ -1,0 +1,26 @@
+{
+  "layout": {
+    "sourceRoots": [
+      "."
+    ],
+    "entries": [],
+    "contracts": [
+      {
+        "from": "llm_switchboard",
+        "to": [
+          "scripts"
+        ],
+        "allowDynamic": false
+      }
+    ],
+    "targets": [
+      "systemd/*.service"
+    ],
+    "exclude": [
+      "scripts/check_layout.py",
+      "scripts/backend_layout",
+      "scripts/layout_fixture.py"
+    ],
+    "exceptions": []
+  }
+}

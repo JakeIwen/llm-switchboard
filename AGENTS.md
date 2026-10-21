@@ -1,8 +1,8 @@
 # llm-switchboard
 
 Python 3.11 standard library only. Run tests with
-`python3 -m unittest discover -s tests` (this also runs the node unit tests in
-`tests/js` when node is installed). After UI changes, use the existing
+`python3 -m unittest discover -s tests -f` (Python, required Node tests in
+`tests/js`, architecture contracts, and the repo-owned backend-layout suite). After UI changes, use the existing
 `browser_clean` MCP driver with isolated fixtures from `tests/browser/fixture.py`
 and the behaviors in `tests/browser/ui-test.mjs`. Use separate fixture homes,
 tmux sockets and loopback ports. For refactor comparisons, keep fixture timestamps
@@ -89,6 +89,8 @@ Sharing the socket would let its supervisor close the real windows.
 | `tests/fake_codex.py` | In-memory Codex daemon for the unit and browser tests |
 | `systemd/`, `install.sh` | User unit template and installer |
 | `scripts/setup-mac.sh` | Mac setup: key, `host-authorize` over SSH, one push, launchd job |
+| `scripts/check_layout.py`, `scripts/backend_layout/` | Repo-owned read-only layout checker; `.codeshape/config.json` declares its scope |
+| `tests/test_architecture.py` | Enforced pure-owner imports, Mac/Pi separation, rendered systemd and launchd targets, checkout wrapper |
 
 ## Contracts
 
@@ -99,6 +101,7 @@ Sharing the socket would let its supervisor close the real windows.
 | `systemd/llm-switchboard.service` | `install.sh` template input | `install.sh` |
 | `install.sh` | Pi operator installation | `systemd/llm-switchboard.service` and `bin/llm-switchboard` |
 | `scripts/setup-mac.sh` | Mac operator setup | `llm_switchboard/host_cli.py`, `host_launchd.py` |
+| `scripts/check_layout.py` | Developer checks and unittest bridge | `scripts/backend_layout/cli.py` |
 
 The package remains shared by Pi and Mac. Public cross-feature boundaries are
 listed in the ownership map; import records from their pure owner rather than
@@ -107,6 +110,25 @@ public imports permanently for callers. The `host_*`, `mac_*`, `codex_*` and
 `search_*` families stay flat: they distinguish protocol, transport, storage,
 CLI and runtime roles, and their existing public module paths remain supported.
 Feature grouping is a separate migration, not a prefix-count requirement.
+
+## Organization checks
+
+`python3 scripts/check_layout.py` scans without importing project code. There
+is deliberately no `.codeshape/baseline.json`: all generic layout findings are
+advisory, including contract and declared-target findings. Do not create or
+update a baseline without Jacob's separate instruction. The focused architecture
+tests enforce pure-owner dependencies, the Mac/Pi runtime boundary, and real
+launch targets independently. No runtime module imports the checker.
+
+The generic checker currently interprets the systemd template's `@REPO@`
+placeholder as a literal missing path; the enforced test renders the template
+and checks its actual executable. Prefix-family findings are review candidates,
+not exceptions or permission to move supported public modules. The checker
+fixture suite is included by `tests/test_backend_layout.py`; its timeout is
+180 seconds because it takes about two minutes on the Pi. Node is required;
+missing Node fails setup. With an isolated HOME, use
+`SESSION_SEARCH_SCRIPTS=/home/pi/scripts` on this Pi to include the installed
+cross-repo search oracles. See [verification notes](docs/backend-organization.md).
 
 ## User guide
 

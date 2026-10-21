@@ -261,6 +261,16 @@ their storage and runtime consumers; existing public imports remain supported.
 ## Tests
 
 ```
-python3 -m unittest discover -s tests   # Python + JS unit tests
-tests/browser/run.sh [screenshot-dir]   # headless Chromium, fake HOME, own socket/port
+python3 -m unittest discover -s tests -f   # Python, Node, architecture and layout checks
+python3 scripts/check_layout.py          # standalone layout report
 ```
+
+Node is required for the whole suite; Python remains standard-library only.
+The generic layout report is advisory until Jacob explicitly establishes a
+baseline; focused architecture tests enforce the documented boundaries today.
+See [organization and verification notes](docs/backend-organization.md).
+
+UI changes additionally require the existing `browser_clean` MCP driver, using
+`tests/browser/fixture.py` and the behaviors in `tests/browser/ui-test.mjs`,
+with isolated homes, sockets and ports as described in [AGENTS.md](AGENTS.md).
+That browser gate is separate from the safe automated suite.
