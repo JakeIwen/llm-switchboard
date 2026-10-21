@@ -68,7 +68,9 @@ Sharing the socket would let its supervisor close the real windows.
 | `llm_switchboard/web.py` | HTTP API and static page; `make_app` wires both session sources |
 | `llm_switchboard/cli.py` | argparse entry point |
 | `llm_switchboard/static/index.html`, `app.css` | The picker's markup and styles |
-| `llm_switchboard/static/app.js` | Picker: rendering, actions, events (ES module, no build step) |
+| `llm_switchboard/static/app.js` | Picker state, polling and event wiring (ES module, no build step) |
+| `llm_switchboard/static/session-cards.js` | Session-card badges and row markup; state labels mirror `Supervisor.State` |
+| `llm_switchboard/static/session-actions.js` | Sequential bulk execution/progress and blocked-session partitioning |
 | `llm_switchboard/static/api.js` | The page's JSON calls to the server (`api`) |
 | `llm_switchboard/static/format.js` | Text formatting for the page: `esc`, `age`, `size`, `plural`, `nowS` |
 | `llm_switchboard/static/feedback.js` | Toasts, dialog bodies listing sessions, the clipboard |
@@ -116,7 +118,7 @@ the report instead of leaving it silently stale.
 - Session names are unique per folder (case and spacing ignored); every path
   that sets or moves a name goes through `Names.refuse_duplicate` (names.py).
 - State names are the `State` enum in `supervisor.py`; the page's `STATE`
-  table in `app.js` mirrors them for labels.
+  table in `session-cards.js` mirrors them for labels.
 - Mac sessions: the Mac pushes; the Pi never connects to it. Rows from a
   host carry metadata only (no prompts, messages or screens), and only the
   actions in `ActionKind` can be queued; the Mac re-checks every one. Nothing

@@ -1,4 +1,4 @@
-import { hostBadge, hostPanel, hostSummary, hostLock, hostAction, actionPath, actionSummary, hasRemote, trashHost, restoreLock } from "./hosts.js";
+import { hostSummary, hostAction, actionPath, actionSummary, hasRemote, trashHost, restoreLock } from "./hosts.js";
 import { compileQuery } from "./search.js";
 import { deviceClass, deviceTitle, dirKey, listed } from "./dirs.js";
 import { initFullText } from "./fulltext.js";
@@ -7,19 +7,10 @@ import { Selection } from "./selection.js";
 import { confirmDialog, formDialog, promptDialog } from "./dialog.js";
 import { api } from "./api.js";
 import { copyText, summaryBody, toast } from "./feedback.js";
-import { age, esc, nowS, plural, size } from "./format.js";
+import { age, esc, nowS, plural } from "./format.js";
+import { BulkActions, splitBlocked as partitionBlocked } from "./session-actions.js";
+import { createSessionCards, sessionBlockedReason } from "./session-cards.js";
 
-// Labels for the supervisor's State enum (supervisor.py).
-const STATE = {
-  running:   ["Remote Control on", "b-ok"],
-  starting:  ["Starting", "b-info"],
-  attention: ["Needs attention", "b-warn"],
-  elsewhere: ["Waiting: open elsewhere", "b-idle"],
-  offline:   ["Waiting for network", "b-idle"],
-  backoff:   ["Exited, relaunching", "b-warn"],
-  missing:   ["Transcript missing", "b-bad"],
-  error:     ["Error", "b-bad"],
-};
 const UNKNOWN_DIR = "(unknown folder)";
 // Supervisor states that mean a new session didn't come up by itself.
 const TROUBLE = new Set(["attention", "backoff", "error", "missing"]);
@@ -43,11 +34,17 @@ const watching = new Map();  // id -> title of sessions created here, until they
 // The open Move ▾ menu: { id, cwd }, keeping the folder typed before it opened
 // (opening it redraws the panel's fields).
 let menu = null;
+const sessionCards = createSessionCards(sel, expanded, screens, peeks, dirOf, () => menu);
 // The chosen folder is a per-browser convenience; storage can be unavailable.
 let sort = DEFAULT_SORT;
 try { dir = localStorage.getItem("switchboard.dir"); tool = localStorage.getItem("switchboard.tool") || "all"; sort = localStorage.getItem("switchboard.sort") || sort; } catch {}
 
 const byId = (id) => data.sessions.find((s) => s.id === id);
+const bulkActions = new BulkActions({
+  lookup: byId,
+  showProgress(value) { bulkProgress = value; renderBulkbar(); },
+  refresh,
+});
 
 // Replacing a node mid-click (between mousedown and mouseup) swallows the
 // click, so the list is only rewritten when its markup changed, and polling
@@ -124,137 +121,10 @@ function renderDirs(now) {
 }
 const byFolder = (a, b) => a.localeCompare(b, undefined, { sensitivity: "base", numeric: true });
 
-function badges(s) {
-  const out = s.host ? [hostBadge(s)] : [];
-  const st = s.status;
-  if (s.enabled && st) {
-    const [label, cls] = STATE[st.state] || [st.state, "b-idle"];
-    out.push(`<span class="badge ${cls}">${esc(label)}</span>`);
-    if (st.busy) out.push(`<span class="badge b-info">Working</span>`);
-    if (st.rss_kb) out.push(`<span class="badge b-idle">${Math.round(st.rss_kb / 1024)} MB</span>`);
-  } else if (s.enabled) {
-    out.push(`<span class="badge b-info">Queued</span>`);
-  }
-  if (s.new) out.push(`<span class="badge b-info">New</span>`);
-  if (isCodex(s) && s.codex_state === "active") out.push(`<span class="badge b-info">Working</span>`);
-  if (s.open_elsewhere.length && !(s.enabled && st && st.state === "elsewhere")) {
-    out.push(`<span class="badge b-idle">Open in a terminal</span>`);
-  }
-  return out.length ? `<div class="badges">${out.join("")}</div>` : "";
-}
-
-const copyButton = (text) => `<button class="btn" data-act="copy" data-text="${esc(text)}">Copy</button>`;
-const elsewhereNote = (s) => hostLock(s) || (s.open_elsewhere.length
-  ? `Open in another claude process (pid ${s.open_elsewhere[0].pid}); close it to rename, move or delete.` : "");
-const lockAttr = (s) => elsewhereNote(s) ? `disabled title="${esc(elsewhereNote(s))}"` : "";
-
-function messagesBlock(id) {
-  const m = peeks.get(id);
-  if (m === undefined) return "";
-  if (typeof m === "string") return `<div class="hint">${esc(m)}</div>`;
-  if (!m.length) return `<div class="hint">No messages yet.</div>`;
-  return `<div class="msgs">${m.map((x) => `<div class="msg ${x.role}">${esc(x.text)}</div>`).join("")}</div>`;
-}
-
-function field(s, key, label, value, button, extra = "") {
-  return `<div>
-      <label for="${key}-${s.id}">${label}</label>
-      <div class="line">
-        <input type="text" id="${key}-${s.id}" value="${esc(value)}" maxlength="400" ${extra}>
-        ${button}
-      </div>
-    </div>`;
-}
-
-function moveSplit(s, lock) {
-  const open = menu?.id === s.id;
-  return `<div class="split">
-      <button class="btn" data-act="move" data-id="${s.id}" ${lock}>Move</button>
-      <button class="btn caret" data-act="menu" data-id="${s.id}" aria-label="More folder actions" aria-haspopup="menu" aria-expanded="${open}">▾</button>
-      ${open ? `<div class="menu" role="menu">
-        <button type="button" role="menuitem" data-act="fork" data-id="${s.id}">Fork…<small>Copy the conversation into a new session; the original stays as it is</small></button>
-      </div>` : ""}
-    </div>`;
-}
-
-// Codex sessions have no keep-running, screen, Remote Control name or move.
-function codexPanel(s) {
-  return `<div class="panel">
-    <div class="actions">
-      <button class="btn" data-act="peek" data-id="${s.id}">${peeks.has(s.id) ? "Refresh messages" : "Recent messages"}</button>
-    </div>
-    ${messagesBlock(s.id)}
-    ${field(s, "title", "Title", s.title, `<button class="btn" data-act="rename" data-id="${s.id}">Rename</button>`)}
-    ${field(s, "cwd", "Working folder (Codex can't move a session; Fork copies it into a folder)", s.cwd,
-            `<button class="btn" data-act="fork" data-id="${s.id}">Fork…</button>`, `list="cwds" spellcheck="false"`)}
-    <div>
-      <label>Resume in a shell on the Pi</label>
-      <div class="cmdline"><div class="cmd">${esc(s.resume_cmd)}</div>${copyButton(s.resume_cmd)}</div>
-    </div>
-    <div class="hint"><code>${esc(s.id)}</code></div>
-  </div>`;
-}
-
-function panel(s) {
-  if (s.host) return hostPanel(s);
-  if (isCodex(s)) return codexPanel(s);
-  const st = s.status || {};
-  const screen = screens.get(s.id);
-  const lock = lockAttr(s);
-  const exit = st.last_exit ? `<div class="hint">Last exit: status ${esc(st.last_exit.status)} after ${Math.round(st.last_exit.ran_s)}s, ${age(st.last_exit.at)} · launches: ${st.launches}</div>` : "";
-  const attach = `llm-switchboard attach ${s.short_id}`;
-  return `<div class="panel">
-    <div class="actions">
-      ${s.remote_url ? `<a class="btn" href="${esc(s.remote_url)}" target="_blank" rel="noopener">Open in Claude ↗</a>` : ""}
-      <button class="btn" data-act="peek" data-id="${s.id}">${peeks.has(s.id) ? "Refresh messages" : "Recent messages"}</button>
-      ${s.enabled ? `<button class="btn" data-act="screen" data-id="${s.id}">${screen !== undefined ? "Refresh screen" : "Terminal screen"}</button>` : ""}
-      ${s.enabled ? `<button class="btn" data-act="restart" data-id="${s.id}">Restart</button>` : ""}
-    </div>
-    ${elsewhereNote(s) ? `<div class="hint">${esc(elsewhereNote(s))}</div>` : ""}
-    ${messagesBlock(s.id)}
-    ${screen !== undefined ? `<div class="screen"><pre>${esc(screen || "(nothing to show)")}</pre>
-      <button type="button" class="screen-close" data-act="screen-close" data-id="${s.id}" aria-label="Close terminal screen" title="Close">×</button></div>` : ""}
-    ${field(s, "title", "Title", s.title, `<button class="btn" data-act="rename" data-id="${s.id}" ${lock}>Rename</button>`)}
-    ${field(s, "cwd", "Working folder (Move takes the transcript there and a kept session restarts there; ▾ Fork copies it instead)",
-            menu?.id === s.id ? menu.cwd : s.cwd, moveSplit(s, lock), `list="cwds" spellcheck="false"`)}
-    ${field(s, "name", "Remote Control name (blank = session title; applies on next launch)", s.rc_name,
-            `<button class="btn" data-act="name" data-id="${s.id}">Save</button>`, `placeholder="${esc(st.rc_name || s.title)}"`)}
-    ${exit}
-    <div>
-      <label>Resume in a shell on the Pi</label>
-      <div class="cmdline"><div class="cmd">${esc(s.resume_cmd)}</div>${copyButton(s.resume_cmd)}</div>
-    </div>
-    ${s.enabled ? `<div>
-      <label>Attach to its tmux window (detach: Ctrl-b d)</label>
-      <div class="cmdline"><div class="cmd">${esc(attach)}</div>${copyButton(attach)}</div>
-    </div>` : ""}
-    <div class="hint"><code>${esc(s.id)}</code></div>
-  </div>`;
-}
+const elsewhereNote = sessionBlockedReason;
 
 function card(s) {
-  const st = s.status;
-  const detail = s.enabled && st && st.detail && st.state !== "running" ? `<div class="detail">${esc(st.detail)}</div>` : "";
-  const cls = ["card", s.host && !s.host_online && "host-offline", s.enabled && "enabled", sel.has(s.id) && "selected", sel.cursor === s.id && "cursor"].filter(Boolean).join(" ");
-  return `<div class="${cls}" data-card="${s.id}">
-    <div class="row">
-      <button type="button" class="check" data-act="select" data-id="${s.id}" aria-label="Select" aria-pressed="${sel.has(s.id)}"></button>
-      ${s.host ? `<span class="tool-tag">Mac</span>` : isCodex(s) ? `<span class="tool-tag" title="A Codex session">Codex</span>` : `<label class="switch" title="${s.enabled ? "Stop keeping this running" : "Keep this running with Remote Control"}">
-        <input type="checkbox" data-act="toggle" data-id="${s.id}" ${s.enabled ? "checked" : ""} aria-label="Keep running">
-        <span></span>
-      </label>`}
-      <div class="main">
-        <div class="title">${esc(s.title)}</div>
-        <div class="meta"><button type="button" class="dirlink ${deviceClass(s.host)}" data-dir="${esc(dirOf(s))}" title="${esc(deviceTitle(s.host))}; show only this folder">${esc(s.project || UNKNOWN_DIR)}</button><span>${age(s.mtime)}</span><code>${esc(s.short_id)}</code><span>${size(s.size)}</span></div>
-        ${badges(s)}${detail}
-      </div>
-      <div class="side">
-        <button type="button" class="more" data-act="expand" data-id="${s.id}" aria-label="Details">${expanded.has(s.id) ? "▴" : "▾"}</button>
-        <button type="button" class="x" data-act="delete" data-id="${s.id}" aria-label="Delete" title="${esc(elsewhereNote(s) || "Delete")}" ${elsewhereNote(s) ? "disabled" : ""}>×</button>
-      </div>
-    </div>
-    ${expanded.has(s.id) ? panel(s) : ""}
-  </div>`;
+  return sessionCards.render(s);
 }
 
 function renderTrash() {
@@ -315,27 +185,13 @@ async function act(id, action, body = {}) {
   }
 }
 
-// Runs fn on each id in turn, showing progress in the bulk bar. Returns the ids that worked.
 async function runBulk(verb, ids, fn) {
-  const done = [], failed = [];
-  for (const [i, id] of ids.entries()) {
-    bulkProgress = ids.length > 1 ? `${verb} ${i + 1} of ${ids.length}…` : `${verb}…`;
-    renderBulkbar();
-    try { await fn(id); done.push(id); }
-    catch (e) { failed.push(`${byId(id)?.title || id}: ${e.message}`); }
-  }
-  bulkProgress = "";
-  await refresh();
-  if (failed.length) {
-    await confirmDialog({ title: `${plural(failed.length, "session")} failed`, body: failed.join("\n"), confirm: "OK" });
-  }
-  return done;
+  return bulkActions.run(verb, ids, fn);
 }
 
 // Sessions open in another claude process can't be renamed, moved or deleted.
 function splitBlocked(ids) {
-  const list = ids.map(byId).filter(Boolean);
-  return { targets: list.filter((s) => !elsewhereNote(s)), blocked: list.filter((s) => elsewhereNote(s)) };
+  return partitionBlocked(ids, byId, elsewhereNote);
 }
 
 async function deleteSessions(ids) {
