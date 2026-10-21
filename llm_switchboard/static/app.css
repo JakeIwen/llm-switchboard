@@ -34,18 +34,6 @@ input[type=search], input[type=text] {
 .seg[hidden] { display: none; }
 .seg button { border: 0; background: transparent; color: var(--muted); padding: 8px 12px; font: inherit; cursor: pointer; }
 .seg button.on { background: var(--surface-2); color: var(--text); font-weight: 600; }
-.dirs { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 12px; }
-.chip {
-  border: 1px solid var(--border); background: var(--surface); color: var(--text); font: inherit; font-size: 13px;
-  padding: 5px 10px; border-radius: 999px; cursor: pointer; max-width: 100%; overflow-wrap: anywhere; text-align: left;
-}
-.chip .n { color: var(--muted); margin-left: 4px; font-variant-numeric: tabular-nums; }
-/* Chips tinted by machine (dirs.js); the selected chip keeps the accent. */
-.chip.dev-local { background: color-mix(in srgb, var(--dev-local) 7%, var(--surface)); border-color: color-mix(in srgb, var(--dev-local) 30%, var(--border)); }
-.chip.dev-host { background: color-mix(in srgb, var(--dev-host) 7%, var(--surface)); border-color: color-mix(in srgb, var(--dev-host) 30%, var(--border)); }
-.chip.on { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
-.chip.on .n { color: inherit; opacity: .8; }
-.chip.zero { opacity: .45; }
 .dirlink { border: 0; background: none; padding: 0; font: inherit; color: inherit; cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; }
 /* Which machine a folder path is on (dirs.js): a light tint. After .dirlink, whose color it overrides. */
 .dev-local { color: var(--dev-local); }
@@ -162,6 +150,12 @@ body.bulk .toast { bottom: calc(96px + env(safe-area-inset-bottom)); }
 .searchrow { display: flex; gap: 6px; flex: 1 1 260px; min-width: 0; }
 .searchrow input { flex: 1; }
 select.sort { border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--text); font: inherit; padding: 8px 10px; cursor: pointer; }
+select.dirpick { max-width: 100%; min-width: 0; }
+/* A folder is picked: an accent edge, and the text tinted by its machine. */
+select.dirpick.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+select.dirpick.dev-local { color: var(--dev-local); }
+select.dirpick.dev-host { color: var(--dev-host); }
+select.dirpick option, select.dirpick optgroup { color: var(--text); }
 .help-btn { flex: none; width: 38px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface); color: var(--muted); font: inherit; cursor: pointer; }
 .help { font-size: 13px; color: var(--muted); background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 10px 14px; margin: -4px 0 12px; }
 .help[hidden] { display: none; }
@@ -228,7 +222,7 @@ select.dlg-input {
 .index-status { display: none; color: var(--muted); font-size: 12px; margin: -6px 0 10px; }
 .fulltext-mode .index-status { display: block; }
 .fulltext-mode .toolbar > .seg, .fulltext-mode .toolbar > .sort,
-.fulltext-mode #dirs, .fulltext-mode #trash, .fulltext-mode #bulkbar,
+.fulltext-mode #trash, .fulltext-mode #bulkbar,
 .fulltext-mode .wrap > .hint { display: none; }
 .fulltext-mode .searchrow { flex-basis: 100%; }
 .search-card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 12px 14px; }

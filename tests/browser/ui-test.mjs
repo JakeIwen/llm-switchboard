@@ -208,7 +208,13 @@ const gammaDir = `${HOME}/.claude/projects/${`${HOME}/dev/gamma`.replace(/[^a-zA
 check("transcripts live under the gamma project folder", fs.existsSync(gammaDir) && fs.readdirSync(gammaDir).length === moving);
 await search("");
 await page.$eval("#q", (el) => el.blur());
-check("gamma folder chip appears", await waitFor(() => page.$$eval("#dirs .chip", (els) => els.some((e) => e.textContent.includes("dev/gamma")))));
+check("gamma folder appears in the folder menu", await waitFor(() => page.$$eval("#dir option", (els) => els.some((e) => e.textContent.includes("dev/gamma")))));
+await page.select("#dir", "~/dev/gamma");
+check("picking it shows only its sessions", await waitFor(() => page.$$eval("#list .card .dirlink", (els) =>
+  els.length === 3 && els.every((e) => e.textContent === "~/dev/gamma"))));
+check("the picked menu is marked and tinted", await page.$eval("#dir", (el) => el.matches(".on.dev-local")));
+await page.select("#dir", "");
+await page.$eval("#dir", (el) => el.blur());
 
 // --- single move from the details panel
 await page.click("#list .card .more"); await sleep(50);

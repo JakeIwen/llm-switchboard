@@ -1,6 +1,6 @@
 import { hostBadge, hostPanel, hostSummary, hostLock, hostAction, actionPath, actionSummary, hasRemote, trashHost, restoreLock } from "./hosts.js";
 import { compileQuery } from "./search.js";
-import { deviceClass, deviceTitle, dirKey, hasChip } from "./dirs.js";
+import { deviceClass, deviceTitle, dirKey, listed } from "./dirs.js";
 import { initFullText } from "./fulltext.js";
 import { DEFAULT_SORT, SORTS, sortRows } from "./sort.js";
 import { Selection } from "./selection.js";
@@ -92,22 +92,37 @@ function setDir(d) {
 // ---- rendering -------------------------------------------------------------
 
 function renderDirs(now) {
-  // Folders ordered by their most recent session; deep or outside-home ones get no chip (dirs.js).
+  // The folder menu: one group per machine, folders A–Z; which ones are listed is up to dirs.js.
   const dirs = new Map();
   for (const s of data.sessions) {
-    const d = dirs.get(dirOf(s)) || { latest: 0, n: 0, host: s.host || "", project: s.project || UNKNOWN_DIR };
-    d.latest = Math.max(d.latest, s.mtime || 0);
+    const d = dirs.get(dirOf(s)) || { n: 0, all: 0, host: s.host || "", project: s.project || UNKNOWN_DIR };
+    d.all++;
     if (matches(s, now)) d.n++;
     dirs.set(dirOf(s), d);
   }
-  if (dir !== null && !dirs.has(dir)) dirs.set(dir, { latest: 0, n: 0, host: null, project: dir });
-  const total = data.sessions.filter((s) => matches(s, now)).length;
-  // host is null for All folders, and for a selected folder no row has any more: no machine, no tint.
-  const chip = (d, label, n, host = null) => `<button type="button" class="chip ${dir === d ? "on" : ""} ${n ? "" : "zero"} ${host === null ? "" : deviceClass(host)}" ${host === null ? "" : `title="${esc(deviceTitle(host))}"`} data-dir="${esc(d ?? "")}" ${d === null ? "data-all" : ""}>${esc(label)}<span class="n">${n}</span></button>`;
-  // The selected folder keeps its chip even when it has none, so it can be turned off.
-  const sorted = [...dirs].filter(([d, v]) => hasChip(v.project) || d === dir).sort((a, b) => b[1].latest - a[1].latest);
-  setHTML($("dirs"), chip(null, "All folders", total) + sorted.map(([d, v]) => chip(d, v.project, v.n, v.host)).join(""));
+  const picked = dirs.get(dir);
+  const pick = $("dir");
+  pick.classList.toggle("on", dir !== null);
+  pick.classList.remove("dev-local", "dev-host");
+  if (picked) pick.classList.add(deviceClass(picked.host));
+  pick.title = picked ? `${deviceTitle(picked.host)}; show only this folder` : "Show only one folder";
+  // Rewriting the options would close the menu under someone choosing.
+  if (document.activeElement === pick) return;
+  const option = (d, label, n) => `<option value="${esc(d)}" ${d === (dir ?? "") ? "selected" : ""}>${esc(label)} (${n})</option>`;
+  const groups = new Map();
+  for (const [d, v] of [...dirs].sort((a, b) => byFolder(a[1].project, b[1].project))) {
+    // The selected folder stays listed, so the menu can show it and switch it off.
+    if (!listed(v.project, v.all) && d !== dir) continue;
+    if (!groups.has(v.host)) groups.set(v.host, []);
+    groups.get(v.host).push(option(d, v.project, v.n));
+  }
+  // A selected folder no row has any more, under no machine.
+  const gone = dir !== null && !picked ? option(dir, dir, 0) : "";
+  const machines = [...groups.keys()].sort((a, b) => (a !== "") - (b !== "") || a.localeCompare(b));
+  setHTML(pick, option("", "All folders", data.sessions.filter((s) => matches(s, now)).length) + gone
+    + machines.map((h) => `<optgroup label="${esc(h ? h : "This Pi")}">${groups.get(h).join("")}</optgroup>`).join(""));
 }
+const byFolder = (a, b) => a.localeCompare(b, undefined, { sensitivity: "base", numeric: true });
 
 function badges(s) {
   const out = s.host ? [hostBadge(s)] : [];
@@ -599,12 +614,9 @@ $("list").addEventListener("change", async (ev) => {
   await act(s.id, el.checked ? "enable" : "disable");
 });
 
-$("dirs").addEventListener("click", (ev) => {
-  const el = ev.target.closest("[data-dir]");
-  if (!el) return;
-  const d = el.hasAttribute("data-all") ? null : el.dataset.dir;
-  setDir(d === dir ? null : d);
-});
+$("dir").addEventListener("change", (ev) => setDir(ev.target.value || null));
+// renderDirs leaves the options alone while the menu has focus; catch up once it lets go.
+$("dir").addEventListener("blur", () => render());
 
 $("bulkbar").addEventListener("click", (ev) => {
   const b = ev.target.closest("[data-bulk]");
