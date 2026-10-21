@@ -6,6 +6,11 @@ ones, one at a time or in bulk. It also keeps chosen Claude Code sessions
 running in tmux with Remote Control on, so they can always be reached from
 the Claude app or claude.ai/code.
 
+![Session picker populated with sample Claude Code and Codex sessions](docs/images/session-picker.png)
+
+The screenshot uses generated sample sessions; it contains no transcript or
+account data.
+
 Illustrated guide: http://vanpi.lan:8791/guides/llm-switchboard.html (source in
 `JakeIwen/visual-guides`; keep it current with any change in behaviour, see AGENTS.md).
 
