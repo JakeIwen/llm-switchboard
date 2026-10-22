@@ -60,7 +60,7 @@ export async function hostAction(el, session, refresh) {
       value: `${session.title.slice(0, 100)} (fork)` }];
     if (!pi) fields.push({ name: "cwd", label: "Existing folder on the Mac", value: value("cwd"), required: true });
     body = await formDialog({ title: pi ? "Fork onto the Pi" : "Fork on the Mac", fields, confirm: "Queue fork",
-      body: pi ? "Uploads this one transcript to the Pi. /Users/jacobr/<folder> maps to /home/pi/<folder>, which must exist. The Mac posts a notification and logs the upload (10 per hour; 16 MiB maximum). The copy does not start running."
+      body: pi ? "Uploads this one transcript to the Pi. ~/<folder> on the Mac maps to ~/<folder> on the Pi, which must exist. The Mac posts a notification and logs the upload (10 per hour; 16 MiB maximum). The copy does not start running."
         : "Copies the conversation on the Mac. No process starts, and the copy is not kept running." });
     if (!body) return;
   }

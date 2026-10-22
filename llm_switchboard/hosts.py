@@ -78,7 +78,7 @@ class Hosts:
             try:
                 host = host_name(path.stem)
             except ValueError:
-                continue  # JsonFile's hidden temp file mid-write (.m4mac-*.json), or a stray file
+                continue  # JsonFile's hidden temp file mid-write (.mac-*.json), or a stray file
             file = JsonFile(path)
             with file.locked():
                 data = file.load()

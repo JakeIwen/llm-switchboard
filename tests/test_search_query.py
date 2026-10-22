@@ -29,13 +29,13 @@ class SearchQueryTest(unittest.TestCase):
                 parse_query(query)
 
     def test_remote_rows_match_only_title_and_folder_plain_terms(self):
-        row = {"host": "m4mac", "tool": "claude", "id": "abc", "short_id": "abc",
+        row = {"host": "mac", "tool": "claude", "id": "abc", "short_id": "abc",
                "title": "Compass decoder", "cwd": "/Users/j/dev/van", "project": "~/dev/van",
-               "mtime": 900, "resume_cmd": "ssh m4mac"}
+               "mtime": 900, "resume_cmd": "ssh mac"}
         matches = remote_title_matches(parse_query("compass dir:van", now=1000), [row], now=1000)
         self.assertEqual(len(matches), 1)
         self.assertTrue(matches[0]["title_only"])
-        self.assertEqual(matches[0]["host"], "m4mac")
+        self.assertEqual(matches[0]["host"], "mac")
         self.assertEqual(remote_title_matches(parse_query("by:me compass"), [row]), [])
         self.assertEqual(remote_title_matches(parse_query("compass -decoder"), [row]), [])
 

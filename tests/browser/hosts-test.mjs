@@ -6,36 +6,36 @@ export async function checkHosts({ page, home, check, waitFor }) {
   const root = `${home}/.local/share/llm-switchboard/hosts`;
   fs.mkdirSync(root, { recursive: true });
   const id = "badc0ffe-0000-4000-8000-000000000001";
-  const row = { id, tool: "claude", title: "Mac private project", cwd: "/Users/jacobr/dev/mac-only",
+  const row = { id, tool: "claude", title: "Mac private project", cwd: "/Users/me/dev/mac-only",
     mtime: 100, size: 40, state: "closed", mutable: true };
   const state = { version: 1, rows: [row], last_seen: Date.now() / 1000 };
   // Atomic like JsonFile: the page polls this file, and a half-written one
   // would fail the request.
   const save = (data) => {
-    fs.writeFileSync(`${root}/.m4mac.tmp`, JSON.stringify(data));
-    fs.renameSync(`${root}/.m4mac.tmp`, `${root}/m4mac.json`);
+    fs.writeFileSync(`${root}/.mac.tmp`, JSON.stringify(data));
+    fs.renameSync(`${root}/.mac.tmp`, `${root}/mac.json`);
   };
   const write = () => save(state);
   write();
-  const card = `[data-card="m4mac:${id}"]`;
+  const card = `[data-card="mac:${id}"]`;
   check("Mac push appears alongside Pi sessions", await waitFor(() => page.$(card).then(Boolean)));
   check("Mac folder shows as ~ with the Mac tint; one session isn't in the folder menu", await page.$eval(card, (el) => {
     const link = el.querySelector(".dirlink");
     return link.textContent === "~/dev/mac-only" && link.classList.contains("dev-host")
-      && !document.querySelector('#dir option[value="m4mac:~/dev/mac-only"]')
+      && !document.querySelector('#dir option[value="mac:~/dev/mac-only"]')
       && document.querySelector('#dir optgroup[label="This Pi"] option') !== null;
   }));
   await page.click(`${card} .more`);
   check("Mac has resume command but no Peek, Terminal or keep switch", await page.$eval(card, (el) =>
     el.textContent.includes("Resume in a shell on the Mac") && el.textContent.includes("claude --resume")
     && !el.querySelector('[data-act="peek"], [data-act="screen"], .switch, [data-act="restart"]')));
-  check("host status uses latest push", await page.$eval("#summary", (el) => el.textContent.includes("m4mac: online")));
+  check("host status uses latest push", await page.$eval("#summary", (el) => el.textContent.includes("mac: online")));
   state.last_seen -= 36;
   write();
   check("stale Mac rows grey out with last-seen time", await waitFor(() => page.$eval(card, (el) =>
     el.classList.contains("host-offline") && el.textContent.includes("offline, last seen"))));
   check("offline Mac delete is disabled", await page.$eval(`${card} .x`, (el) => el.disabled));
-  const exchange = (extra = {}) => JSON.parse(execFileSync("python3", ["-m", "llm_switchboard", "host-exchange", "m4mac"], {
+  const exchange = (extra = {}) => JSON.parse(execFileSync("python3", ["-m", "llm_switchboard", "host-exchange", "mac"], {
     cwd: fileURLToPath(new URL("../../", import.meta.url)),
     env: { ...process.env, HOME: home, XDG_DATA_HOME: "", XDG_CONFIG_HOME: "" },
     input: JSON.stringify({ version: 1, rows: [row], ...extra }), encoding: "utf8",
@@ -60,7 +60,7 @@ export async function checkHosts({ page, home, check, waitFor }) {
   await page.$eval(`${card} input[id^="title-"]`, (el) => { el.value = "Expiry test"; });
   await page.click(rename);
   await waitFor(() => page.$eval("#host-actions", (el) => el.textContent.includes("rename: queued")));
-  const expiring = JSON.parse(fs.readFileSync(`${root}/m4mac.json`, "utf8"));
+  const expiring = JSON.parse(fs.readFileSync(`${root}/mac.json`, "utf8"));
   expiring.actions.at(-1).queued_at -= 61;
   save(expiring);
   check("undelivered Mac action expires", await waitFor(() => page.$eval("#host-actions", (el) => el.textContent.includes("rename: expired"))));

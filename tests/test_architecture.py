@@ -87,7 +87,7 @@ class LaunchContractTest(unittest.TestCase):
         repo = Path("/checkout/llm-switchboard")
         home = Path("/Users/example")
         identity = home / ".ssh" / "switchboard"
-        spec = job("vanpi", "m4mac", identity, home, "/python3", repo)
+        spec = job("pi", "mac", identity, home, "/python3", repo)
         self.assertEqual(spec["Label"], LABEL)
         self.assertEqual(spec["WorkingDirectory"], str(repo))
         self.assertEqual(spec["ProgramArguments"][:4], ["/python3", "-m", "llm_switchboard", "host-agent"])

@@ -24,6 +24,7 @@ Sharing the socket would let its supervisor close the real windows.
 | Module | Concern |
 | --- | --- |
 | `llm_switchboard/paths.py` | Shared locations, names, the managed-process env marker, default port |
+| `llm_switchboard/local_config.py` | This install's machine names from the untracked `local.env` (`local.env.example` lists them) |
 | `llm_switchboard/session_id.py` | Session id validation and short ids |
 | `llm_switchboard/store.py` | The enabled-session list (locked, atomic JSON) |
 | `llm_switchboard/transcripts.py` | Finding and summarizing `~/.claude/projects/*/*.jsonl` (cached); the record markers and the custom-title line |
@@ -134,7 +135,7 @@ cross-repo search oracles. See [verification notes](docs/backend-organization.md
 
 The user-facing guide is a page in the visual-guides repo
 (`~/dev/visual-guides/static/guides/llm-switchboard.html`, served at
-http://vanpi.lan:8791/guides/llm-switchboard.html; clone
+`LLM_SWITCHBOARD_GUIDE_URL` from `local.env`; clone
 `github.com/JakeIwen/visual-guides` if the checkout is missing). It describes
 the page, the keep-running states, the search syntax, the details panel, bulk
 actions, new sessions, delete/restore, the Codex differences, the CLI and
@@ -189,3 +190,7 @@ the report instead of leaving it silently stale.
   `transcript-search.sqlite3*`.
 - The page polls every 4s; only rewrite DOM through `setHTML` (skips
   unchanged markup) so clicks aren't lost to a redraw mid-click.
+- Machine names (the Pi's SSH alias, the Mac's name, Tailscale names and
+  addresses, LAN URLs) live only in the gitignored `local.env`, never in
+  tracked files, so the repo can be public. Tests use generic names (`pi`, `mac`,
+  `/Users/me`).

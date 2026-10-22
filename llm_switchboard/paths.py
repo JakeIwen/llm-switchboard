@@ -47,6 +47,9 @@ TMUX_SOCKET = os.environ.get("LLM_SWITCHBOARD_TMUX_SOCKET") or "llm-switchboard"
 TMUX_SESSION = "switchboard"
 TMUX_CONF = Path(__file__).resolve().parent / "tmux.conf"
 
+# This install's machine names, kept out of git (local_config.py, local.env.example).
+LOCAL_ENV = Path(__file__).resolve().parents[1] / "local.env"
+
 # Set in every pane we launch, so a claude process can be traced back to us
 # through /proc/<pid>/environ.
 MANAGED_ENV_VAR = "LLM_SWITCHBOARD_SESSION"

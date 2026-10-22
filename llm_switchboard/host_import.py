@@ -11,7 +11,7 @@ from .codex_client import CodexClient
 from .codex_threads import CodexCatalog, codex_names
 from .folders import existing_folder
 from .host_actions_protocol import MAX_UPLOAD_BYTES
-from .host_protocol import folder
+from .host_protocol import MAC_HOME, folder
 from .names import Names, claude_names
 from .paths import HOME, PROJECTS_DIR
 from .relocate import fork, project_dir
@@ -20,11 +20,11 @@ from .transcripts import TranscriptIndex
 
 
 def mapped_folder(cwd: str, pi_home: Path = HOME) -> str:
-    source = Path(folder(cwd))
-    try:
-        rest = source.relative_to("/Users/jacobr")
-    except ValueError as e:
-        raise ValueError("Fork onto Pi only maps /Users/jacobr/<folder> to the Pi home folder.") from e
+    source = folder(cwd)
+    home = MAC_HOME.match(source)
+    if not home:
+        raise ValueError("Fork onto Pi only maps a folder in the Mac home folder to the Pi home folder.")
+    rest = Path(source[home.end():].lstrip("/"))
     if not rest.parts:
         raise ValueError("Choose a session in a working folder, not the Mac home folder.")
     target = Path(pi_home) / rest

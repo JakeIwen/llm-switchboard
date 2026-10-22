@@ -11,8 +11,9 @@ the Claude app or claude.ai/code.
 The screenshot uses generated sample sessions; it contains no transcript or
 account data.
 
-Illustrated guide: http://vanpi.lan:8791/guides/llm-switchboard.html (source in
-`JakeIwen/visual-guides`; keep it current with any change in behaviour, see AGENTS.md).
+Illustrated guide: `static/guides/llm-switchboard.html` in `JakeIwen/visual-guides`
+(this install's URL is `LLM_SWITCHBOARD_GUIDE_URL` in `local.env`); keep it current
+with any change in behaviour, see AGENTS.md.
 
 ## How it works
 
@@ -105,13 +106,14 @@ API is marked experimental, so a Codex update can break this half.
 
 ### Mac sessions
 
-The Mac's (`m4mac`) Claude Code and Codex sessions show beside the Pi's,
+The Mac's Claude Code and Codex sessions show beside the Pi's,
 tagged **Mac**, while the Mac is awake. The Mac runs this same package as a
 launchd job (`host-agent`) that opens no port: every 10 s it computes its own
 rows and pushes them to the Pi over SSH with a dedicated key, which the Pi's
 `~/.ssh/authorized_keys` restricts to one command
-(`restrict,command="…/bin/llm-switchboard host-exchange m4mac"`). The Pi has
-no way into the Mac. The header shows `m4mac: online`, or `offline, last seen
+(`restrict,command="…/bin/llm-switchboard host-exchange mac"`, where `mac` is the
+Mac's name; see Local names). The Pi has
+no way into the Mac. The header shows `mac: online`, or `offline, last seen
 HH:MM` after 35 s without a push, and the Mac's rows grey out.
 
 - Rows carry only ids, titles, folder, times, size and open/busy status.
@@ -129,20 +131,21 @@ HH:MM` after 35 s without a push, and the Mac's rows grey out.
 - **Fork onto the Pi…** (Claude only) is the one way a transcript leaves the
   Mac: the Mac posts a notification, logs it, and uploads that one transcript
   (at most 16 MiB, 10 per hour). It lands as a new, not-running Pi session in
-  `/home/pi/<rest>` for a Mac folder `/Users/jacobr/<rest>`, which must
-  already exist on the Pi.
+  `~/<rest>` on the Pi for a Mac folder `~/<rest>` (under `/Users/<name>`), which
+  must already exist on the Pi.
 - Mac Codex sessions need the Mac's Codex daemon for actions; without it they
   are listed from disk, read-only.
 - The resume command to copy uses plain `claude --resume` / `codex resume`.
 - **Empty Pi trash now** leaves the Mac's trash alone.
 
 Setting up the Mac: clone this repo there and run `scripts/setup-mac.sh`
-(Homebrew Python 3.11+). It makes the key `~/.ssh/llm-switchboard-m4mac`,
-installs it with `ssh vanpi …/llm-switchboard host-authorize m4mac < key.pub`
+(Homebrew Python 3.11+). It reads the machine names from `local.env`, makes
+the key `~/.ssh/llm-switchboard-<mac>`, installs it with
+`ssh <pi> …/llm-switchboard host-authorize <mac> < key.pub`
 over the normal SSH login, does one push, and loads the launchd job
 `dev.llm-switchboard.host-agent` (logs in `~/Library/Logs/llm-switchboard/`).
 The Pi keeps what the Mac pushed, and the action queue, in
-`~/.local/share/llm-switchboard/hosts/m4mac.json`.
+`~/.local/share/llm-switchboard/hosts/<mac>.json`.
 
 ### Selecting several
 
@@ -198,8 +201,17 @@ find the same sessions.
 loginctl enable-linger "$USER"   # once, so user services start at boot
 ```
 
-Picker: `http://vanpi.tail059b13.ts.net:8777` (or `http://100.82.91.76:8777`) over
-Tailscale, or `http://127.0.0.1:8777` on the Pi. Not from the van LAN: `serve`
+### Local names
+
+Machine names stay out of git, in the checkout's `local.env` (gitignored; copy
+`local.env.example`). `LLM_SWITCHBOARD_PI_SSH` is the SSH alias the Mac uses for
+the Pi (default `pi`) and `LLM_SWITCHBOARD_MAC_NAME` the Mac's name on the page
+(default `mac`); they are the defaults for `host-agent`/`host-install` and
+`scripts/setup-mac.sh`. An environment variable of the same name overrides the
+file. The other entries (picker and guide URLs) are notes only.
+
+Picker: `http://<pi>.<tailnet>.ts.net:8777` (or the Pi's `100.x` address; this
+install's are in `local.env`) over Tailscale, or `http://127.0.0.1:8777` on the Pi. Not from the van LAN: `serve`
 listens only on localhost and the Tailscale address, and answers only localhost
 and Tailscale peers. It binds the Tailscale address once Tailscale is up, so it
 can start first at boot. `serve --host ADDR` (repeatable; `tailscale` stands for
@@ -221,10 +233,10 @@ llm-switchboard fork c96934f7 "try another approach" [--folder ~/dev] [--keep]
 llm-switchboard search '"some phrase" by:me tool:codex' [--limit 20] [--session codex:019f] [--json]
 llm-switchboard index                # update the transcript index now
 llm-switchboard stop-all             # kill the tmux server
-llm-switchboard host-authorize m4mac < key.pub   # install a Mac's restricted key (run over SSH)
-llm-switchboard host-exchange m4mac  # the restricted key's forced command (JSON on stdin)
+llm-switchboard host-authorize mac < key.pub   # install a Mac's restricted key (run over SSH)
+llm-switchboard host-exchange mac  # the restricted key's forced command (JSON on stdin)
 # On the Mac (python3 -m llm_switchboard …):
-#   host-agent [--once] [--pi vanpi] [--host-name m4mac] [--identity ~/.ssh/llm-switchboard-m4mac]
+#   host-agent [--once] [--pi PI] [--host-name MAC] [--identity ~/.ssh/llm-switchboard-MAC]
 #   host-install [--unload]           # write and load (or unload) the launchd job
 journalctl --user -u llm-switchboard -f
 ```

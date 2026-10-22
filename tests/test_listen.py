@@ -21,7 +21,7 @@ class FakeServer:
 
 class AllowedPeerTest(unittest.TestCase):
     def test_localhost_and_tailnet_only(self):
-        for ip in ["127.0.0.1", "::1", "100.82.91.76", "100.64.0.1", "fd7a:115c:a1e0::401:430a", "::ffff:100.101.1.2"]:
+        for ip in ["127.0.0.1", "::1", "100.100.1.2", "100.64.0.1", "fd7a:115c:a1e0::401:430a", "::ffff:100.101.1.2"]:
             self.assertTrue(allowed_peer(ip), ip)
         for ip in ["192.168.6.50", "10.0.0.2", "100.128.0.1", "8.8.8.8", "fe80::1", "::ffff:192.168.6.50", "junk"]:
             self.assertFalse(allowed_peer(ip), ip)
@@ -50,20 +50,20 @@ class ListenersTest(unittest.TestCase):
         self.fail("timed out")
 
     def test_binds_tailscale_once_it_has_an_address(self):
-        answers = [[], [], ["100.82.91.76", "fd7a::1"]]
+        answers = [[], [], ["100.100.1.2", "fd7a::1"]]
         listeners, thread, made = self.run_listeners(["127.0.0.1", TAILSCALE], lambda: answers.pop(0) if answers else [])
         self.wait_for(lambda: len(made) == 3)
-        self.assertEqual([s.host for s in made], ["127.0.0.1", "100.82.91.76", "fd7a::1"])
+        self.assertEqual([s.host for s in made], ["127.0.0.1", "100.100.1.2", "fd7a::1"])
         listeners.shutdown()
         thread.join(2)
         self.assertFalse(thread.is_alive())
         self.assertTrue(all(s.closed for s in made))
 
     def test_retries_until_an_address_binds(self):
-        answers = [["bad"], ["bad", "100.82.91.76"]]
+        answers = [["bad"], ["bad", "100.100.1.2"]]
         listeners, thread, made = self.run_listeners([TAILSCALE], lambda: answers.pop(0) if answers else [])
         self.wait_for(lambda: len(made) == 1)
-        self.assertEqual(made[0].host, "100.82.91.76")
+        self.assertEqual(made[0].host, "100.100.1.2")
         listeners.shutdown()
         thread.join(2)
 

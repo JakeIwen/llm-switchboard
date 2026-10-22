@@ -25,6 +25,6 @@ test("a folder with one session, or ~/ais and below, doesn't", () => {
 test("the same folder on two machines gets two keys and two tints", () => {
   assert.equal(dirKey("", "~/dev/obd-things"), "~/dev/obd-things");
   assert.equal(dirKey(undefined, "~/dev/obd-things"), "~/dev/obd-things");
-  assert.equal(dirKey("m4mac", "~/dev/obd-things"), "m4mac:~/dev/obd-things");
-  assert.notEqual(deviceClass(""), deviceClass("m4mac"));
+  assert.equal(dirKey("mac", "~/dev/obd-things"), "mac:~/dev/obd-things");
+  assert.notEqual(deviceClass(""), deviceClass("mac"));
 });

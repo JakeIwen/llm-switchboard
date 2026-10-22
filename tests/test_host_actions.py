@@ -28,7 +28,7 @@ from test_hosts import sample
 
 def queued(kind="rename", body=None, sid=SID, **changes):
     return {"id": str(uuid.uuid4()), "session_id": sid, "tool": "claude", "action": kind,
-            "source_cwd": "/Users/jacobr/dev/a",
+            "source_cwd": "/Users/me/dev/a",
             "body": body if body is not None else {"title": "Renamed"}, "ttl": 60, **changes}
 
 
@@ -51,28 +51,28 @@ class HostQueueTests(unittest.TestCase):
         self.importer = Mock()
         self.hosts = Hosts(self.root / "hosts", self.clock, self.importer)
         self.payload = {"version": 1, "rows": [sample()]}
-        self.hosts.exchange("m4mac", self.payload)
+        self.hosts.exchange("mac", self.payload)
 
     def test_states_ttl_and_no_redelivery(self):
-        q = self.hosts.queue("m4mac", SID, "rename", {"title": "Renamed"})
+        q = self.hosts.queue("mac", SID, "rename", {"title": "Renamed"})
         self.assertEqual(q["state"], "queued")
         self.clock.t += 20
-        received = self.hosts.exchange("m4mac", self.payload)["actions"]
+        received = self.hosts.exchange("mac", self.payload)["actions"]
         self.assertEqual(received[0]["ttl"], 40)
         self.assertEqual(self.hosts.snapshot()["actions"][0]["state"], "sent")
-        self.assertEqual(self.hosts.exchange("m4mac", self.payload)["actions"], [])
-        reply = self.hosts.exchange("m4mac", {**self.payload, "results": [{"id": q["action_id"], "ok": True, "message": "done"}]})
+        self.assertEqual(self.hosts.exchange("mac", self.payload)["actions"], [])
+        reply = self.hosts.exchange("mac", {**self.payload, "results": [{"id": q["action_id"], "ok": True, "message": "done"}]})
         self.assertEqual(reply["acknowledged"], [q["action_id"]])
         self.assertEqual(self.hosts.snapshot()["actions"][0]["state"], "done")
-        self.hosts.queue("m4mac", SID, "delete", {})
+        self.hosts.queue("mac", SID, "delete", {})
         self.clock.t += 60
-        self.assertEqual(self.hosts.exchange("m4mac", self.payload)["actions"], [])
+        self.assertEqual(self.hosts.exchange("mac", self.payload)["actions"], [])
         self.assertEqual(self.hosts.snapshot()["actions"][-1]["state"], "expired")
         self.assertIn("nothing ran", self.hosts.snapshot()["actions"][-1]["message"])
 
     def test_sent_without_result_expires_unknown(self):
-        self.hosts.queue("m4mac", SID, "delete", {})
-        self.hosts.exchange("m4mac", self.payload)
+        self.hosts.queue("mac", SID, "delete", {})
+        self.hosts.exchange("mac", self.payload)
         self.clock.t += 60
         state = self.hosts.snapshot()["actions"][0]
         self.assertEqual(state["state"], "expired")
@@ -81,34 +81,34 @@ class HostQueueTests(unittest.TestCase):
     def test_offline_list_only_and_allow_list(self):
         for kind, body in [("new", {}), ("keep", {}), ("restart", {}), ("fork", {"title": "new", "cwd": "/tmp", "keep": True})]:
             with self.assertRaises(ValueError):
-                self.hosts.queue("m4mac", SID, kind, body)
+                self.hosts.queue("mac", SID, kind, body)
         self.clock.t += 35
         with self.assertRaises(Conflict):
-            self.hosts.queue("m4mac", SID, "delete", {})
-        self.hosts.exchange("m4mac", {"version": 1, "rows": [{**sample(), "tool": "codex", "mutable": False}]})
+            self.hosts.queue("mac", SID, "delete", {})
+        self.hosts.exchange("mac", {"version": 1, "rows": [{**sample(), "tool": "codex", "mutable": False}]})
         with self.assertRaises(Conflict):
-            self.hosts.queue("m4mac", SID, "rename", {"title": "x"})
+            self.hosts.queue("mac", SID, "rename", {"title": "x"})
 
     def test_upload_only_while_waiting_and_correlated(self):
-        self.assertEqual(self.hosts.input_limit("m4mac"), MAX_METADATA_BYTES)
-        q = self.hosts.queue("m4mac", SID, "fork-pi", {"title": "Copy"})
-        self.assertEqual(self.hosts.input_limit("m4mac"), MAX_METADATA_BYTES)
-        self.hosts.exchange("m4mac", self.payload)
-        self.assertEqual(self.hosts.input_limit("m4mac"), MAX_EXCHANGE_BYTES)
+        self.assertEqual(self.hosts.input_limit("mac"), MAX_METADATA_BYTES)
+        q = self.hosts.queue("mac", SID, "fork-pi", {"title": "Copy"})
+        self.assertEqual(self.hosts.input_limit("mac"), MAX_METADATA_BYTES)
+        self.hosts.exchange("mac", self.payload)
+        self.assertEqual(self.hosts.input_limit("mac"), MAX_EXCHANGE_BYTES)
         self.importer.receive.return_value = "Copied, not running"
-        self.hosts.exchange("m4mac", {**self.payload, "results": [{"id": q["action_id"], "ok": True, "message": ""}],
+        self.hosts.exchange("mac", {**self.payload, "results": [{"id": q["action_id"], "ok": True, "message": ""}],
                                       "uploads": [{"action_id": q["action_id"], "transcript": ""}]})
         self.importer.receive.assert_called_once()
         self.assertEqual(self.hosts.snapshot()["actions"][0]["state"], "done")
-        self.assertEqual(self.hosts.input_limit("m4mac"), MAX_METADATA_BYTES)
+        self.assertEqual(self.hosts.input_limit("mac"), MAX_METADATA_BYTES)
         with self.assertRaises(ValueError):
-            self.hosts.exchange("m4mac", {**self.payload, "uploads": [{"action_id": str(uuid.uuid4()), "transcript": ""}]})
+            self.hosts.exchange("mac", {**self.payload, "uploads": [{"action_id": str(uuid.uuid4()), "transcript": ""}]})
 
     def test_import_refusal_is_visible_failure(self):
-        q = self.hosts.queue("m4mac", SID, "fork-pi", {"title": "Copy"})
-        self.hosts.exchange("m4mac", self.payload)
+        q = self.hosts.queue("mac", SID, "fork-pi", {"title": "Copy"})
+        self.hosts.exchange("mac", self.payload)
         self.importer.receive.side_effect = ValueError("Mapped folder vanished")
-        self.hosts.exchange("m4mac", {**self.payload, "results": [{"id": q["action_id"], "ok": True, "message": ""}],
+        self.hosts.exchange("mac", {**self.payload, "results": [{"id": q["action_id"], "ok": True, "message": ""}],
                                       "uploads": [{"action_id": q["action_id"], "transcript": ""}]})
         result = self.hosts.snapshot()["actions"][0]
         self.assertEqual(result["state"], "failed")
@@ -117,16 +117,16 @@ class HostQueueTests(unittest.TestCase):
     def test_result_for_a_forgotten_action_is_acknowledged_and_the_push_lands(self):
         forgotten = str(uuid.uuid4())
         renamed = {**sample(), "title": "Renamed on the Mac"}
-        reply = self.hosts.exchange("m4mac", {**self.payload, "rows": [renamed],
+        reply = self.hosts.exchange("mac", {**self.payload, "rows": [renamed],
                                               "results": [{"id": forgotten, "ok": True, "message": "done"}]})
         self.assertEqual(reply["acknowledged"], [forgotten])
         self.assertEqual(self.hosts.snapshot()["sessions"][0]["title"], "Renamed on the Mac")
 
     def test_prevalidate_all_results_before_import(self):
-        q = self.hosts.queue("m4mac", SID, "fork-pi", {"title": "Copy"})
-        self.hosts.exchange("m4mac", self.payload)
+        q = self.hosts.queue("mac", SID, "fork-pi", {"title": "Copy"})
+        self.hosts.exchange("mac", self.payload)
         with self.assertRaises(ValueError):
-            self.hosts.exchange("m4mac", {**self.payload, "results": [
+            self.hosts.exchange("mac", {**self.payload, "results": [
                 {"id": q["action_id"], "ok": True, "message": ""}, {"id": q["action_id"], "ok": False, "message": ""}],
                 "uploads": [{"action_id": q["action_id"], "transcript": ""}]})
         self.importer.receive.assert_not_called()
@@ -230,11 +230,13 @@ class MacActionsTests(unittest.TestCase):
         pi_projects = pi_home / "projects"
         importer = HostImporter(pi_projects, pi_home, Names())
         with self.assertRaisesRegex(ValueError, "does not exist"):
-            importer.check("/Users/jacobr/missing", "Copy")
-        with self.assertRaises(ValueError):
-            mapped_folder("/Users/other/dev/a", pi_home)
-        source = write_transcript(self.root / "export", "/Users/jacobr/dev/a")
-        item = {"session_id": SID, "cwd": "/Users/jacobr/dev/a", "body": {"title": "Pi copy"}}
+            importer.check("/Users/me/missing", "Copy")
+        self.assertEqual(mapped_folder("/Users/other/dev/a", pi_home), str(target))
+        for outside in ("/Users/Shared/dev/a", "/private/tmp/dev/a", "/Users/me"):
+            with self.assertRaises(ValueError):
+                mapped_folder(outside, pi_home)
+        source = write_transcript(self.root / "export", "/Users/me/dev/a")
+        item = {"session_id": SID, "cwd": "/Users/me/dev/a", "body": {"title": "Pi copy"}}
         message = importer.receive(item, {"transcript": base64.b64encode(source.read_bytes()).decode()})
         self.assertIn("not kept running", message)
         copy = TranscriptIndex(pi_projects).all()[0]

@@ -7,6 +7,7 @@ import subprocess
 import sys
 
 from .host_protocol import host_name
+from . import local_config
 
 
 def add_parsers(sub) -> None:
@@ -14,11 +15,13 @@ def add_parsers(sub) -> None:
         parser = sub.add_parser(name, help="exchange host metadata over SSH" if name == "host-exchange" else "authorize a dedicated host public key from stdin")
         parser.add_argument("host", type=host_name)
         parser.set_defaults(func=dispatch, host_command=name)
+    local = local_config.load()
+    pi, mac = local[local_config.PI_SSH], local[local_config.MAC_NAME]
     for name in ("host-agent", "host-install"):
         parser = sub.add_parser(name, help="publish Mac sessions outward" if name == "host-agent" else "install the Mac launchd publisher")
-        parser.add_argument("--pi", default="vanpi", help="existing SSH host alias (default vanpi)")
-        parser.add_argument("--host-name", default="m4mac", type=host_name)
-        parser.add_argument("--identity", type=Path, default=Path.home() / ".ssh" / "llm-switchboard-m4mac")
+        parser.add_argument("--pi", default=pi, help=f"existing SSH host alias (default {pi}, from local.env)")
+        parser.add_argument("--host-name", default=mac, type=host_name, help=f"default {mac}, from local.env")
+        parser.add_argument("--identity", type=Path, help="default ~/.ssh/llm-switchboard-<host-name>")
         if name == "host-agent":
             parser.add_argument("--once", action="store_true", help="publish once and exit")
         else:
@@ -34,6 +37,8 @@ def main(argv=None) -> int:
 
 
 def dispatch(args) -> int:
+    if args.host_command in ("host-agent", "host-install") and args.identity is None:
+        args.identity = Path.home() / ".ssh" / f"llm-switchboard-{args.host_name}"
     try:
         if args.host_command == "host-exchange":
             from .host_exchange import exchange
