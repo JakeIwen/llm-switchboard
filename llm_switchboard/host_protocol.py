@@ -14,6 +14,8 @@ OFFLINE_AFTER = 35
 MAX_ROWS = 5000
 MAX_METADATA_BYTES = 4 * 1024 * 1024
 HOST_PATTERN = r"[a-z][a-z0-9-]{0,31}"
+# A Mac home folder; /Users/Shared is nobody's.
+MAC_HOME = re.compile(r"^/Users/(?!Shared(?:/|$))[^/]+(?=/|$)")
 
 
 class SessionState(StrEnum):

@@ -2,11 +2,10 @@
 
 from pathlib import Path
 import json
-import re
 import shlex
 import time
 
-from .host_protocol import MAX_METADATA_BYTES, OFFLINE_AFTER, VERSION, SessionState, host_name, push
+from .host_protocol import MAC_HOME, MAX_METADATA_BYTES, OFFLINE_AFTER, VERSION, SessionState, host_name, push
 from .host_actions_protocol import MAX_EXCHANGE_BYTES, ActionKind, ActionState, results, trash_items
 from . import host_queue
 from .json_file import JsonFile
@@ -94,13 +93,9 @@ class Hosts:
         return {"hosts": hosts, "sessions": rows, "trash": trash, "actions": actions}
 
 
-# A Mac home folder; /Users/Shared is nobody's.
-_MAC_HOME = re.compile(r"^/Users/(?!Shared(?:/|$))[^/]+(?=/|$)")
-
-
 def host_display_path(cwd: str) -> str:
     """A host's folder with its home shortened to ~, as the Pi's own are (transcripts.display_path)."""
-    return _MAC_HOME.sub("~", cwd, count=1)
+    return MAC_HOME.sub("~", cwd, count=1)
 
 
 def page_row(row: dict, host: str, online: bool, last_seen: float) -> dict:
