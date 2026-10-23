@@ -22,8 +22,8 @@ export async function checkHosts({ page, home, check, waitFor }) {
   check("Mac folder shows as ~ with the Mac tint; one session isn't in the folder menu", await page.$eval(card, (el) => {
     const link = el.querySelector(".dirlink");
     return link.textContent === "~/dev/mac-only" && link.classList.contains("dev-host")
-      && !document.querySelector('#dir option[value="mac:~/dev/mac-only"]')
-      && document.querySelector('#dir optgroup[label="This Pi"] option') !== null;
+      && !document.querySelector('#folder-options input[data-folder="mac:~/dev/mac-only"]')
+      && document.querySelector('#folder-options .folder-group .dev-local') !== null;
   }));
   await page.click(`${card} .more`);
   check("Mac has resume command but no Peek, Terminal or keep switch", await page.$eval(card, (el) =>

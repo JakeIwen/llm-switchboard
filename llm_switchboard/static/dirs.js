@@ -6,6 +6,7 @@
 
 export const CHIP_DEPTH = 2;
 export const MIN_SESSIONS = 2;
+export const UNKNOWN_DIR = "(unknown folder)";
 // Folders never listed, with everything under them.
 const NO_CHIP = ["~/ais"];
 // Both the Pi's and the Mac's home folders arrive shortened to ~
@@ -23,6 +24,42 @@ export function listed(project, sessions) {
 // A folder's key in the menu and the dir filter. Another machine's folders carry
 // its name, so the Pi's ~/dev/x and the Mac's ~/dev/x stay apart.
 export const dirKey = (host, project) => host ? `${host}:${project}` : project;
+
+// Count the unfiltered catalogue, so search and status changes do not change
+// which folders can be chosen. Selected exceptions stay removable without
+// inflating the total for the default choices.
+export function folderChoices(sessions, selected = []) {
+  const picked = new Set(selected);
+  const folders = new Map();
+  for (const session of sessions) {
+    const host = session.host || "";
+    const project = session.project || UNKNOWN_DIR;
+    const key = dirKey(host, project);
+    const folder = folders.get(key) || { key, host, project, count: 0, defaultListed: false };
+    folder.count++;
+    folders.set(key, folder);
+  }
+  let total = 0;
+  for (const folder of folders.values()) {
+    folder.defaultListed = listed(folder.project, folder.count);
+    if (folder.defaultListed) total += folder.count;
+  }
+  for (const key of picked) {
+    if (folders.has(key)) continue;
+    // Host names in the exchange are lowercase letters, digits and hyphens.
+    const remote = /^([a-z0-9-]{1,32}):(.*)$/.exec(key);
+    folders.set(key, {
+      key, host: remote ? remote[1] : "", project: remote ? remote[2] : key,
+      count: 0, defaultListed: false,
+    });
+  }
+  const choices = [...folders.values()].filter((folder) => folder.defaultListed || picked.has(folder.key));
+  choices.sort((a, b) => (a.host !== "") - (b.host !== "")
+    || a.host.localeCompare(b.host)
+    || a.project.localeCompare(b.project, undefined, { sensitivity: "base", numeric: true })
+    || a.project.localeCompare(b.project));
+  return { choices, total };
+}
 
 // The class that tints a folder path by machine, and the tooltip naming it.
 export const deviceClass = (host) => host ? "dev-host" : "dev-local";

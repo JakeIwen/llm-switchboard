@@ -14,6 +14,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const browser = await puppeteer.launch({ executablePath: "/usr/bin/chromium", headless: true, args: ["--no-sandbox", "--disable-gpu"], timeout: 90000 });
 const page = await browser.newPage();
+page.setDefaultTimeout(10000);
 const errors = [];
 page.on("pageerror", (e) => errors.push(e.message));
 // A 409 is how the server refuses an action the test expects to be refused.
@@ -53,6 +54,7 @@ const waitFor = async (fn, ms = 8000) => {
 };
 
 check("Codex sessions are listed too", await waitFor(async () => (await count()) === 12), String(await count()));
+await (await import("./folders-test.mjs")).checkFolders({ page, check, waitFor, shots: SHOTS });
 // The checks up to the Codex section are about Claude sessions.
 await page.click("#t-claude"); await sleep(50);
 check("loads all sessions", (await count()) === 10, String(await count()));
@@ -208,13 +210,16 @@ const gammaDir = `${HOME}/.claude/projects/${`${HOME}/dev/gamma`.replace(/[^a-zA
 check("transcripts live under the gamma project folder", fs.existsSync(gammaDir) && fs.readdirSync(gammaDir).length === moving);
 await search("");
 await page.$eval("#q", (el) => el.blur());
-check("gamma folder appears in the folder menu", await waitFor(() => page.$$eval("#dir option", (els) => els.some((e) => e.textContent.includes("dev/gamma")))));
-await page.select("#dir", "~/dev/gamma");
+check("gamma folder appears in the folder menu", await waitFor(() => page.$$eval("#folder-options input", (els) => els.some((e) => e.dataset.folder === "~/dev/gamma"))));
+await page.click("#dir");
+await page.click('[data-folder="~/dev/gamma"]');
+await page.click("#folder-done");
 check("picking it shows only its sessions", await waitFor(() => page.$$eval("#list .card .dirlink", (els) =>
   els.length === 3 && els.every((e) => e.textContent === "~/dev/gamma"))));
-check("the picked menu is marked and tinted", await page.$eval("#dir", (el) => el.matches(".on.dev-local")));
-await page.select("#dir", "");
-await page.$eval("#dir", (el) => el.blur());
+check("the picked filter is marked and its chip tinted", await page.$eval("#dir", (el) => el.matches(".on"))
+  && Boolean(await page.$("#folder-chips .dev-local")));
+await page.click("#folder-clear");
+await page.$eval("#folder-clear", (el) => el.blur());
 
 // --- single move from the details panel
 await page.click("#list .card .more"); await sleep(50);

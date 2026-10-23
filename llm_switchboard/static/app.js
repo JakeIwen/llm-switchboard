@@ -1,6 +1,6 @@
 import { hostSummary, hostAction, actionPath, actionSummary, hasRemote, trashHost, restoreLock } from "./hosts.js";
 import { compileQuery } from "./search.js";
-import { deviceClass, deviceTitle, dirKey, listed } from "./dirs.js";
+import { deviceClass, deviceTitle, dirKey, UNKNOWN_DIR } from "./dirs.js";
 import { initFullText } from "./fulltext.js";
 import { DEFAULT_SORT, SORTS, sortRows } from "./sort.js";
 import { Selection } from "./selection.js";
@@ -10,8 +10,8 @@ import { copyText, summaryBody, toast } from "./feedback.js";
 import { age, esc, nowS, plural } from "./format.js";
 import { BulkActions, splitBlocked as partitionBlocked } from "./session-actions.js";
 import { createSessionCards, sessionBlockedReason } from "./session-cards.js";
+import { FolderFilter } from "./folder-filter.js";
 
-const UNKNOWN_DIR = "(unknown folder)";
 // Supervisor states that mean a new session didn't come up by itself.
 const TROUBLE = new Set(["attention", "backoff", "error", "missing"]);
 const TABS = { "f-all": "all", "f-on": "on", "f-open": "open" };
@@ -24,7 +24,7 @@ const dirOf = (s) => dirKey(s.host, s.project || UNKNOWN_DIR);
 
 // ---- state -----------------------------------------------------------------
 
-let data = null, trash = [], tab = "all", tool = "all", dir = null, query = compileQuery("");
+let data = null, trash = [], tab = "all", tool = "all", query = compileQuery("");
 let fulltext = null;
 let order = [];            // ids of the rows on screen, in order
 let bulkProgress = "";     // non-empty while a bulk action runs
@@ -35,9 +35,9 @@ const watching = new Map();  // id -> title of sessions created here, until they
 // (opening it redraws the panel's fields).
 let menu = null;
 const sessionCards = createSessionCards(sel, expanded, screens, peeks, dirOf, () => menu);
-// The chosen folder is a per-browser convenience; storage can be unavailable.
+// Browser preferences are optional; storage can be unavailable.
 let sort = DEFAULT_SORT;
-try { dir = localStorage.getItem("switchboard.dir"); tool = localStorage.getItem("switchboard.tool") || "all"; sort = localStorage.getItem("switchboard.sort") || sort; } catch {}
+try { tool = localStorage.getItem("switchboard.tool") || "all"; sort = localStorage.getItem("switchboard.sort") || sort; } catch {}
 
 const byId = (id) => data.sessions.find((s) => s.id === id);
 const bulkActions = new BulkActions({
@@ -60,6 +60,10 @@ function setHTML(el, html) {
   lastHTML.set(el, html);
 }
 
+let folderStorage;
+try { folderStorage = localStorage; } catch {}
+const folderFilter = new FolderFilter({ setHTML, onChange: render, storage: folderStorage });
+
 async function refresh() {
   try {
     [data, { trash }] = await Promise.all([api("/api/sessions"), api("/api/trash")]);
@@ -71,7 +75,7 @@ async function refresh() {
   }
 }
 
-// Every filter except the folder one, so folder counts follow the search and tab.
+// Search, tool and status filters intersect the selected folders.
 function matches(s, now) {
   // The tool switch is hidden (and ignored) while Codex support is off.
   if (tool !== "all" && (data.codex?.enabled || data.sessions.some((r) => r.tool === "codex")) && s.tool !== tool) return false;
@@ -80,46 +84,7 @@ function matches(s, now) {
   return query.test(s, now);
 }
 
-function setDir(d) {
-  dir = d;
-  try { d === null ? localStorage.removeItem("switchboard.dir") : localStorage.setItem("switchboard.dir", d); } catch {}
-  render();
-}
-
 // ---- rendering -------------------------------------------------------------
-
-function renderDirs(now) {
-  // The folder menu: one group per machine, folders A–Z; which ones are listed is up to dirs.js.
-  const dirs = new Map();
-  for (const s of data.sessions) {
-    const d = dirs.get(dirOf(s)) || { n: 0, all: 0, host: s.host || "", project: s.project || UNKNOWN_DIR };
-    d.all++;
-    if (matches(s, now)) d.n++;
-    dirs.set(dirOf(s), d);
-  }
-  const picked = dirs.get(dir);
-  const pick = $("dir");
-  pick.classList.toggle("on", dir !== null);
-  pick.classList.remove("dev-local", "dev-host");
-  if (picked) pick.classList.add(deviceClass(picked.host));
-  pick.title = picked ? `${deviceTitle(picked.host)}; show only this folder` : "Show only one folder";
-  // Rewriting the options would close the menu under someone choosing.
-  if (document.activeElement === pick) return;
-  const option = (d, label, n) => `<option value="${esc(d)}" ${d === (dir ?? "") ? "selected" : ""}>${esc(label)} (${n})</option>`;
-  const groups = new Map();
-  for (const [d, v] of [...dirs].sort((a, b) => byFolder(a[1].project, b[1].project))) {
-    // The selected folder stays listed, so the menu can show it and switch it off.
-    if (!listed(v.project, v.all) && d !== dir) continue;
-    if (!groups.has(v.host)) groups.set(v.host, []);
-    groups.get(v.host).push(option(d, v.project, v.n));
-  }
-  // A selected folder no row has any more, under no machine.
-  const gone = dir !== null && !picked ? option(dir, dir, 0) : "";
-  const machines = [...groups.keys()].sort((a, b) => (a !== "") - (b !== "") || a.localeCompare(b));
-  setHTML(pick, option("", "All folders", data.sessions.filter((s) => matches(s, now)).length) + gone
-    + machines.map((h) => `<optgroup label="${esc(h ? h : "This Pi")}">${groups.get(h).join("")}</optgroup>`).join(""));
-}
-const byFolder = (a, b) => a.localeCompare(b, undefined, { sensitivity: "base", numeric: true });
 
 const elsewhereNote = sessionBlockedReason;
 
@@ -155,7 +120,7 @@ function render() {
   // Don't redraw under someone typing in a session's field.
   if (document.activeElement && document.activeElement.matches("#list input[type=text]")) return;
   const now = nowS();
-  const rows = sortRows(data.sessions.filter((s) => matches(s, now) && (dir === null || dirOf(s) === dir)), sort);
+  const rows = sortRows(data.sessions.filter((s) => matches(s, now) && folderFilter.matches(dirOf(s))), sort);
   order = rows.map((s) => s.id);
   sel.prune(order);
   const on = data.sessions.filter((s) => s.enabled);
@@ -164,7 +129,7 @@ function render() {
   $("tools").hidden = !data.codex?.enabled && !data.sessions.some((s) => s.tool === "codex");
   $("qerr").textContent = [...query.errors, data.codex?.error && `Codex sessions unavailable: ${data.codex.error}`].filter(Boolean).join(" · ");
   setHTML($("host-actions"), actionSummary(data.host_actions, data.now));
-  renderDirs(now);
+  folderFilter.render(data.sessions);
   setHTML($("list"), rows.length ? rows.map(card).join("") : `<div class="empty">No sessions match.</div>`);
   renderTrash();
   renderBulkbar();
@@ -241,7 +206,7 @@ async function newSession() {
   if (!usable.length) return confirmDialog({ title: "No folder is available", body: notes, confirm: "OK" });
   const fields = [
     { name: "cwd", label: "Folder", kind: "select",
-      value: usable.find((f) => f.project === dir)?.cwd,
+      value: usable.find((f) => f.project === folderFilter.single)?.cwd,
       options: usable.map((f) => ({ value: f.cwd, label: `${f.project}  (${plural(f.sessions, "session")})` })) },
     { name: "name", label: "Name", placeholder: "What is this session for?", required: true, autofocus: true, maxlength: 120 },
   ];
@@ -450,7 +415,7 @@ $("list").addEventListener("mousedown", (ev) => {
 
 $("list").addEventListener("click", (ev) => {
   const link = ev.target.closest(".dirlink");
-  if (link) return setDir(link.dataset.dir === dir ? null : link.dataset.dir);
+  if (link) return folderFilter.toggleOnly(link.dataset.dir);
   const actEl = ev.target.closest("[data-act]");
   if (actEl && actEl.dataset.act !== "toggle") return onAction(actEl);
   if (ev.target.closest("a, button, input, label, .panel")) return;
@@ -469,10 +434,6 @@ $("list").addEventListener("change", async (ev) => {
   }
   await act(s.id, el.checked ? "enable" : "disable");
 });
-
-$("dir").addEventListener("change", (ev) => setDir(ev.target.value || null));
-// renderDirs leaves the options alone while the menu has focus; catch up once it lets go.
-$("dir").addEventListener("blur", () => render());
 
 $("bulkbar").addEventListener("click", (ev) => {
   const b = ev.target.closest("[data-bulk]");
