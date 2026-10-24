@@ -14,7 +14,7 @@ import re
 import socket
 import time
 
-from . import settings
+from . import next_page, settings
 from .catalog import codex_rows, session_rows, sort_rows
 from .codex_actions import CodexActions
 from .codex_client import CodexClient, CodexError, CodexUnavailable
@@ -210,6 +210,9 @@ def make_handler(app: App):
                 return self._send_json(*search)
             if self.path in ("/", "/index.html"):
                 return self._send_file(STATIC_DIR / "index.html", "text/html; charset=utf-8")
+            page = next_page.resolve(self.path)
+            if page is not None:
+                return self._send_page(page)
             static = _STATIC_RE.match(self.path)
             if static and (STATIC_DIR / static.group(1)).is_file():
                 return self._send_file(STATIC_DIR / static.group(1), _STATIC_TYPES[static.group(2)])
@@ -304,6 +307,16 @@ def make_handler(app: App):
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(data)
+
+        def _send_page(self, page: next_page.PageResponse):
+            self.send_response(page.status)
+            self.send_header("Content-Type", page.content_type)
+            self.send_header("Content-Length", str(len(page.body)))
+            self.send_header("Cache-Control", page.cache_control)
+            for name, value in page.headers.items():
+                self.send_header(name, value)
+            self.end_headers()
+            self.wfile.write(page.body)
 
         def log_message(self, fmt, *args):
             log.debug("%s %s", self.client_address[0], fmt % args)
