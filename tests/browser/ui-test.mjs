@@ -54,6 +54,32 @@ const waitFor = async (fn, ms = 8000) => {
 };
 
 check("Codex sessions are listed too", await waitFor(async () => (await count()) === 12), String(await count()));
+if (SHOTS) fs.mkdirSync(SHOTS, { recursive: true });
+for (const width of [390, 1000]) {
+  await page.setViewport({ width, height: 900, isMobile: width < 600, hasTouch: width < 600 });
+  // Changing mobile emulation reloads the page; measure after its catalogue arrives.
+  await page.waitForSelector("#tools", { visible: true });
+  const layout = await page.evaluate(() => {
+    const rect = (selector) => document.querySelector(selector).getBoundingClientRect();
+    const q = rect("#q"), sort = rect("#sort"), scope = rect(".search-scope"), filters = rect(".toolbar-filters");
+    const controls = [...document.querySelectorAll(".toolbar button, .toolbar input, .toolbar select")]
+      .filter((element) => element.getClientRects().length);
+    return {
+      noOverflow: document.documentElement.scrollWidth <= innerWidth,
+      searchWidest: q.width > sort.width && q.width > scope.width,
+      filtersBelow: filters.top >= q.bottom,
+      touchTargets: controls.every((element) => element.getBoundingClientRect().height >= 44),
+      desktopRows: innerWidth < 700 || (Math.abs(q.top - sort.top) < 3 && Math.abs(rect("#dir").top - rect("#tools").top) < 1),
+      noClippedControls: [...document.querySelectorAll(".toolbar .seg")].every((element) => element.scrollWidth <= element.clientWidth),
+    };
+  });
+  check(`toolbar at ${width}px has a wide search, separate filter row, 44px targets and no horizontal scroll`,
+    Object.values(layout).every(Boolean), JSON.stringify(layout));
+  if (SHOTS) await page.screenshot({ path: `${SHOTS}/toolbar-${width}.png` });
+}
+await page.keyboard.press("/");
+check("slash still focuses the session search", await page.evaluate(() => document.activeElement.id === "q"));
+await page.$eval("#q", (element) => element.blur());
 await (await import("./folders-test.mjs")).checkFolders({ page, check, waitFor, shots: SHOTS });
 // The checks up to the Codex section are about Claude sessions.
 await page.click("#t-claude"); await sleep(50);
@@ -71,7 +97,39 @@ check("bad is: value shows an error", (await page.$eval("#qerr", (e) => e.textCo
 await search("");
 
 // --- transcript full-text search (a separate mode from the list filter)
-await page.click("#fulltext-btn");
+await page.click("#help-btn");
+check("Sessions help names its scope and hides transcript syntax", await page.$eval("#help", (element) =>
+  element.innerText.includes("Sessions search") && !element.innerText.includes("Transcripts search")));
+const bridged = '"reply about Alpha CAN decoder" is:claude is:kept title:Alpha -state:missing id:abc';
+await search(bridged);
+await page.keyboard.press("Enter");
+check("Enter from Sessions switches scope and runs the translated query", await waitFor(() => page.$("#list .search-card").then(Boolean))
+  && await page.$eval("#q", (element) => element.value === '"reply about Alpha CAN decoder" tool:claude'));
+check("ignored session terms remain visible after results arrive", await page.$eval("#qerr", (element) =>
+  element.textContent === "Ignored inside transcripts: is:kept · title:Alpha · -state:missing · id:abc"));
+check("Transcripts help shows only its syntax and correct indexed roles", await page.$eval("#help", (element) =>
+  element.innerText.includes("Transcripts search") && !element.innerText.includes("Sessions search")
+  && !element.innerText.includes("by:tool") && element.innerText.includes("visible replies")));
+check("Transcripts placeholder names the scope and Enter", await page.$eval("#q", (element) =>
+  element.placeholder === "Search transcripts — press Enter"));
+await page.keyboard.press("Escape");
+check("Escape restores the original Sessions query and scope", await page.$eval("#q", (element, expected) =>
+  element.value === expected && document.querySelector("#scope-sessions").getAttribute("aria-pressed") === "true", bridged));
+await search("Alpha is:codex");
+await page.click("#scope-transcripts");
+check("choosing Transcripts carries and translates the current text without running it", await page.$eval("#q", (element) =>
+  element.value === "Alpha tool:codex") && !await page.$("#list .search-card"));
+await page.$eval("#q", (element) => { element.value = ""; element.dispatchEvent(new Event("input")); });
+check("clearing an unsubmitted transcript query also restores Sessions", await page.$eval("#q", (element) =>
+  element.value === "Alpha is:codex" && document.querySelector("#scope-sessions").getAttribute("aria-pressed") === "true"));
+await search("is:kept");
+await page.keyboard.press("Enter");
+check("an all-session-filter query leaves an explanation instead of searching an empty query", await page.$eval("#qerr", (element) =>
+  element.textContent === "Ignored inside transcripts: is:kept") && !await page.$("#list .search-card"));
+await page.click("#scope-sessions");
+await page.click("#help-btn");
+await search("");
+await page.click("#scope-transcripts");
 await page.type("#q", '"reply about Alpha CAN decoder"');
 await page.keyboard.press("Enter");
 check("transcript search finds the matching session", await waitFor(() => page.$("#list .search-card").then(Boolean)));
@@ -218,8 +276,8 @@ check("picking it shows only its sessions", await waitFor(() => page.$$eval("#li
   els.length === 3 && els.every((e) => e.textContent === "~/dev/gamma"))));
 check("the picked filter is marked and its chip tinted", await page.$eval("#dir", (el) => el.matches(".on"))
   && Boolean(await page.$("#folder-chips .dev-local")));
-await page.click("#folder-clear");
-await page.$eval("#folder-clear", (el) => el.blur());
+await page.click("#folder-reset");
+await page.$eval("#folder-reset", (el) => el.blur());
 
 // --- single move from the details panel
 await page.click("#list .card .more"); await sleep(50);

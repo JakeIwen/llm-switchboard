@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { compileQuery } from "../../llm_switchboard/static/search.js";
+import { compileQuery, transcriptQuery } from "../../llm_switchboard/static/search.js";
 
 const NOW = 1_000_000;
 const S = (o) => ({ title: "", first_prompt: "", project: "", cwd: "", id: "", rc_name: "", enabled: false,
@@ -13,6 +13,22 @@ const sessions = [
       open_elsewhere: [{ pid: 1, status: "idle" }] }),
 ];
 const ids = (q) => sessions.filter((s) => compileQuery(q).test(s, NOW)).map((s) => s.id.slice(0, 4));
+
+test("transcript bridge translates tool filters and explains discarded session-only terms", () => {
+  assert.deepEqual(transcriptQuery('CAN is:claude -IS:"CODEX" is:kept -is:busy state:running title:"two words" id:abc'), {
+    query: "CAN tool:claude -tool:codex",
+    ignored: ["is:kept", "-is:busy", "state:running", 'title:"two words"', "id:abc"],
+  });
+});
+
+test("transcript bridge preserves shared syntax, quoted literals and unknown prefixes", () => {
+  const query = '"is:kept" -"two words" dir:alpha folder:beta in:gamma age:<2d https://host by:me after:2026-01-01';
+  assert.deepEqual(transcriptQuery(query), { query, ignored: [] });
+  assert.deepEqual(transcriptQuery("is:kept -state: title: id:"), {
+    query: "", ignored: ["is:kept", "-state:", "title:", "id:"],
+  });
+  assert.deepEqual(transcriptQuery("  \t "), { query: "", ignored: [] });
+});
 
 test("plain words are ANDed and case-insensitive", () => {
   assert.deepEqual(ids("obd"), ["c969", "5b80"]);

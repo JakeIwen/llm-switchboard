@@ -1,4 +1,5 @@
 import { deviceClass, deviceTitle } from "./dirs.js";
+import { transcriptQuery } from "./search.js";
 
 // Mirrors SearchRole and IndexState in search_records.py.
 const ROLE_NAME = { me: "You", reply: "Reply" };
@@ -11,6 +12,7 @@ class FullTextMode {
     Object.assign(this, deps);
     this.state = { active: false, searched: false, query: "", results: [], details: new Map(), status: null };
     this.savedListQuery = "";
+    this.bridgeNote = "";
     this.listPlaceholder = $("q").placeholder;
     this.request = 0;
     this.lastUpdated = null;
@@ -20,18 +22,22 @@ class FullTextMode {
 
   install() {
     document.addEventListener("keydown", (event) => {
-      if (this.active && event.key === "Escape") {
+      if (this.active && event.key === "Escape" && !document.querySelector("dialog[open]")) {
         event.preventDefault();
         event.stopPropagation();
         this.deactivate();
       }
     }, true);
-    $("fulltext-btn").addEventListener("click", () => this.active ? this.deactivate() : this.activate());
+    $("scope-transcripts").addEventListener("click", () => this.activate());
+    $("scope-sessions").addEventListener("click", () => this.deactivate());
     $("q").addEventListener("input", () => {
-      if (this.active && this.state.searched && !$("q").value) this.deactivate();
+      if (this.active && !$("q").value) this.deactivate();
     });
     $("q").addEventListener("keydown", (event) => {
-      if (this.active && event.key === "Enter") { event.preventDefault(); this.search(); }
+      if (event.key !== "Enter" || event.isComposing || !$("q").value.trim()) return;
+      event.preventDefault();
+      if (!this.active) this.activate();
+      this.search();
     });
     $("list").addEventListener("click", (event) => this.onResultClick(event));
     return this;
@@ -51,17 +57,28 @@ class FullTextMode {
     $("index-status").textContent = this.statusText(status);
   }
 
+  showScope() {
+    for (const [scope, active] of [["sessions", !this.active], ["transcripts", this.active]]) {
+      $("scope-" + scope).classList.toggle("on", active);
+      $("scope-" + scope).setAttribute("aria-pressed", String(active));
+      $("help-" + scope).hidden = !active;
+    }
+    $("q").setAttribute("aria-label", this.active ? "Search transcripts" : "Search sessions");
+    $("help-btn").setAttribute("aria-label", this.active ? "Transcripts search syntax" : "Sessions search syntax");
+    document.body.classList.toggle("fulltext-mode", this.active);
+  }
+
   activate() {
     if (this.active) return;
     this.state.active = true;
     this.state.searched = false;
     this.savedListQuery = $("q").value;
-    $("q").value = "";
-    $("q").placeholder = 'Search transcripts  ( words  "phrase"  -exclude  by:me  tool:codex )';
-    $("fulltext-btn").classList.add("on");
-    $("fulltext-btn").setAttribute("aria-pressed", "true");
-    document.body.classList.add("fulltext-mode");
-    $("qerr").textContent = "";
+    const translated = transcriptQuery(this.savedListQuery);
+    this.bridgeNote = translated.ignored.length ? `Ignored inside transcripts: ${translated.ignored.join(" · ")}` : "";
+    $("q").value = translated.query;
+    $("q").placeholder = "Search transcripts — press Enter";
+    this.showScope();
+    $("qerr").textContent = this.bridgeNote;
     this.setHTML($("list"), '<div class="empty">Type a transcript search and press Enter.</div>');
     $("q").focus();
     this.poll();
@@ -70,14 +87,13 @@ class FullTextMode {
   deactivate() {
     if (!this.active) return;
     this.state.active = false;
+    this.request++;
     this.state.query = "";
     this.state.results = [];
     this.state.details.clear();
     $("q").value = this.savedListQuery;
     $("q").placeholder = this.listPlaceholder;
-    $("fulltext-btn").classList.remove("on");
-    $("fulltext-btn").setAttribute("aria-pressed", "false");
-    document.body.classList.remove("fulltext-mode");
+    this.showScope();
     $("q").dispatchEvent(new Event("input"));
     this.normalRender();
   }
@@ -122,7 +138,7 @@ class FullTextMode {
     this.state.query = query;
     const token = ++this.request;
     if (!refresh) this.setHTML($("list"), '<div class="empty">Searching transcripts…</div>');
-    $("qerr").textContent = "";
+    $("qerr").textContent = this.bridgeNote;
     try {
       const payload = await this.api(`/api/search?q=${encodeURIComponent(query)}`);
       if (token !== this.request || !this.active) return;
@@ -132,7 +148,7 @@ class FullTextMode {
       this.renderResults();
     } catch (error) {
       if (token !== this.request || !this.active) return;
-      $("qerr").textContent = error.message;
+      $("qerr").textContent = [this.bridgeNote, error.message].filter(Boolean).join(" · ");
       this.setHTML($("list"), `<div class="err">Transcript search failed: ${this.esc(error.message)}</div>`);
     }
   }
