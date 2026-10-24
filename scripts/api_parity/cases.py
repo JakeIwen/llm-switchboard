@@ -20,6 +20,7 @@ class Case:
 
 def get_cases(repo: Path, sid, trash_sid):
     cases = [Case("page", "/"), Case("index alias", "/index.html"),
+             Case("double-slash prefix", "//api/settings"),
              Case("sessions with Mac metadata", "/api/sessions"), Case("folders", "/api/folders"),
              Case("local and Mac trash", "/api/trash"), Case("settings", "/api/settings"),
              Case("Claude messages", f"/api/sessions/{sid}/messages"),
@@ -81,6 +82,8 @@ def post_cases(sid, trash_sid):
              Case("new untrusted", "/api/sessions/new", "POST", {"cwd": "{home}/scratch", "name": "x"}, 409),
              Case("delete pending", "/api/sessions/{created}/delete", "POST", {}),
              Case("unknown POST", "/api/nope", "POST", {}, 404),
+             Case("escaped slash in id", "/api/sessions/part%2Fpart/rename", "POST", {}, 400),
+             Case("escaped action", base + "/ren%61me", "POST", {}, 404),
              Case("unknown local action", base + "/explode", "POST", {}, 404),
              Case("GET action as POST", base + "/screen", "POST", {}, 404)]
     cases += codex_cases()

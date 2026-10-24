@@ -12,12 +12,13 @@ from fastapi import Body, FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException
 
+from . import next_page
 from .host_actions_protocol import ActionKind
 from .host_web import action_route
 from .http.lifespan import service_lifespan
 from .http import requests as bodies
 from .http import responses as schemas
-from .http.transport import CompatibilityRoute, error_response, json_response, validation_error
+from .http.transport import CompatibilityRoute, RawPathMiddleware, error_response, json_response, validation_error
 from .search_api import route_search_get
 # Permanent public imports for CLI and existing callers.
 from .web_app import App, make_app
@@ -49,6 +50,7 @@ def create_http_app(domain: App | None = None, *, manage_lifecycle=False) -> Fas
                   docs_url=None, redoc_url=None, openapi_url=None,
                   lifespan=service_lifespan if manage_lifecycle else None)
     app.state.domain = domain
+    app.add_middleware(RawPathMiddleware)
     app.router.route_class = CompatibilityRoute
     app.add_exception_handler(RequestValidationError, validation_error)
     app.add_exception_handler(HTTPException, lambda request, exc: error_response("not found", 404))
@@ -95,7 +97,7 @@ def _session_read(action, model):
 
 
 def _search_endpoint(model):
-    def search(request: Request):
+    def respond(request):
         domain = request.app.state.domain
         result = route_search_get(request.url.path + "?" + request.url.query, domain.search,
                                   lambda: domain.list_sessions()["sessions"])
@@ -103,8 +105,20 @@ def _search_endpoint(model):
             return error_response("not found", 404)
         payload, status = result
         return json_response(payload, model if status == 200 else schemas.ErrorResponse, status)
-    search.__name__ = model.__name__
-    return search
+
+    def search(request: Request, q: str = ""):
+        return respond(request)
+
+    def detail(request: Request, sid: str, q: str = ""):
+        return respond(request)
+
+    def status(request: Request):
+        return respond(request)
+
+    endpoint = {schemas.SearchResponse: search, schemas.SearchDetailResponse: detail,
+                schemas.SearchStatusResponse: status}[model]
+    endpoint.__name__ = model.__name__
+    return endpoint
 
 
 def _write_routes(app):
@@ -163,6 +177,17 @@ def _static_routes(app):
         return error_response("not found", 404)
     for path in ("/", "/index.html", "/static/{filename:path}"):
         app.add_api_route(path, page, methods=["GET"], response_class=Response, include_in_schema=False)
+    for path in (next_page.PREFIX.rstrip("/"), next_page.PREFIX + "{filename:path}"):
+        app.add_api_route(path, _preview_page, methods=["GET"], response_class=Response, include_in_schema=False)
+
+
+def _preview_page(request: Request):
+    raw_path = request.scope["raw_path"].decode("ascii")
+    page = next_page.resolve(raw_path)
+    if page is None:
+        return error_response("not found", 404)
+    return Response(page.body, status_code=page.status,
+                    headers={"Content-Type": page.content_type, "Cache-Control": page.cache_control, **page.headers})
 
 
 def _file(path, content_type):

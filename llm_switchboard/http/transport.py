@@ -10,6 +10,7 @@ from fastapi.routing import APIRoute
 from pydantic import TypeAdapter, ValidationError
 
 from ..host_web import action_route
+from ..next_page import PREFIX as PREVIEW_PREFIX
 
 from ..codex_client import CodexError, CodexUnavailable
 from ..conflict import Conflict
@@ -40,6 +41,21 @@ def error_response(message, status=400) -> Response:
 def validation_error(request: Request, exc: RequestValidationError) -> Response:
     first = exc.errors()[0]
     return error_response(first.get("ctx", {}).get("error", first["msg"]))
+
+
+class RawPathMiddleware:
+    """The legacy router matches escaped request targets, not decoded paths."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            path = scope["raw_path"].decode("latin-1")
+            if path.startswith("//"):
+                path = "/" + path.lstrip("/")
+            scope = {**scope, "path": path, "raw_path": path.encode("latin-1")}
+        await self.app(scope, receive, send)
 
 
 class CompatibilityRoute(APIRoute):
@@ -76,6 +92,8 @@ class CompatibilityRoute(APIRoute):
 
     def _path_error(self, request):
         path = request.scope.get("raw_path", b"").decode("ascii")
+        if request.method == "GET" and (path == PREVIEW_PREFIX.rstrip("/") or path.startswith(PREVIEW_PREFIX)):
+            return None  # The preview resolver owns its path and query rules.
         if path != request.url.path:
             return error_response("not found", 404)
         if request.url.query and not path.startswith("/api/search"):

@@ -1,0 +1,60 @@
+/* Fixed columns: a value change never moves the buttons after it. */
+.filter-bar {
+  display: grid;
+  grid-template-columns: 8rem minmax(0, 1fr) 2.25rem 3.5rem;
+  gap: 6px;
+}
+
+.filter-button {
+  width: 100%;
+  font-weight: 500;
+}
+
+.filter-button-inner {
+  min-width: 0;
+}
+
+.filter-button-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.filter-button.is-active {
+  border-color: var(--accent-edge);
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.filter-reset {
+  padding: 0 4px;
+}
+
+.filter-reset[data-disabled] {
+  background: transparent;
+}
+
+/* Sort is changed rarely: on a phone only its icon shows. */
+@media (max-width: 47.99em) {
+  .filter-sort {
+    padding: 0;
+  }
+
+  .filter-sort .filter-button-inner {
+    display: none;
+  }
+
+  .filter-sort .filter-button-section {
+    margin: 0;
+  }
+
+  .filter-folders .filter-button-section[data-position='left'] {
+    display: none;
+  }
+}
+
+@media (min-width: 48em) {
+  .filter-bar {
+    grid-template-columns: 9.5rem 12rem 11rem 4rem;
+  }
+}

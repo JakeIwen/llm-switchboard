@@ -73,6 +73,8 @@ Sharing the socket would let its supervisor close the real windows.
 | `llm_switchboard/search_api.py`, `search_cli.py` | Search routes (plus Mac title/folder matches) and the `search` / `index` commands (light imports; `__main__` dispatches them before cli.py) |
 | `llm_switchboard/listen.py` | Where `serve` listens (localhost + Tailscale, bound once Tailscale is up) and which peers it answers |
 | `llm_switchboard/web.py` | HTTP API and static page; `make_app` wires both session sources |
+| `llm_switchboard/next_page.py` | The rebuilt page (`web/`, built into `web/dist`) at `/next/`: path to file and cache headers |
+| `web/` | The rebuilt page: Vite, React, TypeScript, Mantine; design rules in `docs/design.md` |
 | `llm_switchboard/cli.py` | argparse entry point |
 | `llm_switchboard/static/index.html`, `app.css` | The picker's markup and styles |
 | `llm_switchboard/static/app.js` | Picker state, polling and event wiring (ES module, no build step) |

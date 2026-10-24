@@ -1,0 +1,160 @@
+/* One row per session in a single list surface, divided by hairlines: denser
+   than separate cards, and the eye reads it as one list. */
+.session-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  column-gap: var(--mantine-spacing-xs);
+  align-items: start;
+  padding: 6px var(--mantine-spacing-sm) 8px 4px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  scroll-margin-top: 7rem;
+}
+
+.session-row.is-kept {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.session-row.is-selected {
+  background: var(--selected);
+}
+
+.session-row.is-offline .session-main {
+  opacity: 0.55;
+}
+
+/* 44px tap targets around the small checkbox and switch. */
+.session-hit {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 32px;
+  margin: -4px 0;
+  cursor: pointer;
+}
+
+.session-keep {
+  min-width: 44px;
+}
+
+.session-main {
+  position: relative;
+  min-width: 0;
+  padding: 2px 0;
+}
+
+/* The title is the row's expand control. Its hit area stretches over the main
+   column (the "stretched link" pattern); the folder link sits above it. */
+.session-title {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  line-height: 1.3;
+  text-align: left;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.session-title::after {
+  content: '';
+  position: absolute;
+  inset: -6px 0;
+}
+
+.session-title:focus-visible {
+  outline: none;
+}
+
+.session-title:focus-visible::after {
+  outline: 2px solid var(--info);
+  outline-offset: -2px;
+  border-radius: var(--mantine-radius-sm);
+}
+
+.session-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px var(--mantine-spacing-sm);
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: var(--mantine-font-size-sm);
+}
+
+.identity {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--mantine-radius-sm);
+  overflow: hidden;
+  font-size: var(--mantine-font-size-xs);
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.identity-machine,
+.identity-tool {
+  padding: 0 5px;
+}
+
+.identity-machine {
+  color: var(--dev-local);
+  background: var(--surface-2);
+}
+
+.identity-machine.is-host {
+  color: var(--dev-host);
+}
+
+.session-folder {
+  position: relative;
+  z-index: 1;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--dev-local);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+  overflow-wrap: anywhere;
+}
+
+.session-folder.is-host {
+  color: var(--dev-host);
+}
+
+.tone-ok {
+  color: var(--ok);
+  background: var(--ok-bg);
+}
+
+.tone-info {
+  color: var(--info);
+  background: var(--info-bg);
+}
+
+.tone-warn {
+  color: var(--warn);
+  background: var(--warn-bg);
+}
+
+.tone-bad {
+  color: var(--bad);
+  background: var(--bad-bg);
+}
+
+.tone-idle {
+  color: var(--idle);
+  background: var(--idle-bg);
+}

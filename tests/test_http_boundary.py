@@ -51,6 +51,8 @@ class HttpBoundaryTest(unittest.TestCase):
         cases = [("/no-such-route", 404, "not found"),
                  ("/api/hosts/UPPER/sessions/nope/rename", 404, "not found"),
                  ("/api/sessions/nope/rename", 400, "bad session id"),
+                 ("/api/sessions/part%2Fpart/rename", 400, "bad session id"),
+                 (f"/api/sessions/{SID}/ren%61me", 404, "not found"),
                  (f"/api/sessions/{SID}/rename", 415, "send application/json")]
         for path, status, error in cases:
             response = self.client.post(path, content="{")
@@ -90,6 +92,12 @@ class HttpBoundaryTest(unittest.TestCase):
                 self.assertNotIn("422", operation["responses"])
         self.assertIn("SessionStatus", schema["components"]["schemas"])
         self.assertIn("SettingsBody", schema["components"]["schemas"])
+        for path in ("/api/search", "/api/search/claude/{sid}", "/api/search/codex/{sid}"):
+            parameters = {item["name"]: item for item in schema["paths"][path]["get"]["parameters"]}
+            self.assertEqual(parameters["q"]["in"], "query")
+            if "{sid}" in path:
+                self.assertEqual(parameters["sid"]["in"], "path")
+                self.assertTrue(parameters["sid"]["required"])
 
     def test_openapi_cli_is_deterministic_without_runtime_side_effects(self):
         command = [sys.executable, "-m", "llm_switchboard", "openapi"]

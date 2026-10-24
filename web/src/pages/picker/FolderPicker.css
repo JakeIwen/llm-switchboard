@@ -1,0 +1,68 @@
+.folder-picker {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mantine-spacing-sm);
+  max-height: min(70dvh, 560px);
+}
+
+/* The find box and the footer stay put; only the chips scroll. */
+.folder-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.folder-group-name {
+  margin: var(--mantine-spacing-sm) 0 6px;
+  color: var(--dev-local);
+  font-size: var(--mantine-font-size-xs);
+  font-weight: 600;
+}
+
+.folder-group-name.is-host {
+  color: var(--dev-host);
+}
+
+/* Chips wrap to use the width instead of one folder per row. */
+.folder-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 6px;
+}
+
+.folder-chip-count {
+  margin-left: 6px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.folder-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--mantine-font-size-sm);
+}
+
+.folder-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--mantine-spacing-sm);
+  padding-top: var(--mantine-spacing-sm);
+  border-top: 1px solid var(--border);
+}
+
+.folder-foot-status {
+  flex: 1;
+  color: var(--muted);
+  font-size: var(--mantine-font-size-sm);
+  text-align: right;
+}
+
+.folder-sheet {
+  height: auto;
+  border-radius: 14px 14px 0 0;
+}
+
+.folder-sheet-body {
+  padding-bottom: max(var(--mantine-spacing-md), env(safe-area-inset-bottom));
+}
