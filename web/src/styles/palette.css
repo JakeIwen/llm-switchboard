@@ -1,0 +1,73 @@
+/* Every color in the app is a token here, and only here. The values are the
+   old page's palette (llm_switchboard/static/app.css), kept on purpose.
+   Mantine sets data-mantine-color-scheme on <html>; dark overrides follow it. */
+:root {
+  color-scheme: light;
+  --bg: #f6f5f2;
+  --surface: #ffffff;
+  --surface-2: #efede8;
+  --text: #1d1c1a;
+  --muted: #6b6862;
+  --border: #e2dfd8;
+  --accent: #c2622d;
+  --accent-text: #ffffff;
+  --ok: #2f7d4f;
+  --ok-bg: #e3f2e8;
+  --info: #2d62a8;
+  --info-bg: #e3ecf8;
+  --warn: #9a5b00;
+  --warn-bg: #fbefd9;
+  --bad: #b3261e;
+  --bad-bg: #fbe3e1;
+  --idle: #5f6368;
+  --idle-bg: #ebeae7;
+  /* Which machine a path is on: teal for this Pi, violet for another host. */
+  --dev-local: #2a7468;
+  --dev-host: #6450ad;
+  /* Fixed: overlays darken whatever is under them in both modes. */
+  --shadow: rgba(0, 0, 0, 0.18);
+  --backdrop: rgba(0, 0, 0, 0.42);
+
+  /* Roles built from the tokens above, so they follow the mode. */
+  --accent-soft: color-mix(in oklch, var(--accent) 12%, var(--surface));
+  --accent-edge: color-mix(in oklch, var(--accent) 45%, var(--border));
+  --selected: color-mix(in oklch, var(--info) 10%, var(--surface));
+
+  /* Mantine's brand ramp, from the accent. Shade 6 is the filled color in
+     both modes (theme.ts sets primaryShade), 7 its hover. */
+  --brand-0: color-mix(in oklch, var(--accent) 8%, var(--surface));
+  --brand-1: color-mix(in oklch, var(--accent) 16%, var(--surface));
+  --brand-2: color-mix(in oklch, var(--accent) 28%, var(--surface));
+  --brand-3: color-mix(in oklch, var(--accent) 42%, var(--surface));
+  --brand-4: color-mix(in oklch, var(--accent) 60%, var(--surface));
+  --brand-5: color-mix(in oklch, var(--accent) 80%, var(--surface));
+  --brand-6: var(--accent);
+  --brand-7: color-mix(in oklch, var(--accent), var(--text) 14%);
+  --brand-8: color-mix(in oklch, var(--accent), var(--text) 26%);
+  --brand-9: color-mix(in oklch, var(--accent), var(--text) 38%);
+}
+
+:root[data-mantine-color-scheme='dark'] {
+  color-scheme: dark;
+  --bg: #171614;
+  --surface: #211f1d;
+  --surface-2: #2a2826;
+  --text: #ece9e3;
+  --muted: #a29e96;
+  --border: #36332f;
+  --accent: #e07a43;
+  --accent-text: #1a1310;
+  --ok: #7fd19c;
+  --ok-bg: #1f3327;
+  --info: #8db5ef;
+  --info-bg: #1e2b3e;
+  --warn: #f2bd6b;
+  --warn-bg: #3a2c15;
+  --bad: #f2948d;
+  --bad-bg: #3d1f1d;
+  --idle: #b2aea6;
+  --idle-bg: #2c2a27;
+  --dev-local: #7cc4b8;
+  --dev-host: #b4a6ec;
+  --shadow: rgba(0, 0, 0, 0.5);
+}

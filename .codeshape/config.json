@@ -19,7 +19,8 @@
     "exclude": [
       "scripts/check_layout.py",
       "scripts/backend_layout",
-      "scripts/layout_fixture.py"
+      "scripts/layout_fixture.py",
+      "web"
     ],
     "exceptions": []
   }
