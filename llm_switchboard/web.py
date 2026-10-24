@@ -1,340 +1,220 @@
-"""The picker web app: a JSON API over the store and supervisor, plus one HTML page.
+"""FastAPI transport for the picker, preserving the existing HTTP contract.
 
-Every POST must be sent as application/json. Browsers can't send that
-cross-origin without a CORS preflight, which this server never approves, so
-another web page can't flip sessions on through a visitor's browser.
+JSON-only POSTs deliberately have no CORS support: a foreign web page cannot
+submit an action without a preflight, which this application never approves.
 """
 
-from http import HTTPStatus
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
 import json
-import logging
+import os
+from pathlib import Path
 import re
-import socket
-import time
 
-from . import next_page, settings
-from .catalog import codex_rows, session_rows, sort_rows
-from .codex_actions import CodexActions
-from .codex_client import CodexClient, CodexError, CodexUnavailable
-from .codex_threads import CodexCatalog, codex_names, codex_short_id
-from .codex_trash import CodexTrash
-from .conversation import recent_messages
-from .folders import new_session_folders
-from .hosts import Hosts
+from fastapi import Body, FastAPI, Request, Response
+from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException
+
+from . import next_page
+from .host_actions_protocol import ActionKind
 from .host_web import action_route
-from .listen import allowed_peer
-from .live_registry import live_processes
-from .names import Names, claude_names
-from .paths import SEARCH_INDEX_FILE
-from .search_api import SearchHandlers, route_search_get
-from .session_actions import Conflict, SessionActions
-from .session_id import is_session_id, short_id
-from .store import Store
-from .supervisor import Supervisor
-from .tmux import Tmux
-from .transcripts import TranscriptIndex
-from .trash import Trash
-
-log = logging.getLogger(__name__)
+from .http.lifespan import service_lifespan
+from .http import requests as bodies
+from .http import responses as schemas
+from .http.transport import (CompatibilityRoute, RawPathMiddleware, error_response, json_response,
+                             unexpected_error, validation_error)
+from .search_api import route_search_get
+# Permanent public imports for CLI and existing callers.
+from .web_app import App, make_app
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
-_ACTION_RE = re.compile(r"^/api/sessions/([^/]+)/([a-z]+)$")
-_GET_ACTIONS = {"screen", "messages"}
-_POST_ACTIONS = {"enable", "disable", "restart", "name", "rename", "delete", "restore", "move", "fork"}
-_MAX_BODY = 16 * 1024
-# Files under static/ the page may load; anything else under /static is a 404.
 _STATIC_RE = re.compile(r"^/static/([a-z][a-z0-9-]*\.(js|css))$")
 _STATIC_TYPES = {"js": "text/javascript; charset=utf-8", "css": "text/css; charset=utf-8"}
+LOCAL_ACTIONS = {
+    "enable": (bodies.ActionBody, schemas.ToggleResponse),
+    "disable": (bodies.ActionBody, schemas.ToggleResponse),
+    "restart": (bodies.ActionBody, schemas.OkResponse),
+    "name": (bodies.NameBody, schemas.ToggleResponse),
+    "rename": (bodies.RenameBody, schemas.RenameResponse),
+    "delete": (bodies.ActionBody, schemas.DeleteResponse),
+    "restore": (bodies.ActionBody, schemas.RestoreResponse),
+    "move": (bodies.MoveBody, schemas.MoveResponse),
+    "fork": (bodies.ForkBody, schemas.ForkResponse),
+}
+REMOTE_BODIES = {
+    ActionKind.RENAME: bodies.RenameBody, ActionKind.DELETE: bodies.ActionBody,
+    ActionKind.RESTORE: bodies.ActionBody, ActionKind.MOVE: bodies.MoveBody,
+    ActionKind.FORK: bodies.RemoteForkBody, ActionKind.FORK_PI: bodies.RenameBody,
+}
+ERRORS = {code: {"model": schemas.ErrorResponse} for code in (400, 404, 409, 415, 503)}
 
 
-class App:
-    def __init__(self, store: Store, index: TranscriptIndex, supervisor: Supervisor, tmux: Tmux, trash: Trash,
-                 registry=live_processes, actions: SessionActions | None = None, codex: CodexActions | None = None,
-                 hosts: Hosts | None = None, search: SearchHandlers | None = None, settings_file: Path | None = None):
-        self.store = store
-        self.index = index
-        self.supervisor = supervisor
-        self.tmux = tmux
-        self.trash = trash
-        self.registry = registry
-        self.actions = actions or SessionActions(store, index, supervisor, tmux, trash, registry=registry)
-        # Codex sessions, when Codex support is on (codex_actions.py).
-        self.codex = codex
-        self.settings_file = settings_file
-        self.search = search or SearchHandlers(SEARCH_INDEX_FILE, lambda: settings.load(self.settings_file))
-        # Other machines' pushed sessions (hosts.py); None leaves them out.
-        self.hosts = hosts
-
-    def settings_payload(self, partial: dict | None = None) -> dict:
-        current = (settings.load(self.settings_file) if partial is None
-                   else settings.save(partial, self.settings_file))
-        return {"settings": current, "defaults": settings.defaults()}
-
-    def remote(self, current: settings.Settings | None = None) -> dict:
-        if not self.hosts:
-            return {"hosts": [], "sessions": [], "trash": [], "actions": []}
-        return self.hosts.snapshot(current or settings.load(self.settings_file))
-
-    def queue_remote(self, host: str, sid: str, action: str, body: dict) -> dict:
-        if not self.hosts:
-            raise LookupError("no other machines are connected")
-        return self.hosts.queue(host, sid, action, body)
-
-    def codex_threads(self) -> list:
-        return self.codex.catalog.threads() if self.codex else []
-
-    def list_sessions(self) -> dict:
-        current = settings.load(self.settings_file)
-        rows = session_rows(self.index.all(), self.store.load(), self.registry(), self.supervisor.snapshot(), current)
-        codex = {"enabled": self.codex is not None, "error": ""}
-        if self.codex:
-            rows += codex_rows(self.codex.catalog.threads(), current)
-            codex["error"] = self.codex.catalog.error
-        remote = self.remote(current)
-        rows += remote["sessions"]
-        return {"host": socket.gethostname(), "now": time.time(), "sessions": sort_rows(rows),
-                "notifications": self.supervisor.notifier.enabled, "codex": codex,
-                "hosts": remote["hosts"], "host_actions": remote["actions"], "settings": current}
-
-    def list_folders(self) -> dict:
-        return {"folders": [
-            {"cwd": f.cwd, "project": f.project, "sessions": f.sessions, "blocked": f.blocked,
-             "codex_blocked": f.codex_blocked if self.codex else "Codex support is off."}
-            for f in new_session_folders(self.index.all(), codex=self.codex_threads())
-        ]}
-
-    def list_trash(self) -> dict:
-        items = [
-            {"id": i.session_id, "tool": "claude", "short_id": short_id(i.session_id), "title": i.title,
-             "project": i.project, "deleted_at": i.deleted_at}
-            for i in self.trash.items()
-        ]
-        if self.codex:
-            items += [
-                {"id": i.session_id, "tool": "codex", "short_id": codex_short_id(i.session_id), "title": i.title,
-                 "project": i.project, "deleted_at": i.deleted_at}
-                for i in self.codex.trash_items()
-            ]
-        items += self.remote()["trash"]
-        return {"trash": sorted(items, key=lambda i: i["deleted_at"], reverse=True)}
-
-    def empty_trash(self) -> dict:
-        removed = self.trash.empty() + (self.codex.empty_trash() if self.codex else 0)
-        return {"ok": True, "removed": removed}
-
-    def create(self, body: dict) -> dict:
-        if body.get("tool") == "codex":
-            if not self.codex:
-                raise ValueError("Codex support is off")
-            return self.codex.create(body.get("cwd"), body.get("name"), body.get("prompt"))
-        return self.actions.create(body.get("cwd"), body.get("name"))
-
-    def messages(self, sid: str) -> dict:
-        if self.codex and self.codex.owns(sid):
-            return {"messages": self.codex.catalog.messages(sid)}
-        transcript = self.index.get(sid)
-        if transcript is None:
-            raise LookupError("no transcript with that session id")
-        return {"messages": recent_messages(transcript.path)}
-
-    def screen(self, sid: str) -> dict:
-        status = self.supervisor.snapshot().get(sid)
-        if status and status.window_id:
-            text = self.tmux.capture(status.window_id, history=200)
-            if text:
-                return {"source": "live", "screen": text}
-        if status and status.last_exit:
-            return {"source": "last-exit", "screen": status.last_exit.screen, "exit": status.last_exit.status}
-        return {"source": "none", "screen": ""}
-
-    def act(self, sid: str, action: str, body: dict) -> dict:
-        if self.codex and self.codex.owns(sid):
-            return self.codex.act(sid, action, body)
-        if action == "enable":
-            if self.index.get(sid) is None:
-                raise LookupError("no transcript with that session id")
-            entry = self.store.set_enabled(sid, True)
-        elif action == "disable":
-            entry = self.store.set_enabled(sid, False)
-        elif action == "name":
-            name = body.get("name", "")
-            if not isinstance(name, str) or len(name) > 120:
-                raise ValueError("name must be a string of at most 120 characters")
-            entry = self.store.set_name(sid, name)
-        elif action == "restart":
-            self.supervisor.request_restart(sid)
-            return {"ok": True}
-        elif action == "rename":
-            return self.actions.rename(sid, body.get("title"))
-        elif action == "delete":
-            return self.actions.delete(sid)
-        elif action == "restore":
-            return self.actions.restore(sid)
-        elif action == "move":
-            return self.actions.move(sid, body.get("cwd"))
-        elif action == "fork":
-            return self.actions.fork(sid, body.get("cwd"), body.get("title"), bool(body.get("keep")))
-        else:
-            raise ValueError(f"unknown action {action}")
-        self.supervisor.wake()
-        return {"ok": True, "enabled": entry.enabled, "rc_name": entry.name}
+def create_http_app(domain: App | None = None, *, manage_lifecycle=False,
+                    strict_responses: bool | None = None) -> FastAPI:
+    app = FastAPI(title="llm-switchboard", version="1", redirect_slashes=False,
+                  docs_url=None, redoc_url=None, openapi_url=None,
+                  lifespan=service_lifespan if manage_lifecycle else None)
+    app.state.domain = domain
+    app.state.strict_responses = (os.environ.get("LLM_SWITCHBOARD_STRICT_RESPONSES") == "1"
+                                  if strict_responses is None else strict_responses)
+    app.add_middleware(RawPathMiddleware)
+    app.router.route_class = CompatibilityRoute
+    app.add_exception_handler(RequestValidationError, validation_error)
+    app.add_exception_handler(Exception, unexpected_error)
+    app.add_exception_handler(HTTPException, lambda request, exc: error_response("not found", 404))
+    _read_routes(app)
+    _write_routes(app)
+    _static_routes(app)
+    return app
 
 
-def make_app(store: Store, index: TranscriptIndex, supervisor: Supervisor, tmux: Tmux, trash: Trash,
-             codex_socket: Path | None, registry=live_processes, codex_trash: CodexTrash | None = None,
-             folders=new_session_folders, hosts: Hosts | None = None, settings_file: Path | None = None) -> App:
-    """The App with both session sources wired up, sharing one name check.
-    codex_socket None leaves Codex out; hosts None leaves other machines out."""
-    names = Names(claude_names(index, store))
-    codex = None
-    if codex_socket is not None:
-        catalog = CodexCatalog(CodexClient(codex_socket))
-        names.add_source(codex_names(catalog))
-        codex = CodexActions(catalog.client, catalog, codex_trash or CodexTrash(), names)
-    threads = (lambda: codex.catalog.threads()) if codex else (lambda: [])
-    actions = SessionActions(store, index, supervisor, tmux, trash, registry=registry, names=names,
-                             folders=lambda transcripts: folders(transcripts, codex=threads()))
-    return App(store, index, supervisor, tmux, trash, registry=registry, actions=actions, codex=codex, hosts=hosts,
-               settings_file=settings_file)
+def _add(app, path, endpoint, model, method="GET", **options):
+    app.add_api_route(path, endpoint, methods=[method], response_model=model,
+                      responses=ERRORS, **options)
 
 
-def make_handler(app: App):
-    class Handler(BaseHTTPRequestHandler):
-        server_version = "llm-switchboard"
-
-        def do_GET(self):
-            search = route_search_get(self.path, app.search, lambda: app.list_sessions()["sessions"])
-            if search is not None:
-                return self._send_json(*search)
-            if self.path in ("/", "/index.html"):
-                return self._send_file(STATIC_DIR / "index.html", "text/html; charset=utf-8")
-            page = next_page.resolve(self.path)
-            if page is not None:
-                return self._send_page(page)
-            static = _STATIC_RE.match(self.path)
-            if static and (STATIC_DIR / static.group(1)).is_file():
-                return self._send_file(STATIC_DIR / static.group(1), _STATIC_TYPES[static.group(2)])
-            if self.path == "/api/settings":
-                return self._send_json(app.settings_payload())
-            if self.path == "/api/sessions":
-                return self._send_json(app.list_sessions())
-            if self.path == "/api/trash":
-                return self._send_json(app.list_trash())
-            if self.path == "/api/folders":
-                return self._send_json(app.list_folders())
-            match = _ACTION_RE.match(self.path)
-            if match and match.group(2) in _GET_ACTIONS and is_session_id(match.group(1)):
-                sid, action = match.groups()
-                try:
-                    return self._send_json(app.screen(sid) if action == "screen" else app.messages(sid))
-                except LookupError as e:
-                    return self._send_json({"error": str(e)}, HTTPStatus.NOT_FOUND)
-                except (CodexUnavailable, CodexError) as e:
-                    return self._send_json({"error": str(e)}, HTTPStatus.SERVICE_UNAVAILABLE)
-            self._send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
-
-        def do_POST(self):
-            if self.path == "/api/settings":
-                if not self._is_json():
-                    return self._send_json({"error": "send application/json"}, HTTPStatus.UNSUPPORTED_MEDIA_TYPE)
-                return self._guarded(app.settings_payload, "settings")
-            remote = action_route(self.path)
-            if remote:
-                if not self._is_json():
-                    return self._send_json({"error": "send application/json"}, HTTPStatus.UNSUPPORTED_MEDIA_TYPE)
-                host, sid, action = remote
-                return self._guarded(lambda body: app.queue_remote(host, sid, action, body), f"{host} {action}")
-            if self.path in ("/api/trash/empty", "/api/sessions/new"):
-                if not self._is_json():
-                    return self._send_json({"error": "send application/json"}, HTTPStatus.UNSUPPORTED_MEDIA_TYPE)
-                if self.path == "/api/trash/empty":
-                    return self._guarded(lambda body: app.empty_trash(), "empty trash")
-                return self._guarded(app.create, "new")
-            match = _ACTION_RE.match(self.path)
-            if not match or match.group(2) not in _POST_ACTIONS:
-                return self._send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
-            sid, action = match.groups()
-            if not is_session_id(sid):
-                return self._send_json({"error": "bad session id"}, HTTPStatus.BAD_REQUEST)
-            if not self._is_json():
-                return self._send_json({"error": "send application/json"}, HTTPStatus.UNSUPPORTED_MEDIA_TYPE)
-            self._guarded(lambda body: app.act(sid, action, body), f"{action} {sid[:8]}")
-
-        def _guarded(self, run, what: str):
-            """Run an action on the JSON body, mapping its errors to HTTP statuses."""
-            try:
-                result = run(self._read_json())
-            except LookupError as e:
-                return self._send_json({"error": str(e)}, HTTPStatus.NOT_FOUND)
-            except CodexUnavailable as e:
-                return self._send_json({"error": str(e)}, HTTPStatus.SERVICE_UNAVAILABLE)
-            except Conflict as e:
-                return self._send_json({"error": str(e)}, HTTPStatus.CONFLICT)
-            except ValueError as e:
-                return self._send_json({"error": str(e)}, HTTPStatus.BAD_REQUEST)
-            log.info("%s from %s", what, self.client_address[0])
-            self._send_json(result)
-
-        def _is_json(self) -> bool:
-            return self.headers.get("Content-Type", "").split(";")[0].strip() == "application/json"
-
-        def _read_json(self) -> dict:
-            length = int(self.headers.get("Content-Length") or 0)
-            if length > _MAX_BODY:
-                raise ValueError("request body too large")
-            raw = self.rfile.read(length) if length else b"{}"
-            body = json.loads(raw or b"{}")
-            if not isinstance(body, dict):
-                raise ValueError("body must be a JSON object")
-            return body
-
-        def _send_json(self, payload, status=HTTPStatus.OK):
-            data = json.dumps(payload).encode()
-            self.send_response(status)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(data)))
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            self.wfile.write(data)
-
-        def _send_file(self, path: Path, content_type: str):
-            data = path.read_bytes()
-            self.send_response(HTTPStatus.OK)
-            self.send_header("Content-Type", content_type)
-            self.send_header("Content-Length", str(len(data)))
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            self.wfile.write(data)
-
-        def _send_page(self, page: next_page.PageResponse):
-            self.send_response(page.status)
-            self.send_header("Content-Type", page.content_type)
-            self.send_header("Content-Length", str(len(page.body)))
-            self.send_header("Cache-Control", page.cache_control)
-            for name, value in page.headers.items():
-                self.send_header(name, value)
-            self.end_headers()
-            self.wfile.write(page.body)
-
-        def log_message(self, fmt, *args):
-            log.debug("%s %s", self.client_address[0], fmt % args)
-
-    return Handler
+def _read_routes(app):
+    for path, method, model in [
+        ("settings", "settings_payload", schemas.SettingsResponse),
+        ("sessions", "list_sessions", schemas.SessionsResponse),
+        ("folders", "list_folders", schemas.FoldersResponse),
+        ("trash", "list_trash", schemas.TrashResponse),
+    ]:
+        _add(app, f"/api/{path}", _read_endpoint(method, model), model)
+    for action, model in [("screen", schemas.ScreenResponse), ("messages", schemas.MessagesResponse)]:
+        _add(app, f"/api/sessions/{{sid}}/{action}", _session_read(action, model), model)
+    for path, model in [("/api/search", schemas.SearchResponse),
+                        ("/api/search/status", schemas.SearchStatusResponse),
+                        ("/api/search/claude/{sid}", schemas.SearchDetailResponse),
+                        ("/api/search/codex/{sid}", schemas.SearchDetailResponse)]:
+        _add(app, path, _search_endpoint(model), model)
 
 
-class _Server(ThreadingHTTPServer):
-    daemon_threads = True
-
-    def verify_request(self, request, client_address) -> bool:
-        return allowed_peer(client_address[0])
-
-
-class _Server6(_Server):
-    address_family = socket.AF_INET6
+def _read_endpoint(method, model):
+    def read(request: Request):
+        return json_response(getattr(request.app.state.domain, method)(), model, request=request)
+    read.__name__ = method
+    return read
 
 
-def make_server(app: App, host: str, port: int) -> ThreadingHTTPServer:
-    """Serve `app` on one address, answering only localhost and Tailscale peers."""
-    return (_Server6 if ":" in host else _Server)((host, port), make_handler(app))
+def _session_read(action, model):
+    def read(request: Request, sid: str):
+        return json_response(getattr(request.app.state.domain, action)(sid), model, request=request)
+    read.__name__ = action
+    return read
+
+
+def _search_endpoint(model):
+    def respond(request):
+        domain = request.app.state.domain
+        result = route_search_get(request.url.path + "?" + request.url.query, domain.search,
+                                  lambda: domain.list_sessions()["sessions"])
+        if result is None:
+            return error_response("not found", 404)
+        payload, status = result
+        return json_response(payload, model if status == 200 else schemas.ErrorResponse, status, request=request)
+
+    def search(request: Request, q: str = ""):
+        return respond(request)
+
+    def detail(request: Request, sid: str, q: str = ""):
+        return respond(request)
+
+    def status(request: Request):
+        return respond(request)
+
+    endpoint = {schemas.SearchResponse: search, schemas.SearchDetailResponse: detail,
+                schemas.SearchStatusResponse: status}[model]
+    endpoint.__name__ = model.__name__
+    return endpoint
+
+
+def _write_routes(app):
+    for path, method, body, model in [
+        ("/api/settings", "settings_payload", bodies.SettingsBody, schemas.SettingsResponse),
+        ("/api/sessions/new", "create", bodies.CreateBody, schemas.CreateResponse),
+        ("/api/trash/empty", "empty_trash", bodies.ActionBody, schemas.EmptyTrashResponse),
+    ]:
+        _add(app, path, _write_endpoint(method, body, model), model, "POST")
+    for action, (body, model) in LOCAL_ACTIONS.items():
+        _add(app, f"/api/sessions/{{sid}}/{action}", _action_endpoint(action, body, model), model, "POST")
+    for action, body in REMOTE_BODIES.items():
+        _add(app, f"/api/hosts/{{host}}/sessions/{{sid}}/{action}",
+             _remote_endpoint(action, body), schemas.RemoteActionResponse, "POST")
+    _add(app, "/api/hosts/{host}/sessions/{sid}/{action}", _remote_endpoint(None, bodies.ActionBody),
+         schemas.RemoteActionResponse, "POST", include_in_schema=False)
+
+
+def _write_endpoint(method, body_model, response_model):
+    def write(request: Request, body=Body()):
+        domain = request.app.state.domain
+        result = domain.empty_trash() if method == "empty_trash" else getattr(domain, method)(body.payload())
+        return json_response(result, response_model, request=request)
+    write.__annotations__["body"] = body_model
+    write.__name__ = method
+    return write
+
+
+def _action_endpoint(action, body_model, response_model):
+    def write(request: Request, sid: str, body=Body()):
+        return json_response(request.app.state.domain.act(sid, action, body.payload()), response_model, request=request)
+    write.__annotations__["body"] = body_model
+    write.__name__ = action
+    return write
+
+
+def _remote_endpoint(kind, body_model):
+    def write(request: Request, host: str, sid: str, body=Body()):
+        route = action_route(request.url.path)
+        if route is None:
+            return error_response("not found", 404)
+        return json_response(request.app.state.domain.queue_remote(*route, body.payload()), schemas.RemoteActionResponse,
+                             request=request)
+    write.__annotations__["body"] = body_model
+    write.__name__ = f"host_{kind or 'action'}"
+    return write
+
+
+def _static_routes(app):
+    def page(request: Request):
+        path = request.url.path
+        if path in ("/", "/index.html"):
+            return _file(STATIC_DIR / "index.html", "text/html; charset=utf-8")
+        match = _STATIC_RE.fullmatch(path)
+        if match and (STATIC_DIR / match[1]).is_file():
+            return _file(STATIC_DIR / match[1], _STATIC_TYPES[match[2]])
+        return error_response("not found", 404)
+    for path in ("/", "/index.html", "/static/{filename:path}"):
+        app.add_api_route(path, page, methods=["GET"], response_class=Response, include_in_schema=False)
+    for path in (next_page.PREFIX.rstrip("/"), next_page.PREFIX + "{filename:path}"):
+        app.add_api_route(path, _preview_page, methods=["GET"], response_class=Response, include_in_schema=False)
+
+
+def _preview_page(request: Request):
+    raw_path = request.scope["raw_path"].decode("ascii")
+    page = next_page.resolve(raw_path)
+    if page is None:
+        return error_response("not found", 404)
+    return Response(page.body, status_code=page.status,
+                    headers={"Content-Type": page.content_type, "Cache-Control": page.cache_control, **page.headers})
+
+
+def _file(path, content_type):
+    return Response(path.read_bytes(), headers={"Content-Type": content_type, "Cache-Control": "no-store"})
+
+
+def make_server(app: App, host: str, port: int, *, strict_responses: bool | None = None):
+    """Keep the one-address integration interface, now backed by Uvicorn."""
+    from .http.server import BoundServer
+    return BoundServer(create_http_app(app, strict_responses=strict_responses), host, port)
+
+
+def openapi_schema() -> dict:
+    schema = create_http_app().openapi()
+    for item in schema["paths"].values():
+        for operation in item.values():
+            operation.get("responses", {}).pop("422", None)
+    return schema
+
+
+def openapi_main() -> int:
+    print(json.dumps(openapi_schema(), sort_keys=True, indent=2))
+    return 0

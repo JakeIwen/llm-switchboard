@@ -165,7 +165,7 @@ class ActionsTest(Fixture):
 class WebTest(Fixture):
     def setUp(self):
         super().setUp()
-        server = make_server(self.app, "127.0.0.1", 0)
+        server = make_server(self.app, "127.0.0.1", 0, strict_responses=True)
         self.base = f"http://127.0.0.1:{server.server_address[1]}"
         threading.Thread(target=server.serve_forever, daemon=True).start()
         self.addCleanup(server.server_close)

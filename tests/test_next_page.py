@@ -79,7 +79,7 @@ class ServeTest(unittest.TestCase):
         sup = Supervisor(store, index, tmux, FakeConnectivity(), registry=lambda: [], clock=Clock())
         app = App(store, index, sup, tmux, Trash(root / "trash"), registry=lambda: [],
                   settings_file=root / "settings.json")
-        server = make_server(app, "127.0.0.1", 0)
+        server = make_server(app, "127.0.0.1", 0, strict_responses=True)
         threading.Thread(target=server.serve_forever, daemon=True).start()
         self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)

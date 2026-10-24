@@ -36,7 +36,7 @@ class SearchWebTest(unittest.TestCase):
         app = App(store, index, supervisor, tmux, Trash(root / "trash"), registry=lambda: [],
                   search=SearchHandlers(index_file, lambda: settings.load(self.settings_file)),
                   settings_file=self.settings_file)
-        server = make_server(app, "127.0.0.1", 0)
+        server = make_server(app, "127.0.0.1", 0, strict_responses=True)
         self.base = f"http://127.0.0.1:{server.server_address[1]}"
         threading.Thread(target=server.serve_forever, daemon=True).start()
         self.addCleanup(server.server_close)
