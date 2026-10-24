@@ -1,7 +1,9 @@
 import { useMemo, useState, type ReactElement } from 'react'
 import { Button, Chip, Drawer, Popover, TextInput } from '@mantine/core'
 import { useMediaQuery } from '@mantine/hooks'
-import type { FolderChoice } from './pickerModel'
+import type { FolderChoice } from '../../folders/folderChoices'
+import { groupChoices, visibleChoices } from '../../folders/folderSelection'
+import { plural } from '../../format/format'
 import './FolderPicker.css'
 
 interface Props {
@@ -17,21 +19,17 @@ const chipText = (project: string) => (project.startsWith('~/') ? project.slice(
 export function folderTriggerLabel(selected: string[], choices: FolderChoice[]): string {
   if (selected.length === 0) return 'All folders'
   if (selected.length > 1) return `${selected.length} folders`
-  const project = choices.find((c) => c.key === selected[0])?.project ?? selected[0]
-  return project.split('/').filter(Boolean).pop() ?? project
+  return chipText(choices.find((c) => c.key === selected[0])?.project ?? selected[0])
 }
+
+/** The one picked folder's machine, for the trigger's tint; '' for this Pi. */
+export const pickedHost = (selected: string[], choices: FolderChoice[]): string | null =>
+  selected.length === 1 ? (choices.find((c) => c.key === selected[0])?.host ?? null) : null
 
 function FolderChips({ choices, selected, hostLabel, onChange, onDone }: Props & { onDone: () => void }) {
   const [find, setFind] = useState('')
-  const visible = useMemo(() => {
-    const words = find.toLowerCase().split(/\s+/).filter(Boolean)
-    return choices.filter((c) => words.every((w) => `${c.host || hostLabel} ${c.project}`.toLowerCase().includes(w)))
-  }, [choices, find, hostLabel])
-  const groups = useMemo(() => {
-    const byHost = new Map<string, FolderChoice[]>()
-    for (const c of visible) byHost.set(c.host, [...(byHost.get(c.host) ?? []), c])
-    return [...byHost.entries()]
-  }, [visible])
+  const visible = useMemo(() => visibleChoices(choices, find), [choices, find])
+  const groups = useMemo(() => [...groupChoices(visible)], [visible])
   const invert = () => {
     const shown = new Set(visible.map((c) => c.key))
     const kept = selected.filter((k) => !shown.has(k))
@@ -55,6 +53,7 @@ function FolderChips({ choices, selected, hostLabel, onChange, onDone }: Props &
                 {folders.map((f) => (
                   <Chip key={f.key} value={f.key} size="sm" variant="light" title={f.project}>
                     {chipText(f.project)}
+                    {!f.defaultListed && <span className="folder-chip-note"> · outside default folders</span>}
                     <span className="folder-chip-count">{f.count}</span>
                   </Chip>
                 ))}
@@ -62,14 +61,18 @@ function FolderChips({ choices, selected, hostLabel, onChange, onDone }: Props &
             </section>
           ))}
         </Chip.Group>
-        {visible.length === 0 && <p className="folder-empty">No folder matches “{find}”.</p>}
+        {visible.length === 0 && <p className="folder-empty">No folders match your search.</p>}
       </div>
       <div className="folder-foot">
         <Button disabled={selected.length === 0} onClick={() => onChange([])}>
           Clear
         </Button>
-        <Button onClick={invert}>Invert</Button>
-        <span className="folder-foot-status">{selected.length ? `${selected.length} picked` : 'All folders shown'}</span>
+        <Button disabled={visible.length === 0} onClick={invert}>
+          Invert
+        </Button>
+        <span className="folder-foot-status">
+          {selected.length ? `${plural(selected.length, 'folder')} selected` : 'All folders shown'}
+        </span>
         <Button variant="light" onClick={onDone}>
           Done
         </Button>
@@ -106,7 +109,7 @@ export function FolderPicker({
     )
   }
   return (
-    <Popover opened={opened} onChange={onOpenChange} width={560} position="bottom-end" trapFocus>
+    <Popover opened={opened} onChange={onOpenChange} width={560} position="bottom-start" trapFocus>
       <Popover.Target>{target}</Popover.Target>
       <Popover.Dropdown>{chips}</Popover.Dropdown>
     </Popover>

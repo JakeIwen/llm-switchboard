@@ -1,20 +1,15 @@
 import { ActionIcon, Button, Title, Tooltip } from '@mantine/core'
 import { IconPlus, IconSettings } from '@tabler/icons-react'
 import type { SessionsPayload } from '../../api/sessionsPayload'
+import { hostSummary } from '../../hosts/hostRow'
 import './Header.css'
-
-function seenTime(t: number): string {
-  return new Date(t * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
-}
 
 function summary(data: SessionsPayload | null, error: string): string {
   if (!data) return error ? `Can't reach the Pi: ${error}` : 'loading…'
   const local = data.sessions.filter((r) => !r.host)
   const kept = local.filter((r) => r.enabled).length
-  const rc = local.filter((r) => r.enabled && r.status?.rc_active).length
-  const parts = [data.host, `${kept} kept`, `${rc} with Remote Control`]
-  for (const h of data.hosts) parts.push(`${h.host}: ${h.online ? 'online' : `offline since ${seenTime(h.last_seen)}`}`)
-  return parts.join(' · ')
+  const rc = local.filter((r) => r.enabled && r.status?.state === 'running').length
+  return [data.host, `${kept} kept`, `${rc} with Remote Control`, hostSummary(data.hosts)].filter(Boolean).join(' · ')
 }
 
 interface Props {

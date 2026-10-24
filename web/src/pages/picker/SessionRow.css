@@ -19,6 +19,11 @@
   background: var(--selected);
 }
 
+.session-row.is-cursor {
+  outline: 2px solid var(--info);
+  outline-offset: -2px;
+}
+
 .session-row.is-offline .session-main {
   opacity: 0.55;
 }
@@ -30,9 +35,11 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  align-items: flex-start;
   min-width: 44px;
-  min-height: 32px;
-  margin: -4px 0;
+  min-height: 44px;
+  margin: -6px 0;
+  padding-top: 8px;
   cursor: pointer;
 }
 
@@ -90,6 +97,20 @@
   margin-top: 4px;
   color: var(--muted);
   font-size: var(--mantine-font-size-sm);
+}
+
+.session-pills {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+/* On a phone every row reads title / meta / pills, so pills don't land
+   wherever they happen to fit. */
+@media (max-width: 47.99em) {
+  .session-pills {
+    flex-basis: 100%;
+  }
 }
 
 .identity {

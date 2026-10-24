@@ -12,3 +12,30 @@ body {
     font-size: max(16px, 1rem);
   }
 }
+
+/* Compact controls look small; on touch screens their hit area grows to 44px
+   past the drawn edge (docs/design.md, Density). */
+@media (pointer: coarse) {
+  /* Mantine clips a button's overflow; the hit area must reach past it. */
+  .touch-target {
+    position: relative;
+    overflow: visible;
+  }
+
+  .touch-target::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 50%;
+    height: 44px;
+    transform: translateY(-50%);
+  }
+}
+
+/* Menu items get a finger-sized row on touch screens. */
+@media (pointer: coarse) {
+  .menu-item {
+    min-height: 44px;
+  }
+}

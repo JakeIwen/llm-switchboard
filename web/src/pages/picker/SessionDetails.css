@@ -77,3 +77,8 @@
 .details-mono {
   font-family: var(--mantine-font-family-monospace);
 }
+
+/* Delete sits last and apart from the rest. */
+.details-delete {
+  margin-left: auto;
+}

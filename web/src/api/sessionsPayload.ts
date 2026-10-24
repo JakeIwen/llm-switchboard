@@ -43,3 +43,18 @@ export interface SessionsPayload {
   host_actions: HostAction[]
   settings: InstallSettings
 }
+
+/** One `GET /api/trash` entry. Mac entries also carry the row's host fields. */
+export interface TrashItem {
+  id: string
+  tool: 'claude' | 'codex'
+  short_id: string
+  title: string
+  project: string
+  deleted_at: number
+  host?: string
+  host_online?: boolean
+  last_seen?: number
+  mutable?: boolean
+  state?: 'closed' | 'idle' | 'busy'
+}

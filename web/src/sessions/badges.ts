@@ -26,7 +26,7 @@ export function badges(session: BadgeRow): Badge[] {
   if (session.enabled && status) {
     out.push(STATE[status.state] || { label: status.state, tone: 'idle' })
     if (status.busy) out.push({ label: 'Working', tone: 'info' })
-    if (status.rss_kb) out.push({ label: `${Math.round(status.rss_kb / 1024)} MB`, tone: 'idle' })
+    if (status.rss_kb) out.push({ label: `${Math.round(status.rss_kb / 1024)} MB RAM`, tone: 'idle' })
   } else if (session.enabled) {
     out.push({ label: 'Queued', tone: 'info' })
   }

@@ -13,7 +13,7 @@ const status = (fields: Partial<SessionStatus>): SessionStatus => ({
 describe('session badges', () => {
   it('retains the running label and memory badge from session cards', () => {
     expect(badges({ ...base, enabled: true, status: status({ state: 'running', rss_kb: 2048 }) })).toEqual([
-      { label: 'Remote Control on', tone: 'ok' }, { label: '2 MB', tone: 'idle' },
+      { label: 'Remote Control on', tone: 'ok' }, { label: '2 MB RAM', tone: 'idle' },
     ])
     expect(identityTags(base)).toEqual([])
   })
@@ -35,7 +35,7 @@ describe('session badges', () => {
         { label: 'Working', tone: 'info' }, { label: 'Open in a terminal', tone: 'idle' }])
     expect(badges({ ...base, enabled: true, new: true, status: status({ busy: true, rss_kb: 1536 }) }))
       .toEqual([{ label: 'Remote Control on', tone: 'ok' }, { label: 'Working', tone: 'info' },
-        { label: '2 MB', tone: 'idle' }, { label: 'New', tone: 'info' }])
+        { label: '2 MB RAM', tone: 'idle' }, { label: 'New', tone: 'info' }])
   })
   it('suppresses only the redundant elsewhere terminal badge', () => {
     const open_elsewhere = [{ pid: 42, status: 'idle' }]
@@ -95,7 +95,8 @@ describe('identity and blocked reasons', () => {
         mtime: 0, size: 12, rc_name: '', ...row }
       const html: string = cards.render(fullRow)
       const expected = [...html.matchAll(/<span class="badge b-([a-z]+)">([^<]*)<\/span>/g)]
-        .map((match) => ({ tone: match[1], label: match[2] }))
+        // The new page says "MB RAM" so memory isn't read as the transcript's size.
+        .map((match) => ({ tone: match[1], label: match[2].replace(/^(\d+) MB$/, '$1 MB RAM') }))
       expect(badges(row)).toEqual(expected)
       expect(sessionBlockedReason(row)).toBe(legacy.sessionBlockedReason(row))
     }

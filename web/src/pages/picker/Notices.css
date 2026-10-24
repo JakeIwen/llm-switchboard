@@ -1,0 +1,6 @@
+.notices {
+  margin: 0 0 var(--mantine-spacing-xs);
+  color: var(--warn);
+  font-size: var(--mantine-font-size-sm);
+  overflow-wrap: anywhere;
+}

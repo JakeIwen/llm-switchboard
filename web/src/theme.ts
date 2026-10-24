@@ -31,17 +31,18 @@ export const theme = createTheme({
   defaultRadius: 'md',
   cursorType: 'pointer',
   components: {
-    Button: Button.extend({ defaultProps: { size: 'compact-sm', variant: 'default' } }),
+    Button: Button.extend({ defaultProps: { size: 'compact-sm', variant: 'default' }, classNames: { root: 'touch-target' } }),
     ActionIcon: ActionIcon.extend({ defaultProps: { size: 'md', variant: 'subtle', color: 'gray' } }),
     TextInput: TextInput.extend({ defaultProps: { size: 'sm' }, classNames: { input: 'app-input' } }),
     Badge: Badge.extend({
       defaultProps: { size: 'sm', radius: 'sm', variant: 'light' },
       styles: { root: { textTransform: 'none', fontWeight: 600 } },
     }),
-    Checkbox: Checkbox.extend({ defaultProps: { size: 'sm' } }),
+    // Blue marks a selection; orange is kept for kept-running sessions.
+    Checkbox: Checkbox.extend({ defaultProps: { size: 'sm', color: 'var(--info)', iconColor: 'var(--surface)' } }),
     Switch: Switch.extend({ defaultProps: { size: 'sm' } }),
     Chip: Chip.extend({ defaultProps: { size: 'xs' } }),
-    Menu: Menu.extend({ defaultProps: { shadow: 'md', position: 'bottom-start' } }),
+    Menu: Menu.extend({ defaultProps: { shadow: 'md', position: 'bottom-start' }, classNames: { item: 'menu-item' } }),
     Popover: Popover.extend({ defaultProps: { shadow: 'md' } }),
     Tooltip: Tooltip.extend({
       defaultProps: { multiline: true, maw: 280, withArrow: true, events: { hover: true, focus: true, touch: true } },

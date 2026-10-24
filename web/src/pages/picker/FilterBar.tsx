@@ -1,16 +1,10 @@
 import { useState } from 'react'
 import { Button, Menu, Tooltip } from '@mantine/core'
 import { IconArrowsSort, IconCheck, IconChevronDown, IconFolder } from '@tabler/icons-react'
-import { FolderPicker, folderTriggerLabel } from './FolderPicker'
-import {
-  SORT_LABELS,
-  STATUS_LABELS,
-  TOOL_LABELS,
-  type FolderChoice,
-  type SortKey,
-  type StatusFilter,
-  type ToolFilter,
-} from './pickerModel'
+import { FolderPicker, folderTriggerLabel, pickedHost } from './FolderPicker'
+import type { FolderChoice } from '../../folders/folderChoices'
+import type { SortKey } from '../../sessions/sort'
+import { SORT_LABELS, SORT_SHORT, STATUS_LABELS, TOOL_LABELS, type StatusFilter, type ToolFilter } from './pickerModel'
 import './FilterBar.css'
 
 interface Props {
@@ -32,7 +26,7 @@ const parts = { label: 'filter-button-inner', section: 'filter-button-section' }
 
 function showLabel(status: StatusFilter, tool: ToolFilter): string {
   if (tool === 'all') return STATUS_LABELS[status]
-  return status === 'all' ? `${TOOL_LABELS[tool]} only` : `${STATUS_LABELS[status]} · ${TOOL_LABELS[tool]}`
+  return status === 'all' ? `${TOOL_LABELS[tool]} only` : `${status === 'kept' ? 'Kept' : 'Open'} · ${TOOL_LABELS[tool]}`
 }
 
 function MenuChoices<K extends string>({ title, labels, value, onChange }: {
@@ -59,6 +53,7 @@ export function FilterBar(p: Props) {
   const [foldersOpen, setFoldersOpen] = useState(false)
   const showActive = p.status !== 'all' || p.tool !== 'all'
   const anyActive = showActive || p.folders.length > 0
+  const host = pickedHost(p.folders, p.folderChoices)
   const folderTrigger = (
     <Button
       className={`filter-button filter-folders${p.folders.length ? ' is-active' : ''}`}
@@ -69,7 +64,9 @@ export function FilterBar(p: Props) {
       aria-haspopup="dialog"
       aria-expanded={foldersOpen}
     >
-      <span className="filter-button-label">{folderTriggerLabel(p.folders, p.folderChoices)}</span>
+      <span className={`filter-button-label${host === null ? '' : host ? ' is-host-path' : ' is-local-path'}`}>
+        {folderTriggerLabel(p.folders, p.folderChoices)}
+      </span>
     </Button>
   )
   return (
@@ -106,12 +103,13 @@ export function FilterBar(p: Props) {
       <Menu position="bottom-end">
         <Menu.Target>
           <Button
-            className="filter-button filter-sort"
+            className={`filter-button filter-sort${p.sort !== 'kept' ? ' is-active' : ''}`}
             aria-label={`Sort: ${SORT_LABELS[p.sort]}`}
             leftSection={<IconArrowsSort size={14} />}
             classNames={parts}
           >
-            <span className="filter-button-label">{SORT_LABELS[p.sort]}</span>
+            <span className="filter-button-label filter-sort-long">{SORT_LABELS[p.sort]}</span>
+            <span className="filter-button-label filter-sort-short">{SORT_SHORT[p.sort]}</span>
           </Button>
         </Menu.Target>
         <Menu.Dropdown>

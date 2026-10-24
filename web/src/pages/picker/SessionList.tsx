@@ -2,14 +2,20 @@ import { Button } from '@mantine/core'
 import { IconFileSearch } from '@tabler/icons-react'
 import type { SessionRow as Row } from '../../api/sessionRow'
 import { plural } from '../../format/format'
-import { SessionRow, type SelectEvent } from './SessionRow'
+import { SessionRow } from './SessionRow'
+import type { RowActions } from './SessionDetails'
+import type { RowNotice } from './useHostActions'
+import type { SelectEvent } from './useSelection'
 import './SessionList.css'
 
 export interface RowHandlers {
-  onExpand: (id: string) => void
+  onExpand: (id: string, event: SelectEvent) => void
   onSelect: (id: string, event: SelectEvent) => void
   onKeep: (row: Row, keep: boolean) => void
   onFolder: (row: Row) => void
+  actions: RowActions
+  notices: ReadonlyMap<string, RowNotice>
+  cursor: string | null
 }
 
 interface Props extends RowHandlers {
@@ -63,6 +69,9 @@ export function SessionList(p: Props) {
             onSelect={p.onSelect}
             onKeep={p.onKeep}
             onFolder={p.onFolder}
+            actions={p.actions}
+            notice={p.notices.get(row.id)}
+            cursor={p.cursor === row.id}
           />
         ))}
         {p.rows.length === 0 && p.total > 0 && (
