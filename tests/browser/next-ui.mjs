@@ -122,5 +122,104 @@ async (page) => {
     await page.setViewportSize({ width: 375, height: 812 })
   })
 
+  // Actions against the fixture. Each check undoes what it did, so a run leaves
+  // the fixture as it found it.
+  const dialog = () => page.getByRole('dialog')
+  const rowNamed = (title) => page.locator('.session-list-rows .session-row', { hasText: title })
+  const waitPoll = () => page.waitForTimeout(1500)
+
+  await check('keep switch turns on, then off (asking first only when busy)', async () => {
+    const row = rowNamed('Beta perf profiling')
+    await row.getByRole('switch', { name: 'Keep running' }).click({ force: true })
+    await waitPoll()
+    expect(await row.evaluate((el) => el.classList.contains('is-kept')), 'not kept after switching on')
+    await row.getByRole('switch', { name: 'Keep running' }).click({ force: true })
+    await settle()
+    if (await dialog().count()) await dialog().getByRole('button', { name: 'Stop' }).click()
+    await waitPoll()
+    expect(!(await row.evaluate((el) => el.classList.contains('is-kept'))), 'still kept after switching off')
+  })
+
+  await check('rename through its form, then back', async () => {
+    const row = rowNamed('Beta release notes')
+    await row.locator('.session-title').click()
+    await row.getByRole('button', { name: 'Rename…' }).click()
+    const title = dialog().getByRole('textbox', { name: 'Title' })
+    await title.fill('Beta release notes v2')
+    await dialog().getByRole('button', { name: 'Rename' }).click()
+    await waitPoll()
+    expect((await rowNamed('Beta release notes v2').count()) === 1, 'title did not change')
+    await rowNamed('Beta release notes v2').getByRole('button', { name: 'Rename…' }).click()
+    await dialog().getByRole('textbox', { name: 'Title' }).fill('Beta release notes')
+    await dialog().getByRole('button', { name: 'Rename' }).click()
+    await waitPoll()
+    expect((await rowNamed('Beta release notes v2').count()) === 0, 'title did not change back')
+    await rowNamed('Beta release notes').locator('.session-title').click()
+  })
+
+  await check('delete asks, then Undo restores', async () => {
+    const before = await rows().count()
+    const row = rowNamed('Quick question about systemd')
+    await row.locator('.session-title').click()
+    await row.getByRole('button', { name: 'Delete' }).click()
+    await dialog().getByRole('button', { name: 'Delete' }).click()
+    await waitPoll()
+    expect((await rows().count()) === before - 1, 'row not removed')
+    expect(await page.getByText('Recently deleted (1)').isVisible(), 'not in Recently deleted')
+    await page.locator('.toast').getByRole('button', { name: 'Undo' }).click()
+    await waitPoll()
+    expect((await rows().count()) === before, 'Undo did not restore')
+  })
+
+  await check('selection bar keeps two running, then stops them', async () => {
+    const a = rowNamed('Alpha CAN decoder')
+    const b = rowNamed('Alpha telemetry export')
+    await a.locator('.session-check input').click()
+    await b.locator('.session-check input').click()
+    await page.locator('.bulkbar').getByRole('button', { name: 'Keep running' }).click()
+    await waitPoll()
+    expect(await a.evaluate((el) => el.classList.contains('is-kept')), 'first not kept')
+    expect(await b.evaluate((el) => el.classList.contains('is-kept')), 'second not kept')
+    await page.locator('.bulkbar').getByRole('button', { name: 'More selection actions' }).click()
+    await page.getByRole('menuitem', { name: 'Stop keeping' }).click()
+    const confirm = dialog().getByRole('button', { name: /Stop/ })
+    if (await confirm.count()) await confirm.click()
+    await waitPoll()
+    expect(!(await a.evaluate((el) => el.classList.contains('is-kept'))), 'first still kept')
+    await page.locator('.bulkbar').getByRole('button', { name: 'Clear selection' }).click()
+  })
+
+  await check('Codex rows offer Fork, not Move', async () => {
+    const row = rowNamed('Codex alpha refactor')
+    await row.locator('.session-title').click()
+    expect((await row.getByRole('button', { name: 'Move…' }).count()) === 0, 'Codex row offers Move')
+    await row.getByRole('button', { name: 'Fork…' }).click()
+    await dialog().waitFor({ timeout: 3000 })
+    await dialog().getByRole('button', { name: 'Cancel' }).click()
+    await row.locator('.session-title').click()
+  })
+
+  await check('settings open with the install values and cancel cleanly', async () => {
+    await page.getByRole('button', { name: 'Settings' }).click()
+    await dialog().getByRole('textbox', { name: /Claude command/ }).waitFor()
+    await dialog().getByRole('button', { name: 'Cancel' }).click()
+    await dialog().waitFor({ state: 'detached', timeout: 3000 })
+  })
+
+  await check('new session form starts one in a listed folder; delete removes it', async () => {
+    const before = await rows().count()
+    await page.getByRole('button', { name: 'New' }).click()
+    await dialog().getByRole('textbox', { name: 'Name' }).fill('Browser check session')
+    await dialog().getByRole('button', { name: /Start|Create/ }).click()
+    await waitPoll()
+    const row = rowNamed('Browser check session')
+    expect((await row.count()) === 1, `no new row (${await rows().count()} vs ${before})`)
+    await row.locator('.session-title').click()
+    await row.getByRole('button', { name: 'Delete' }).click()
+    await dialog().getByRole('button', { name: 'Delete' }).click()
+    await waitPoll()
+    expect((await rowNamed('Browser check session').count()) === 0, 'new session not deleted')
+  })
+
   return { passed: passed.length, failed }
 }

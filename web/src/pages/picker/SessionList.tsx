@@ -11,7 +11,7 @@ import './SessionList.css'
 export interface RowHandlers {
   onExpand: (id: string, event: SelectEvent) => void
   onSelect: (id: string, event: SelectEvent) => void
-  onKeep: (row: Row, keep: boolean) => void
+  onKeep: (row: Row, keep: boolean) => Promise<boolean>
   onFolder: (row: Row) => void
   actions: RowActions
   notices: ReadonlyMap<string, RowNotice>

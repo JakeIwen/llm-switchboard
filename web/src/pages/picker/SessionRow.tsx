@@ -1,4 +1,4 @@
-import { memo, type ReactNode } from 'react'
+import { memo, useEffect, useState, type ReactNode } from 'react'
 import { Badge, Checkbox, Switch, Tooltip } from '@mantine/core'
 import type { SessionRow as Row } from '../../api/sessionRow'
 import { age, size } from '../../format/format'
@@ -17,7 +17,8 @@ interface Props {
   /** A plain click expands; ⌘/Ctrl or Shift selects instead (PickerPage decides). */
   onExpand: (id: string, event: SelectEvent) => void
   onSelect: (id: string, event: SelectEvent) => void
-  onKeep: (row: Row, keep: boolean) => void
+  /** Resolves false when the change was cancelled or refused. */
+  onKeep: (row: Row, keep: boolean) => Promise<boolean>
   onFolder: (row: Row) => void
   actions: RowActions
   /** A queued Mac action's state, shown as the first pill. */
@@ -61,6 +62,9 @@ export const SessionRow = memo(function SessionRow(p: Props) {
   const { row } = p
   const offline = Boolean(row.host) && row.host_online === false
   const shownPills = pills(row)
+  // The switch moves at once; the server's answer (or a cancel) settles it.
+  const [keepShown, setKeepShown] = useState<boolean | null>(null)
+  useEffect(() => setKeepShown(null), [row.enabled])
   const classes = ['session-row', row.enabled && 'is-kept', p.selected && 'is-selected', p.cursor && 'is-cursor', offline && 'is-offline']
   return (
     <div className={classes.filter(Boolean).join(' ')} data-id={row.id}>
@@ -108,7 +112,15 @@ export const SessionRow = memo(function SessionRow(p: Props) {
       {keepable(row) ? (
         <Tooltip label={row.enabled ? 'Kept running with Remote Control; switch off to stop keeping it' : 'Keep running in tmux with Remote Control'}>
           <label className="session-hit session-keep">
-            <Switch aria-label="Keep running" checked={row.enabled} onChange={(e) => p.onKeep(row, e.currentTarget.checked)} />
+            <Switch
+              aria-label="Keep running"
+              checked={keepShown ?? row.enabled}
+              onChange={(e) => {
+                const on = e.currentTarget.checked
+                setKeepShown(on)
+                void p.onKeep(row, on).then((ok) => ok || setKeepShown(null))
+              }}
+            />
           </label>
         </Tooltip>
       ) : (

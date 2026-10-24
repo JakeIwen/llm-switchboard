@@ -26,11 +26,5 @@ export interface ActionContext {
 export interface CreatedSession { id: string; title: string }
 
 /** The action-relevant projection of GET /api/trash; local items omit host fields. */
-export interface TrashSession {
-  id: string
-  title: string
-  host?: string
-  host_online?: boolean
-  mutable?: boolean
-  state?: SessionRow['state']
-}
+/** A Recently deleted entry: a Pi entry, or a Mac session row (GET /api/trash). */
+export type TrashSession = Pick<SessionRow, 'id' | 'title'> & Partial<Pick<SessionRow, 'host' | 'host_online' | 'mutable' | 'state'>>
