@@ -8,6 +8,7 @@
 <link rel="stylesheet" href="/static/app.css">
 <link rel="stylesheet" href="/static/hosts.css">
 <link rel="stylesheet" href="/static/folder-filter.css">
+<link rel="stylesheet" href="/static/toolbar.css">
 </head>
 <body>
 <div class="wrap">
@@ -19,33 +20,43 @@
     </div>
   </header>
   <div class="toolbar">
-    <div class="searchrow">
-      <input type="search" id="q" placeholder='Search  ( -exclude  "phrase"  dir:  is:kept  age:<2d )' autocomplete="off" spellcheck="false">
-      <button type="button" class="btn mode-btn" id="fulltext-btn" aria-pressed="false">Transcripts</button>
-      <button type="button" class="help-btn" id="help-btn" aria-label="Search syntax" aria-expanded="false">?</button>
+    <div class="toolbar-primary">
+      <div class="searchrow">
+        <div class="seg search-scope" role="group" aria-label="Search scope">
+          <button type="button" id="scope-sessions" class="on" aria-pressed="true">Sessions</button>
+          <button type="button" id="scope-transcripts" aria-pressed="false">Transcripts</button>
+        </div>
+        <input type="search" id="q" placeholder="Search sessions…" aria-label="Search sessions" autocomplete="off" spellcheck="false">
+        <button type="button" class="help-btn" id="help-btn" aria-label="Sessions search syntax" aria-controls="help" aria-expanded="false">?</button>
+      </div>
+      <select id="sort" class="sort" aria-label="Sort" title="Sort sessions"></select>
     </div>
-    <div class="seg" role="tablist">
-      <button id="f-all" class="on" type="button">All</button>
-      <button id="f-on" type="button">Kept running</button>
-      <button id="f-open" type="button">Open now</button>
+    <div class="toolbar-filters">
+      <div class="seg" role="group" aria-label="Session status">
+        <button id="f-all" class="on" type="button">All</button>
+        <button id="f-on" type="button">Kept running</button>
+        <button id="f-open" type="button">Open now</button>
+      </div>
+      <div class="seg" id="tools" role="group" aria-label="Session tool" hidden>
+        <button id="t-all" type="button">All tools</button>
+        <button id="t-claude" type="button">Claude</button>
+        <button id="t-codex" type="button">Codex</button>
+      </div>
+      <div class="folder-control">
+        <button id="dir" class="btn folder-trigger" type="button" aria-haspopup="dialog" aria-controls="folder-dialog" aria-expanded="false" title="Filter by folders. Counts follow the session search, status and tool filters.">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10H3Z"/></svg>
+          <span id="dir-label">All folders</span><span id="dir-count">0</span><span class="folder-chevron" aria-hidden="true">⌄</span>
+        </button>
+        <button id="folder-reset" class="btn folder-reset" type="button" aria-label="Clear folder selections" title="Clear folder selections" hidden>×</button>
+      </div>
     </div>
-    <div class="seg" id="tools" role="tablist" hidden>
-      <button id="t-all" type="button">All tools</button>
-      <button id="t-claude" type="button">Claude</button>
-      <button id="t-codex" type="button">Codex</button>
-    </div>
-    <select id="sort" class="sort" aria-label="Sort" title="Sort"></select>
-    <button id="dir" class="btn folder-trigger" type="button" aria-haspopup="dialog" aria-controls="folder-dialog" aria-expanded="false" title="Filter by folders. Counts include all sessions in the default folder choices.">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10H3Z"/></svg>
-      <span id="dir-label">All folders</span><span id="dir-count">0</span><span class="folder-chevron" aria-hidden="true">⌄</span>
-    </button>
   </div>
   <div id="folder-selection" class="folder-selection" hidden>
     <div id="folder-chips" class="folder-chips" aria-label="Selected folders"></div>
-    <button id="folder-clear" class="btn folder-clear" type="button">Clear</button>
   </div>
   <div class="help" id="help" hidden>
-    Every term must match. Case doesn't matter.
+    <section id="help-sessions" aria-labelledby="help-sessions-heading">
+    <strong id="help-sessions-heading">Sessions search</strong> · Filters the list as you type. Every term must match; case doesn't matter.
     <ul>
       <li><code>word</code> in the title, first prompt, folder, id or Remote Control name; <code>"two words"</code> for a phrase</li>
       <li><code>-word</code> excludes; works with everything below too, e.g. <code>-dir:tmp</code></li>
@@ -53,15 +64,20 @@
       <li><code>is:kept</code> <code>is:off</code> <code>is:running</code> <code>is:open</code> <code>is:busy</code> <code>is:attention</code> <code>is:elsewhere</code> <code>is:claude</code> <code>is:codex</code></li>
       <li><code>age:&lt;2d</code> active in the last 2 days · <code>age:&gt;1w</code> older than a week (units m h d w)</li>
       <li><code>state:backoff</code> exact supervisor state</li>
+      <li>Enter searches the same words inside transcripts. Session-only filters are left out; Esc restores this query.</li>
     </ul>
-    <strong>Inside transcripts:</strong> choose <b>Transcripts</b>, type a query, then press Enter.
+    </section>
+    <section id="help-transcripts" aria-labelledby="help-transcripts-heading" hidden>
+    <strong id="help-transcripts-heading">Transcripts search</strong> · Searches prompts and visible replies. Press Enter to run.
     <ul>
       <li>Several words are all required; <code>"two words"</code> is a phrase; <code>-word</code> excludes</li>
       <li><code>tool:claude</code> or <code>tool:codex</code> · <code>dir:obd</code></li>
-      <li><code>by:me</code> your prompts · <code>by:reply</code> replies and thinking · <code>by:tool</code> tool output</li>
+      <li><code>by:me</code> your prompts · <code>by:reply</code> visible replies (thinking and tool output aren't indexed)</li>
       <li><code>age:&lt;2d</code> / <code>age:&gt;1w</code> · <code>after:2026-10-01</code> · <code>before:2026-10-18</code></li>
-      <li>Enter searches; Esc or clearing the query returns to the session list.</li>
+      <li>Include a word or phrase, not only filters. The session status, tool and folder controls don't apply here.</li>
+      <li>Esc, clearing the query, or choosing Sessions restores your earlier session query.</li>
     </ul>
+    </section>
     <p class="keys">Keys: <kbd>↑</kbd><kbd>↓</kbd> move · <kbd>Space</kbd> select · <kbd>⇧</kbd>+<kbd>↑</kbd><kbd>↓</kbd> extend · <kbd>⌘/Ctrl</kbd>+<kbd>A</kbd> all · <kbd>Enter</kbd> details · <kbd>⌫</kbd> delete · <kbd>Esc</kbd> clear · <kbd>/</kbd> search · <kbd>n</kbd> new session.
       Click opens details; the circle selects; <kbd>⌘/Ctrl</kbd>-click adds; <kbd>⇧</kbd>-click selects a range.</p>
   </div>
@@ -80,9 +96,9 @@
   <div class="folder-sheet">
     <div class="folder-head"><h2 id="folder-heading">Folders</h2><button id="folder-close" class="btn folder-close" type="button" aria-label="Close folders" autofocus>×</button></div>
     <label class="folder-search-wrap"><input id="folder-search" type="search" placeholder="Find a folder or machine…" aria-label="Find a folder or machine" autocomplete="off" spellcheck="false"></label>
-    <button id="folder-all" class="btn folder-all" type="button" aria-pressed="true" title="Clear folder selections. Count sums the default folder choices before search and other filters."><span><span class="folder-all-mark" aria-hidden="true">✓</span>All folders</span><span id="folder-total" class="folder-option-count">0</span></button>
+    <button id="folder-all" class="btn folder-all" type="button" aria-pressed="true" title="Clear folder selections. Count sums listed folders after the session search, status and tool filters."><span><span class="folder-all-mark" aria-hidden="true">✓</span>All folders</span><span id="folder-total" class="folder-option-count">0</span></button>
     <div id="folder-options" class="folder-options"></div>
-    <div class="folder-foot"><p id="folder-status" role="status">All folders shown</p><button id="folder-done" class="btn primary" type="button">Done</button></div>
+    <div class="folder-foot"><p id="folder-status" role="status">All folders shown</p><button id="folder-invert" class="btn" type="button" title="Invert selection in the visible folder choices">Invert</button><button id="folder-done" class="btn primary" type="button">Done</button></div>
   </div>
 </dialog>
 <datalist id="cwds"></datalist>

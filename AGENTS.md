@@ -80,8 +80,9 @@ Sharing the socket would let its supervisor close the real windows.
 | `llm_switchboard/static/api.js` | The page's JSON calls to the server (`api`) |
 | `llm_switchboard/static/format.js` | Text formatting for the page: `esc`, `age`, `size`, `plural`, `nowS` |
 | `llm_switchboard/static/feedback.js` | Toasts, dialog bodies listing sessions, the clipboard |
-| `llm_switchboard/static/search.js` | The list filter's syntax (`-neg`, `"phrase"`, `dir:`, `is:`, `age:`) |
-| `llm_switchboard/static/dirs.js` | Which folders the folder menu lists (`listed`: home and two levels below, two or more sessions, not `~/ais`; `dirKey`: one per machine), unfiltered counts and their default-choice total, and the per-machine tint on folder paths |
+| `llm_switchboard/static/search.js` | The Sessions filter syntax (`-neg`, `"phrase"`, `dir:`, `is:`, `age:`) and compatible-query translation into Transcripts |
+| `llm_switchboard/static/toolbar.css` | Responsive search-scope / search / sort row and the status / tool / folder row |
+| `llm_switchboard/static/dirs.js` | Stable folder choices from unfiltered eligibility (`listed` options: depth, minSessions, hidden); counts and total after other filters; per-machine keys and path tints |
 | `llm_switchboard/static/folder-filter.js`, `folder-filter.css` | Persisted folder multiselect, searchable machine groups, removable chips, and mobile bottom sheet |
 | `llm_switchboard/static/sort.js` | List orders (`SORTS`, `sortRows`): kept first, activity, name, folder, size |
 | `llm_switchboard/static/selection.js` | Multi-select: click, cmd/shift ranges, keyboard cursor |

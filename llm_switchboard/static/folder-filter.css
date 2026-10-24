@@ -1,14 +1,20 @@
+.folder-control { position: relative; flex: none; width: var(--folder-control-width); max-width: 100%; }
 .folder-trigger {
-  display: flex; align-items: center; gap: 10px; min-height: 44px; min-width: 0;
-  background: var(--surface); text-align: left;
+  display: flex; align-items: center; gap: 10px; min-height: var(--touch-target); min-width: 0; width: 100%;
+  background: var(--surface); text-align: left; padding-right: var(--touch-target); height: 100%;
 }
+.folder-reset {
+  position: absolute; inset: 0 0 0 auto; width: var(--touch-target); padding: 0; font-size: 24px;
+  background: var(--surface); border-color: var(--accent); border-radius: 0 var(--control-radius) var(--control-radius) 0;
+}
+.folder-reset[hidden] { display: none; }
 .folder-trigger svg { width: 20px; height: 20px; flex: none; }
 .folder-trigger.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
 .folder-trigger #dir-count, .folder-option-count {
   font-size: 12px; font-variant-numeric: tabular-nums; color: var(--muted);
   background: var(--surface-2); padding: 3px 8px; border-radius: 7px;
 }
-.folder-chevron { color: var(--muted); margin-left: auto; }
+.folder-chevron { position: absolute; right: 0; width: var(--touch-target); text-align: center; color: var(--muted); }
 .folder-selection { display: flex; align-items: flex-start; gap: 8px; margin: 0 0 14px; }
 .folder-selection[hidden] { display: none; }
 .folder-chips { display: flex; gap: 6px; flex-wrap: wrap; min-width: 0; }
@@ -19,7 +25,6 @@
 .folder-chip > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .folder-chip small { color: var(--muted); white-space: nowrap; font-size: 11px; }
 .folder-chip > span:last-child { font-size: 20px; line-height: 1; }
-.folder-clear { min-height: 44px; flex: none; background: transparent; }
 .folder-dialog {
   width: min(520px, calc(100% - 32px)); max-width: none; max-height: calc(100dvh - 48px);
   padding: 0; border: 1px solid var(--border); border-radius: 22px; overflow: hidden;
@@ -57,19 +62,20 @@
   display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 20px;
   border-top: 1px solid var(--border); background: var(--surface); flex: none;
 }
-.folder-foot p { margin: 0; color: var(--muted); font-size: 13px; }
-.folder-foot .btn { min-height: 46px; min-width: 100px; }
+.folder-foot p { margin: 0 auto 0 0; color: var(--muted); font-size: 13px; }
+.folder-foot .btn { min-height: var(--touch-target); }
 .folder-open { overflow: hidden; }
 .folder-dialog :focus-visible, .folder-trigger:focus-visible, .folder-chip:focus-visible {
   outline: 2px solid var(--info); outline-offset: 3px;
 }
-.fulltext-mode .folder-trigger, .fulltext-mode .folder-selection { display: none; }
+.fulltext-mode .folder-selection { display: none; }
 @media (hover: hover) {
   .folder-option:hover { background: var(--surface-2); }
   .folder-option:has(input:checked):hover { background: var(--folder-selected); }
 }
 @media (max-width: 600px) {
-  .folder-trigger { flex: 1 1 100%; min-height: 48px; }
+  .folder-control { flex: 1 1 100%; }
+  .folder-trigger { min-height: 48px; }
   .folder-dialog {
     width: 100%; max-height: calc(var(--folder-viewport-height, 100dvh) - 20px); margin: auto 0 0;
     bottom: var(--folder-viewport-bottom, 0px); border-radius: 24px 24px 0 0; border-bottom: 0;

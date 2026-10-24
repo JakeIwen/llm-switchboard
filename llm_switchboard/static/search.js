@@ -66,6 +66,23 @@ function fieldPredicate(field, value) {
 
 const textPredicate = (value) => (s) => has([s.title, s.first_prompt, s.project, s.cwd, s.id, s.rc_name], value);
 
+// Carry only compatible terms into transcript search, preserving phrases,
+// exclusions and literal prefixes. The original list query is saved by the UI.
+export function transcriptQuery(text) {
+  const terms = [], ignored = [];
+  for (const [raw, neg, rawField, quoted, bare] of String(text).matchAll(TOKEN)) {
+    const field = lower(rawField), value = lower(quoted ?? bare);
+    if (field === "is" && (value === "claude" || value === "codex")) {
+      terms.push(`${neg || ""}tool:${value}`);
+    } else if (["is", "state", "title", "id"].includes(field) || /^-?(is|state|title|id):$/i.test(raw)) {
+      ignored.push(raw);
+    } else {
+      terms.push(raw);
+    }
+  }
+  return { query: terms.join(" "), ignored };
+}
+
 // Returns { test(session, nowSeconds) -> bool, errors: [string], empty: bool }.
 export function compileQuery(text) {
   const preds = [];

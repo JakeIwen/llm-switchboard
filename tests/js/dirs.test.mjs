@@ -63,13 +63,14 @@ test("folder counts and ordering keep identical paths on different machines sepa
   ]);
 });
 
-test("selected hidden and missing folders stay removable without raising the default total", () => {
+test("selected hidden and missing folders stay removable and contribute their matching counts", () => {
   const selected = new Set(["~/dev/project/worktree", "~/dev/scratch", "mac:~/dev/gone", "~/dev/local:gone", UNKNOWN_DIR]);
   const { choices, total } = folderChoices([
     ...sessionsIn("~/dev/project", 2), ...sessionsIn("~/dev/project/worktree", 8),
     ...sessionsIn("~/dev/scratch", 1), ...sessionsIn(undefined, 4),
   ], selected);
-  assert.equal(total, 2);
+  assert.equal(total, 15);
+  assert.equal(total, choices.reduce((sum, folder) => sum + folder.count, 0));
   assert.equal(choices.length, 6);
   for (const key of selected) assert.ok(choices.some((folder) => folder.key === key && !folder.defaultListed), key);
   assert.deepEqual(choices.find((folder) => folder.key === "mac:~/dev/gone"), {
@@ -78,6 +79,31 @@ test("selected hidden and missing folders stay removable without raising the def
   assert.equal(choices.find((folder) => folder.key === "~/dev/local:gone").host, "");
   assert.equal(choices.find((folder) => folder.key === "~/dev/project/worktree").count, 8);
   assert.equal(choices.find((folder) => folder.key === UNKNOWN_DIR).count, 4);
+});
+
+test("folder eligibility accepts depth, minimum sessions and hidden-prefix settings", () => {
+  assert.ok(listed("~/dev/project/worktree", 1, { depth: 3, minSessions: 1 }));
+  assert.ok(!listed("~/dev/project", 8, { depth: 1 }));
+  assert.ok(!listed("~/dev/project", 2, { minSessions: 3 }));
+  assert.ok(listed("~/ais", 2, { hidden: [] }));
+  assert.ok(!listed("~/dev/private/project", 9, { depth: 3, hidden: ["~/dev/private"] }));
+  assert.ok(listed("~/dev/privately", 9, { hidden: ["~/dev/private"] }));
+  assert.ok(listed("~", 2, { depth: 0 }));
+  assert.ok(!listed("~/dev", 2, { depth: 0 }));
+  const sessions = [...sessionsIn("~/dev/project/worktree", 1), ...sessionsIn("~/ais", 2)];
+  assert.equal(folderChoices(sessions).total, 0);
+  assert.equal(folderChoices(sessions, [], { depth: 3, minSessions: 1, hidden: [] }).total, 3);
+});
+
+test("counts follow matching sessions but zero-count choices remain eligible", () => {
+  const sessions = [...sessionsIn("~/dev/alpha", 4), ...sessionsIn("~/dev/beta", 3), ...sessionsIn("~/dev/scratch", 1)];
+  const matching = sessions.filter((session) => session.tool === "codex" && session.project.includes("alpha"));
+  const filtered = folderChoices(sessions, [], {}, matching);
+  assert.deepEqual(filtered.choices.map(({ key, count }) => [key, count]), [["~/dev/alpha", 2], ["~/dev/beta", 0]]);
+  assert.equal(filtered.total, 2);
+  const empty = folderChoices(sessions, [], {}, []);
+  assert.deepEqual(empty.choices.map(({ key }) => key), filtered.choices.map(({ key }) => key));
+  assert.equal(empty.total, 0);
 });
 
 test("an empty catalogue has no default total and deduplicates retained selections", () => {

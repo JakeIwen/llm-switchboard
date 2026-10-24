@@ -43,6 +43,18 @@ async function selectionChecks({ page, check, waitFor, shots }) {
   await page.click("#folder-all");
   check("All folders clears all choices at once", await waitFor(async () => await count(page) === 12)
     && await page.$$eval("#folder-options input:checked", (elements) => elements.length === 0));
+  await page.click(alpha);
+  await page.click("#folder-invert");
+  check("Invert selects every unselected listed folder and deselects alpha", await waitFor(async () => await count(page) === 7)
+    && await page.$$eval("#folder-options input:checked", (elements) => elements.length === 2));
+  await input(page, "#folder-search", "beta");
+  await page.click("#folder-invert");
+  check("Invert within a folder search leaves the other selection untouched", await waitFor(async () => await count(page) === 3));
+  await page.click("#folder-invert");
+  check("Invert again adds the visible folder back", await waitFor(async () => await count(page) === 7));
+  await input(page, "#folder-search", "nothing");
+  check("Invert is disabled with no visible choices", await page.$eval("#folder-invert", (element) => element.disabled));
+  await page.click("#folder-all");
   await page.click("#folder-done");
 }
 
@@ -52,29 +64,39 @@ async function intersectionChecks({ page, check, waitFor }) {
   await page.click("#folder-done");
   await page.click("#t-claude");
   check("tool filter intersects the selected folder", await waitFor(async () => await count(page) === 4));
+  check("folder totals follow the tool switch", await total(page) === 10);
+  const clearBounds = await page.$eval("#folder-reset", (element) => element.getBoundingClientRect().toJSON());
   await input(page, "#q", "CAN");
   check("list search intersects both folder and tool", await waitFor(async () => await count(page) === 1));
-  check("selected folder count stays unfiltered", await page.$eval("#dir-count", (element) => element.textContent === "5"));
+  check("trigger and chip counts follow other filters", await page.$eval("#dir-count", (element) => element.textContent === "1")
+    && await page.$eval("#folder-chips .folder-option-count", (element) => element.textContent === "1"));
+  check("clear × stays at the right edge of the trigger when counts change", await page.$eval("#folder-reset", (element, before) => {
+    const now = element.getBoundingClientRect(), trigger = document.querySelector("#dir").getBoundingClientRect();
+    return element.textContent === "×" && now.x === before.x && now.y === before.y && now.right === trigger.right;
+  }, clearBounds));
   await open(page);
-  check("folder counts ignore active list search and tool filters", await total(page) === 12
-    && await page.$$eval(".folder-option-count[aria-label]", (elements) => elements.map((element) => element.textContent).join(",") === "5,4,3"));
+  check("folder counts follow active list search and tool filters without removing zero counts", await total(page) === 1
+    && await page.$$eval("#folder-options .folder-option-count", (elements) => elements.map((element) => element.textContent).join(",") === "1,0,0"));
   await page.type("#folder-search", "beta");
   check("picker search narrows folder choices without changing selected sessions", await page.$$eval("#folder-options input", (elements) =>
     elements.length === 1 && elements[0].dataset.folder === "~/dev/beta") && await count(page) === 1);
   await input(page, "#folder-search", "no-such-folder");
-  check("empty folder search has a visible empty state and keeps its total", Boolean(await page.$(".folder-empty")) && await total(page) === 12);
+  check("empty folder search has a visible empty state and keeps its filtered total", Boolean(await page.$(".folder-empty")) && await total(page) === 1);
   await input(page, "#folder-search", "");
   check("clearing picker search restores the selected checkbox", await page.$eval(alpha, (element) => element.checked));
   await page.click("#folder-done");
   await input(page, "#q", "");
   await page.click("#f-on");
   check("status tabs intersect selected folders", await waitFor(async () => await count(page) === 0));
-  check("status tabs leave baseline folder counts unchanged", await total(page) === 12);
+  check("kept-running tab updates all folder counts to zero", await total(page) === 0);
+  await page.click("#f-open");
+  check("open-now tab also counts only matching sessions", await total(page) === 0);
   await page.click("#f-all");
   await page.click("#t-all");
-  await page.click("#folder-clear");
-  check("Clear restores all sessions after other filters reset", await waitFor(async () => await count(page) === 12));
-  await page.$eval("#folder-clear", (element) => element.blur());
+  await page.click("#folder-reset");
+  check("fixed × restores all sessions after other filters reset", await waitFor(async () => await count(page) === 12));
+  check("fixed × hides once no folders are selected", await page.$eval("#folder-reset", (element) => element.hidden));
+  await page.$eval("#dir", (element) => element.blur());
 }
 
 function extraCatalogue(catalogue) {
@@ -127,7 +149,7 @@ async function phoneChecks({ page, check, waitFor, shots }) {
   await input(page, "#folder-search", "");
   await page.click(alpha);
   await page.focus(alpha);
-  const poll = await page.waitForResponse((response) => new URL(response.url()).pathname === "/api/sessions", { timeout: 6000 });
+  const poll = await page.waitForResponse((response) => new URL(response.url()).pathname === "/api/sessions", { timeout: 12000 });
   await poll.json();
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   check("polling preserves an open sheet, its checked choices and keyboard focus", await page.evaluate(() =>
@@ -144,7 +166,7 @@ async function phoneChecks({ page, check, waitFor, shots }) {
   }
   await page.click("#folder-done");
   check("phone selection filters the list", await waitFor(async () => await count(page) === 5));
-  await page.click("#folder-clear");
+  await page.click("#folder-reset");
 }
 
 async function excludedAndPhoneChecks({ page, check, waitFor, shots }) {
@@ -173,6 +195,15 @@ async function excludedAndPhoneChecks({ page, check, waitFor, shots }) {
     await isolated.click("#folder-all");
     await isolated.click("#folder-done");
     await phoneChecks({ page: isolated, check, waitFor, shots });
+    payload.settings = { folders: { depth: 3, min_sessions: 1, hidden: [] } };
+    check("server folder settings change depth, minimum count and hidden prefixes", await waitFor(async () => await total(isolated) === 48)
+      && Boolean(await isolated.$('#folder-options input[data-folder="~/dev/alpha/worktree"]'))
+      && Boolean(await isolated.$('#folder-options input[data-folder="~/dev/one-off"]'))
+      && Boolean(await isolated.$('#folder-options input[data-folder="~/ais"]')));
+    payload.settings.folders.hidden = ["~/dev/alpha"];
+    check("updated hidden prefixes exclude descendants on every machine", await waitFor(async () => await total(isolated) === 38)
+      && !await isolated.$('#folder-options input[data-folder="mac:~/dev/alpha"]')
+      && !await isolated.$('#folder-options input[data-folder="~/dev/alpha/worktree"]'));
     check("folder phone interactions produce no page errors", errors.length === 0, errors.join(" | "));
   } finally {
     await page.evaluate(() => localStorage.setItem("switchboard.dirs", "[]"));

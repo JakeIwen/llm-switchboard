@@ -6,6 +6,8 @@
   --dev-local: #2a7468; --dev-host: #6450ad;
   --folder-shadow: rgba(0,0,0,.2); --folder-backdrop: rgba(0,0,0,.42);
   --folder-selected: color-mix(in srgb, var(--accent) 11%, var(--surface));
+  --touch-target: 44px; --control-radius: 10px; --toolbar-gap: 8px;
+  --toolbar-search-padding: 12px; --folder-control-width: 228px;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --session-tag-width: 44px; --session-tag-font: 10px; --session-tag-tracking: .02em;
   --session-tag-gap: 3px; --session-tag-padding: 1px 0; --session-tag-offset: 2px;
@@ -29,7 +31,6 @@ body {
 header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 h1 { font-size: 22px; margin: 0; letter-spacing: -0.01em; }
 .sub { color: var(--muted); font-size: 13px; }
-.toolbar { display: flex; gap: 8px; margin: 16px 0 12px; flex-wrap: wrap; }
 input[type=search], input[type=text] {
   flex: 1 1 220px; min-width: 0; padding: 9px 12px; border-radius: 10px; border: 1px solid var(--border);
   background: var(--surface); color: var(--text); font: inherit;
@@ -151,10 +152,8 @@ body.bulk .wrap { padding-bottom: 140px; }
 body.bulk .toast { bottom: calc(96px + env(safe-area-inset-bottom)); }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; }
 .btn.danger-fill { background: var(--bad); border-color: var(--bad); color: #fff; }
-.searchrow { display: flex; gap: 6px; flex: 1 1 260px; min-width: 0; }
-.searchrow input { flex: 1; }
 select.sort { border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--text); font: inherit; padding: 8px 10px; cursor: pointer; }
-.help-btn { flex: none; width: 38px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface); color: var(--muted); font: inherit; cursor: pointer; }
+.help-btn { border: 1px solid var(--border); background: var(--surface); color: var(--muted); font: inherit; cursor: pointer; }
 .help { font-size: 13px; color: var(--muted); background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 10px 14px; margin: -4px 0 12px; }
 .help[hidden] { display: none; }
 .help code { font-family: var(--mono); font-size: 12px; color: var(--text); }
@@ -220,14 +219,10 @@ select.dlg-input {
 }
 
 /* Full-text transcript search is a separate mode from the ordinary list filter. */
-.mode-btn { flex: none; padding: 8px 10px; background: var(--surface); }
-.mode-btn.on { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
 .index-status { display: none; color: var(--muted); font-size: 12px; margin: -6px 0 10px; }
 .fulltext-mode .index-status { display: block; }
-.fulltext-mode .toolbar > .seg, .fulltext-mode .toolbar > .sort,
 .fulltext-mode #trash, .fulltext-mode #bulkbar,
 .fulltext-mode .wrap > .hint { display: none; }
-.fulltext-mode .searchrow { flex-basis: 100%; }
 .search-card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 12px 14px; }
 .search-head { display: flex; align-items: flex-start; gap: 10px; }
 .search-head > .btn { flex: none; padding: 6px 9px; }
@@ -238,9 +233,6 @@ select.dlg-input {
 .search-line > span { display: block; color: var(--muted); font-size: 10px; font-weight: 700; text-transform: uppercase; }
 .search-line.match { color: var(--text); background: color-mix(in srgb, var(--accent) 12%, var(--surface)); }
 @media (max-width: 520px) {
-  .searchrow { flex-wrap: wrap; }
-  .searchrow input { flex-basis: calc(100% - 46px); }
-  .mode-btn { order: 3; flex: 1 1 100%; }
   .search-head { flex-wrap: wrap; }
   .search-head > .main { flex-basis: calc(100% - 56px); }
   .search-head > .btn { margin-left: auto; }

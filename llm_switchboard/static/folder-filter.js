@@ -47,7 +47,8 @@ export class FolderFilter {
     $("folder-done").addEventListener("click", () => dialog.close());
     $("folder-close").addEventListener("click", () => dialog.close());
     $("folder-all").addEventListener("click", () => this.set([]));
-    $("folder-clear").addEventListener("click", () => { this.set([]); $("dir").focus(); });
+    $("folder-reset").addEventListener("click", () => { this.set([]); $("dir").focus(); });
+    $("folder-invert").addEventListener("click", () => this.invert());
     $("folder-search").addEventListener("input", () => this.renderOptions());
     $("folder-options").addEventListener("change", (event) => {
       const key = event.target.dataset.folder;
@@ -98,8 +99,8 @@ export class FolderFilter {
     $("folder-close").focus({ preventScroll: true });
   }
 
-  render(sessions) {
-    this.model = folderChoices(sessions, this.selected);
+  render(sessions, matching = sessions, options = {}) {
+    this.model = folderChoices(sessions, this.selected, options, matching);
     const picked = this.model.choices.filter((choice) => this.selected.has(choice.key));
     $("dir-label").textContent = picked.length ? plural(picked.length, "folder") : "All folders";
     $("dir-count").textContent = picked.length ? picked.reduce((n, choice) => n + choice.count, 0) : this.model.total;
@@ -107,17 +108,31 @@ export class FolderFilter {
     $("folder-selection").hidden = !picked.length;
     this.setHTML($("folder-chips"), picked.map((choice) => `<button type="button" class="folder-chip ${deviceClass(choice.host)}"
       data-remove-folder="${esc(choice.key)}" aria-label="${esc(`Remove ${choice.project} on ${choice.host || "This Pi"}`)}">
-      <span>${esc(choice.project)}</span><small>${esc(choice.host || "This Pi")}</small><span aria-hidden="true">×</span></button>`).join(""));
+      <span>${esc(choice.project)}</span><small>${esc(choice.host || "This Pi")}</small>
+      <span class="folder-option-count" aria-label="${plural(choice.count, "session")}">${choice.count}</span><span aria-hidden="true">×</span></button>`).join(""));
     $("folder-total").textContent = this.model.total;
     $("folder-all").setAttribute("aria-pressed", String(!picked.length));
     $("folder-status").textContent = picked.length ? `${plural(picked.length, "folder")} selected` : "All folders shown";
-    $("folder-clear").disabled = !picked.length;
+    $("folder-reset").hidden = !picked.length;
     this.renderOptions();
   }
 
-  renderOptions() {
+  visibleChoices() {
     const query = $("folder-search").value.trim().toLocaleLowerCase();
-    const choices = this.model.choices.filter((choice) => `${choice.project} ${choice.host || "This Pi"}`.toLocaleLowerCase().includes(query));
+    return this.model.choices.filter((choice) => `${choice.project} ${choice.host || "This Pi"}`.toLocaleLowerCase().includes(query));
+  }
+
+  invert() {
+    const next = new Set(this.selected);
+    for (const { key } of this.visibleChoices()) {
+      next.has(key) ? next.delete(key) : next.add(key);
+    }
+    this.set(next);
+  }
+
+  renderOptions() {
+    const choices = this.visibleChoices();
+    $("folder-invert").disabled = !choices.length;
     const groups = new Map();
     for (const choice of choices) {
       if (!groups.has(choice.host)) groups.set(choice.host, []);

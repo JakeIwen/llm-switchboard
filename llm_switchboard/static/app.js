@@ -120,7 +120,8 @@ function render() {
   // Don't redraw under someone typing in a session's field.
   if (document.activeElement && document.activeElement.matches("#list input[type=text]")) return;
   const now = nowS();
-  const rows = sortRows(data.sessions.filter((s) => matches(s, now) && folderFilter.matches(dirOf(s))), sort);
+  const matching = data.sessions.filter((s) => matches(s, now));
+  const rows = sortRows(matching.filter((s) => folderFilter.matches(dirOf(s))), sort);
   order = rows.map((s) => s.id);
   sel.prune(order);
   const on = data.sessions.filter((s) => s.enabled);
@@ -129,7 +130,10 @@ function render() {
   $("tools").hidden = !data.codex?.enabled && !data.sessions.some((s) => s.tool === "codex");
   $("qerr").textContent = [...query.errors, data.codex?.error && `Codex sessions unavailable: ${data.codex.error}`].filter(Boolean).join(" · ");
   setHTML($("host-actions"), actionSummary(data.host_actions, data.now));
-  folderFilter.render(data.sessions);
+  const folders = data.settings?.folders;
+  folderFilter.render(data.sessions, matching, folders ? {
+    depth: folders.depth, minSessions: folders.min_sessions, hidden: folders.hidden,
+  } : {});
   setHTML($("list"), rows.length ? rows.map(card).join("") : `<div class="empty">No sessions match.</div>`);
   renderTrash();
   renderBulkbar();
