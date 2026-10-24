@@ -1,11 +1,21 @@
-// Placeholder until the ported helpers and generated OpenAPI types land; mirrors
-// catalog.py's rows as `GET /api/sessions` returns them.
+// Mirrors catalog.py, supervisor_state.py and hosts.page_row in GET /api/sessions.
+// Generated OpenAPI types will replace these hand-maintained records.
+export const TOOLS = { claude: 'claude', codex: 'codex' } as const
+export type SessionTool = keyof typeof TOOLS
+export type SupervisorState = 'running' | 'starting' | 'attention' | 'elsewhere' | 'offline' | 'backoff' | 'missing' | 'error'
+export type CodexState = 'notLoaded' | 'idle' | 'active' | 'systemError'
+export type HostSessionState = 'closed' | 'idle' | 'busy'
+export type HostActionState = 'queued' | 'sent' | 'done' | 'failed' | 'expired'
 
-export type Tool = 'claude' | 'codex'
+export interface SessionExit {
+  status: number | null
+  at: number
+  ran_s: number
+}
 
-export interface SupervisorStatus {
+export interface SessionStatus {
   session_id: string
-  state: string
+  state: SupervisorState
   detail: string
   window_id: string | null
   pid: number | null
@@ -17,37 +27,47 @@ export interface SupervisorStatus {
   next_attempt: number
   failures: number
   launches: number
-  last_exit: number | null
+  last_exit: SessionExit | null
   rc_name: string
 }
 
-export interface OpenElsewhere {
-  pid: number
+// Local Claude processes have a pid; remote metadata deliberately omits it.
+export interface OpenProcess {
+  pid?: number
   status: string
+}
+
+export interface HostAvailability {
+  host: string
+  online: boolean
+  last_seen: number
 }
 
 export interface SessionRow {
   id: string
-  tool: Tool
+  tool: SessionTool
   host: string
   short_id: string
   title: string
-  first_prompt: string
+  // Host rows never include prompts.
+  first_prompt?: string
   cwd: string
   project: string
-  mtime: number
-  size: number
+  mtime: number | null
+  size: number | null
   remote_url: string
   resume_cmd: string
   new: boolean
   enabled: boolean
   rc_name: string
-  open_elsewhere: OpenElsewhere[]
-  status: SupervisorStatus | null
-  state?: string
-  mutable?: boolean
+  open_elsewhere: OpenProcess[]
+  status: SessionStatus | null
+  // Present for local Codex and host rows, absent for local Claude.
+  codex_state?: CodexState
+  // Host-only fields; id is host:session_id, while session_id is the raw id.
   session_id?: string
   host_online?: boolean
   last_seen?: number
-  codex_state?: string
+  state?: HostSessionState
+  mutable?: boolean
 }
