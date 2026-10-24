@@ -26,10 +26,18 @@ def _adapter(model):
     return TypeAdapter(model)
 
 
-def json_response(payload, model, status=200) -> Response:
+def json_response(payload, model, status=200, *, request: Request | None = None) -> Response:
     # Validate without reserializing the model: absent keys, integer vs float,
     # insertion order, escaping and separators are all part of the old wire format.
-    _adapter(model).validate_python(payload)
+    try:
+        _adapter(model).validate_python(payload)
+    except ValidationError as exc:
+        route = f"{request.method} {request.url.path}" if request else "error response"
+        errors = exc.errors(include_input=False, include_context=False, include_url=False)
+        log.error("Response validation failed for %s (%d errors): %s", route, exc.error_count(), errors[:5])
+        if request and request.app.state.strict_responses:
+            raise
+        # Schema drift must not hide otherwise usable sessions on a production poll.
     return Response(json.dumps(payload).encode(), status_code=status,
                     headers={"Content-Type": "application/json", "Cache-Control": "no-store"})
 
@@ -41,6 +49,25 @@ def error_response(message, status=400) -> Response:
 def validation_error(request: Request, exc: RequestValidationError) -> Response:
     first = exc.errors()[0]
     return error_response(first.get("ctx", {}).get("error", first["msg"]))
+
+
+def unexpected_error(request: Request, exc: Exception) -> Response:
+    log.error("Unhandled exception for %s %s", request.method, request.url.path,
+              exc_info=(type(exc), exc, exc.__traceback__))
+    return error_response("internal server error", 500)
+
+
+def audit_post(request: Request) -> None:
+    remote = action_route(request.url.path)
+    if remote:
+        host, _, action = remote
+        what = f"{host} {action}"
+    elif "sid" in request.path_params:
+        what = f"{request.url.path.rsplit('/', 1)[-1]} {request.path_params['sid'][:8]}"
+    else:
+        what = {"/api/settings": "settings", "/api/sessions/new": "new",
+                "/api/trash/empty": "empty trash"}.get(request.url.path, request.url.path)
+    log.info("%s from %s", what, request.client[0] if request.client else "unknown peer")
 
 
 class RawPathMiddleware:
@@ -71,9 +98,14 @@ class CompatibilityRoute(APIRoute):
                     rejected = await self._body(request)
                     if rejected is not None:
                         return rejected
-                return await handler(request)
+                response = await handler(request)
+                if request.method == "POST" and 200 <= response.status_code < 300:
+                    audit_post(request)
+                return response
             except LookupError as exc:
-                return error_response(exc, 404)
+                if {"sid", "host"} & request.path_params.keys():
+                    return error_response(exc, 404)
+                raise
             except CodexUnavailable as exc:
                 return error_response(exc, 503)
             except Conflict as exc:
@@ -117,6 +149,8 @@ class CompatibilityRoute(APIRoute):
         if not isinstance(body, dict):
             return error_response("body must be a JSON object")
         # Let FastAPI bind the declared Pydantic model even for a zero-byte POST.
+        # These are Starlette's private request caches. uv.lock pins their shape;
+        # upgrading Starlette/FastAPI is a contract change requiring HTTP parity.
         request._body = raw or b"{}"
         request._json = body
         return None

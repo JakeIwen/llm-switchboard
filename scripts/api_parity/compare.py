@@ -58,7 +58,8 @@ class Comparison:
         lines = ["# HTTP parity", "", f"{len(self.results) - len(failures)}/{len(self.results)} cases matched.", "",
                  "Status, Content-Type, Cache-Control, JSON field order/types and bodies are compared. Static files are byte-hashed.",
                  "Only times, generated UUIDs/short ids, and equivalent fixture HOME prefixes are normalized.",
-                 "Both use the real supervisor/indexer/tmux with an offline connectivity probe; no model process can start.", "",
+                 "Both use the real supervisor/indexer/tmux with an offline connectivity probe; no model process can start.",
+                 "LLM_SWITCHBOARD_STRICT_RESPONSES=1 makes any new-server schema mismatch fatal during this comparison.", "",
                  "| Server | Ready (s) | RSS (KiB) | SIGTERM code | tmux sentinel survives |",
                  "| --- | ---: | ---: | ---: | --- |"]
         for server in servers:

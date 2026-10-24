@@ -27,7 +27,8 @@ SERVE = "from llm_switchboard.connectivity import Connectivity; Connectivity._pr
 def environment(repo, home, socket):
     env = {k: v for k, v in os.environ.items() if not k.startswith(("XDG_", "LLM_SWITCHBOARD_"))}
     return {**env, "HOME": str(home), "PYTHONPATH": str(repo), "LLM_SWITCHBOARD_CODEX_SOCKET": "codex.sock",
-            "LLM_SWITCHBOARD_TMUX_SOCKET": socket, "LLM_SWITCHBOARD_NOTIFY": ""}
+            "LLM_SWITCHBOARD_TMUX_SOCKET": socket, "LLM_SWITCHBOARD_NOTIFY": "",
+            "LLM_SWITCHBOARD_STRICT_RESPONSES": "1"}
 
 
 def fixture_homes(repo: Path, workspace: Path):

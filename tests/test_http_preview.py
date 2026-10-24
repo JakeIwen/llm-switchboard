@@ -17,7 +17,7 @@ class PreviewTransportTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             built = build(root)
-            with TestClient(create_http_app()) as client:
+            with TestClient(create_http_app(strict_responses=True)) as client:
                 for dist in (built, root / "unbuilt"):
                     with patch.object(next_page, "DIST_DIR", dist):
                         for path in ("/next", "/next/", "/next/?q=1", "/next/index.html", "/next/settings",

@@ -2,7 +2,13 @@
 
 import asyncio
 from contextlib import asynccontextmanager
+from pathlib import Path
 import socket
+import subprocess
+import sys
+import tempfile
+import textwrap
+import time
 import threading
 import unittest
 import urllib.request
@@ -85,6 +91,53 @@ class UvicornListenTest(unittest.IsolatedAsyncioTestCase):
 
 
 class LifespanTest(unittest.TestCase):
+    def test_sigterm_runs_shutdown_and_exits_zero(self):
+        code = textwrap.dedent('''
+            from contextlib import asynccontextmanager
+            from pathlib import Path
+            import signal, sys
+            from fastapi import FastAPI
+            from llm_switchboard.http.server import Server, bind_socket
+            root = Path(sys.argv[1])
+            @asynccontextmanager
+            async def lifespan(app):
+                yield
+                (root / "shutdown").write_text("complete")
+            sock = bind_socket("127.0.0.1", 0)
+            port = sock.getsockname()[1]
+            (root / "port").write_text(str(port))
+            try:
+                Server(FastAPI(lifespan=lifespan), port=port).run(sockets=[sock])
+            finally:
+                sock.close()
+            assert signal.getsignal(signal.SIGTERM) == signal.SIG_DFL
+        ''')
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            process = subprocess.Popen([sys.executable, "-c", code, str(root)],
+                                       cwd=Path(__file__).resolve().parents[1],
+                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            try:
+                deadline = time.monotonic() + 10
+                while time.monotonic() < deadline:
+                    self.assertIsNone(process.poll(), "server exited before HTTP readiness")
+                    try:
+                        port = int((root / "port").read_text())
+                        with urllib.request.urlopen(f"http://127.0.0.1:{port}/openapi.json", timeout=0.2):
+                            break
+                    except (OSError, ValueError):
+                        time.sleep(0.01)
+                else:
+                    self.fail("server never became ready")
+                process.terminate()
+                output, errors = process.communicate(timeout=10)
+                self.assertEqual(process.returncode, 0, output + errors)
+                self.assertEqual((root / "shutdown").read_text(), "complete")
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                process.communicate(timeout=5)
+
     def test_supervisor_and_indexer_share_stop_and_do_not_stop_tmux(self):
         stopped = []
         started = threading.Event()

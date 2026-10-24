@@ -57,7 +57,7 @@ class HostIntegrationTests(unittest.TestCase):
             hosts.exchange("mac", {"version": 1, "rows": [sample()]})
             supervisor = Supervisor(store, index, tmux, FakeConnectivity(), registry=lambda: [], clock=Clock())
             app = App(store, index, supervisor, tmux, Trash(root / "trash"), registry=lambda: [], hosts=hosts)
-            server = make_server(app, "127.0.0.1", 0)
+            server = make_server(app, "127.0.0.1", 0, strict_responses=True)
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             try:

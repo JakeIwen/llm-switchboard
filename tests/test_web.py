@@ -29,7 +29,7 @@ class WebTest(unittest.TestCase):
         self.root = Path(tmp.name)
         self.app = App(self.store, index, self.sup, self.tmux, Trash(self.root / "trash"), registry=lambda: [],
                        settings_file=self.root / "settings.json")
-        server = make_server(self.app, "127.0.0.1", 0)
+        server = make_server(self.app, "127.0.0.1", 0, strict_responses=True)
         self.base = f"http://127.0.0.1:{server.server_address[1]}"
         threading.Thread(target=server.serve_forever, daemon=True).start()
         self.addCleanup(server.server_close)

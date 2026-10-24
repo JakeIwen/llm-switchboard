@@ -3,6 +3,7 @@
 import asyncio
 import contextlib
 import logging
+import signal
 import socket
 import threading
 
@@ -54,6 +55,20 @@ class Server(uvicorn.Server):
         self.retry_s = retry_s
         self.bind_task = None
 
+    @contextlib.contextmanager
+    def capture_signals(self):
+        if threading.current_thread() is not threading.main_thread():
+            yield
+            return
+        handlers = {sig: signal.signal(sig, self.handle_exit) for sig in (signal.SIGINT, signal.SIGTERM)}
+        try:
+            yield
+        finally:
+            for sig, handler in handlers.items():
+                signal.signal(sig, handler)
+        # Unlike Uvicorn's default, a completed graceful shutdown exits normally;
+        # re-raising SIGTERM would report a killed process to our service manager.
+
     async def startup(self, sockets=None):
         await super().startup(sockets)
         if self.tailscale and not self.should_exit:
@@ -88,6 +103,8 @@ class Server(uvicorn.Server):
         sock = bind_socket(address, self.port)
         try:
             loop = asyncio.get_running_loop()
+            # Protocol construction and server/lifespan state are Uvicorn internals
+            # pinned by uv.lock; an upgrade is a listener/lifecycle contract change.
             server = await loop.create_server(
                 lambda: PeerProtocol(config=self.config, server_state=self.server_state,
                                      app_state=self.lifespan.state, _loop=loop), sock=sock)

@@ -5,6 +5,7 @@ submit an action without a preflight, which this application never approves.
 """
 
 import json
+import os
 from pathlib import Path
 import re
 
@@ -18,7 +19,8 @@ from .host_web import action_route
 from .http.lifespan import service_lifespan
 from .http import requests as bodies
 from .http import responses as schemas
-from .http.transport import CompatibilityRoute, RawPathMiddleware, error_response, json_response, validation_error
+from .http.transport import (CompatibilityRoute, RawPathMiddleware, error_response, json_response,
+                             unexpected_error, validation_error)
 from .search_api import route_search_get
 # Permanent public imports for CLI and existing callers.
 from .web_app import App, make_app
@@ -45,14 +47,18 @@ REMOTE_BODIES = {
 ERRORS = {code: {"model": schemas.ErrorResponse} for code in (400, 404, 409, 415, 503)}
 
 
-def create_http_app(domain: App | None = None, *, manage_lifecycle=False) -> FastAPI:
+def create_http_app(domain: App | None = None, *, manage_lifecycle=False,
+                    strict_responses: bool | None = None) -> FastAPI:
     app = FastAPI(title="llm-switchboard", version="1", redirect_slashes=False,
                   docs_url=None, redoc_url=None, openapi_url=None,
                   lifespan=service_lifespan if manage_lifecycle else None)
     app.state.domain = domain
+    app.state.strict_responses = (os.environ.get("LLM_SWITCHBOARD_STRICT_RESPONSES") == "1"
+                                  if strict_responses is None else strict_responses)
     app.add_middleware(RawPathMiddleware)
     app.router.route_class = CompatibilityRoute
     app.add_exception_handler(RequestValidationError, validation_error)
+    app.add_exception_handler(Exception, unexpected_error)
     app.add_exception_handler(HTTPException, lambda request, exc: error_response("not found", 404))
     _read_routes(app)
     _write_routes(app)
@@ -84,14 +90,14 @@ def _read_routes(app):
 
 def _read_endpoint(method, model):
     def read(request: Request):
-        return json_response(getattr(request.app.state.domain, method)(), model)
+        return json_response(getattr(request.app.state.domain, method)(), model, request=request)
     read.__name__ = method
     return read
 
 
 def _session_read(action, model):
     def read(request: Request, sid: str):
-        return json_response(getattr(request.app.state.domain, action)(sid), model)
+        return json_response(getattr(request.app.state.domain, action)(sid), model, request=request)
     read.__name__ = action
     return read
 
@@ -104,7 +110,7 @@ def _search_endpoint(model):
         if result is None:
             return error_response("not found", 404)
         payload, status = result
-        return json_response(payload, model if status == 200 else schemas.ErrorResponse, status)
+        return json_response(payload, model if status == 200 else schemas.ErrorResponse, status, request=request)
 
     def search(request: Request, q: str = ""):
         return respond(request)
@@ -141,7 +147,7 @@ def _write_endpoint(method, body_model, response_model):
     def write(request: Request, body=Body()):
         domain = request.app.state.domain
         result = domain.empty_trash() if method == "empty_trash" else getattr(domain, method)(body.payload())
-        return json_response(result, response_model)
+        return json_response(result, response_model, request=request)
     write.__annotations__["body"] = body_model
     write.__name__ = method
     return write
@@ -149,7 +155,7 @@ def _write_endpoint(method, body_model, response_model):
 
 def _action_endpoint(action, body_model, response_model):
     def write(request: Request, sid: str, body=Body()):
-        return json_response(request.app.state.domain.act(sid, action, body.payload()), response_model)
+        return json_response(request.app.state.domain.act(sid, action, body.payload()), response_model, request=request)
     write.__annotations__["body"] = body_model
     write.__name__ = action
     return write
@@ -160,7 +166,8 @@ def _remote_endpoint(kind, body_model):
         route = action_route(request.url.path)
         if route is None:
             return error_response("not found", 404)
-        return json_response(request.app.state.domain.queue_remote(*route, body.payload()), schemas.RemoteActionResponse)
+        return json_response(request.app.state.domain.queue_remote(*route, body.payload()), schemas.RemoteActionResponse,
+                             request=request)
     write.__annotations__["body"] = body_model
     write.__name__ = f"host_{kind or 'action'}"
     return write
@@ -194,10 +201,10 @@ def _file(path, content_type):
     return Response(path.read_bytes(), headers={"Content-Type": content_type, "Cache-Control": "no-store"})
 
 
-def make_server(app: App, host: str, port: int):
+def make_server(app: App, host: str, port: int, *, strict_responses: bool | None = None):
     """Keep the one-address integration interface, now backed by Uvicorn."""
     from .http.server import BoundServer
-    return BoundServer(create_http_app(app), host, port)
+    return BoundServer(create_http_app(app, strict_responses=strict_responses), host, port)
 
 
 def openapi_schema() -> dict:

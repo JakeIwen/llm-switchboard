@@ -75,7 +75,7 @@ def run(repo, workspace, report):
         if comparison is not None:
             report.write_text(comparison.report(servers))
     failures = [row for row in comparison.results if not row["matched"]]
-    lifecycle = all(server.sentinel_survived and server.stopped_code in (0, -15) for server in servers)
+    lifecycle = all(server.sentinel_survived and server.stopped_code == 0 for server in servers)
     print(f"{len(comparison.results) - len(failures)}/{len(comparison.results)} cases matched; report: {report}")
     return 1 if failures or not lifecycle else 0
 
