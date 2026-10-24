@@ -13,7 +13,8 @@
     "test": "vitest run && npm run test:react-app",
     "check:css": "node scripts/check-css.mjs",
     "check:structure": "node scripts/check-structure.mjs",
-    "test:react-app": "node --test scripts/check-css.test.mjs scripts/check-structure.test.mjs scripts/react-app-tree.test.mjs"
+    "test:react-app": "node --test scripts/check-css.test.mjs scripts/check-structure.test.mjs scripts/react-app-tree.test.mjs",
+    "gen:api": "../.venv/bin/python -m llm_switchboard openapi > openapi.json && openapi-typescript openapi.json -o src/api/schema.d.ts --default-non-nullable false"
   },
   "dependencies": {
     "@mantine/core": "9.7.3",

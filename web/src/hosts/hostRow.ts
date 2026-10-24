@@ -5,9 +5,9 @@ type HostRow = Pick<SessionRow, 'host' | 'host_online' | 'last_seen' | 'mutable'
 export const ACTION_STATE: Record<HostActionState, string> = {
   queued: 'queued', sent: 'queued (delivered; awaiting result)', done: 'done', failed: 'failed', expired: 'expired',
 }
-const seenTime = (time: number | undefined): string =>
+const seenTime = (time: number | null | undefined): string =>
   new Date((time as number) * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
-export const hostStatus = (host: Partial<Pick<HostAvailability, 'online' | 'last_seen'>>): string =>
+export const hostStatus = (host: { online?: boolean | null; last_seen?: number | null }): string =>
   host.online ? 'online' : `offline, last seen ${seenTime(host.last_seen)}`
 export const hostSummary = (hosts: readonly HostAvailability[] = []): string =>
   hosts.map((host) => `${host.host}: ${hostStatus(host)}`).join(' · ')

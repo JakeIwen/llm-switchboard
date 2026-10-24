@@ -4,6 +4,9 @@ import { age, plural } from '../../format/format'
 import { hostLock } from '../../hosts/hostRow'
 import './TrashSection.css'
 
+/** A Mac entry is that machine's session row; a Pi entry has no host. */
+const macRow = (t: TrashItem) => ('host' in t && t.host ? t : null)
+
 interface Props {
   items: readonly TrashItem[]
   now: number
@@ -14,22 +17,23 @@ interface Props {
 /** Recently deleted, at the end of the list: Restore, or empty the Pi's trash. */
 export function TrashSection({ items, now, onRestore, onEmpty }: Props) {
   if (items.length === 0) return null
-  const local = items.filter((t) => !t.host).length
+  const local = items.filter((t) => !macRow(t)).length
   return (
     <details className="trash">
       <summary className="trash-summary">Recently deleted ({items.length}) · kept 30 days</summary>
       <div className="trash-rows">
         {items.map((t) => {
-          const lock = t.host ? hostLock({ host: t.host, host_online: t.host_online, mutable: t.mutable, state: t.state }) : ''
+          const mac = macRow(t)
+          const lock = mac ? hostLock(mac) : ''
           return (
             <div key={t.id} className="trash-row">
               <div className="trash-main">
                 <div className="trash-title">{t.title || '(untitled)'}</div>
                 <div className="trash-meta">
-                  <span className={t.host ? 'trash-folder is-host' : 'trash-folder'}>{t.project}</span>
+                  <span className={mac ? 'trash-folder is-host' : 'trash-folder'}>{t.project}</span>
                   <span>deleted {age(t.deleted_at, now)}</span>
                   <span>
-                    {t.host ? 'Mac' : 'Pi'} · {t.tool === 'codex' ? 'Codex' : 'Claude'}
+                    {mac ? 'Mac' : 'Pi'} · {t.tool === 'codex' ? 'Codex' : 'Claude'}
                   </span>
                 </div>
               </div>
