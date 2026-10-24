@@ -117,7 +117,7 @@ function FormDialog({ request, close }: { request: Extract<Request, { kind: 'for
       )}
       <Group justify="flex-end" gap="sm" className="dialog-buttons">
         <Button onClick={() => (request.resolve(null), close())}>Cancel</Button>
-        <Button type="submit" variant="light" color={options.danger ? 'red' : undefined} disabled={disabled}>
+        <Button type="submit" variant="light" color={options.danger ? 'var(--bad)' : undefined} disabled={disabled}>
           {options.confirmLabel}
         </Button>
       </Group>
@@ -186,7 +186,7 @@ export function useActionUi() {
           <Paragraphs body={current.options.body} items={current.options.items} />
           <Group justify="flex-end" gap="sm" className="dialog-buttons">
             <Button onClick={() => (current.resolve(false), close())}>Cancel</Button>
-            <Button type="submit" variant="light" color={current.options.danger ? 'red' : undefined} data-autofocus>
+            <Button type="submit" variant="light" color={current.options.danger ? 'var(--bad)' : undefined} data-autofocus>
               {current.options.confirmLabel}
             </Button>
           </Group>

@@ -27,7 +27,7 @@ export function BulkBar({ count, progress, onAction }: Props) {
         <Button disabled={busy} className="bulkbar-wide" onClick={() => onAction('move')}>
           Move…
         </Button>
-        <Button disabled={busy} color="red" variant="light" onClick={() => onAction('delete')}>
+        <Button disabled={busy} color="var(--bad)" variant="light" onClick={() => onAction('delete')}>
           Delete
         </Button>
         <Menu position="top-end">

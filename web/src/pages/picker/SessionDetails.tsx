@@ -145,7 +145,7 @@ export function SessionDetails({ row, actions }: { row: SessionRow; actions: Row
         ) : (
           <MoveOrFork row={row} lock={lock} moveLock={blocked} actions={actions} />
         )}
-        <Guarded reason={blocked} color="red" variant="subtle" className="details-delete" onClick={() => actions.remove(row)}>
+        <Guarded reason={blocked} color="var(--bad)" variant="subtle" className="details-delete" onClick={() => actions.remove(row)}>
           Delete
         </Guarded>
         {remote && (
