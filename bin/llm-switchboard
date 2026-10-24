@@ -1,4 +1,8 @@
 #!/bin/bash
 # Runs the package from this checkout; install.sh links this into ~/.local/bin.
 repo=$(dirname "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")")
-PYTHONPATH="$repo${PYTHONPATH:+:$PYTHONPATH}" exec python3 -m llm_switchboard "$@"
+python=python3
+if [ -x "$repo/.venv/bin/python" ]; then
+  python="$repo/.venv/bin/python"
+fi
+PYTHONPATH="$repo${PYTHONPATH:+:$PYTHONPATH}" exec "$python" -m llm_switchboard "$@"

@@ -4,9 +4,7 @@ import argparse
 import json
 import logging
 import os
-import signal
 import sys
-import threading
 import urllib.error
 import urllib.request
 
@@ -19,16 +17,14 @@ from .host_cli import add_parsers
 from .hosts import Hosts
 from .live_registry import live_processes
 from .notify import Notifier, default_script
-from .listen import Listeners
 from .paths import CODEX_SOCKET, DEFAULT_HOSTS, DEFAULT_PORT
 from .search_cli import add_parsers as add_search_parsers
-from .search_process import SearchIndexScheduler
 from .store import Store
 from .supervisor import Supervisor
 from .tmux import Tmux
 from .transcripts import TranscriptIndex, age_label
 from .trash import Trash
-from .web import make_app, make_server
+from .web_app import make_app
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -86,6 +82,9 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("--keep", action="store_true", help="keep the copy running with Remote Control")
     s.set_defaults(func=_fork)
 
+    s = sub.add_parser("openapi", help="print the deterministic HTTP schema without starting the service")
+    s.set_defaults(func=_openapi)
+
     add_search_parsers(sub)
     add_settings_parsers(sub)
 
@@ -95,31 +94,20 @@ def _parser() -> argparse.ArgumentParser:
     return p
 
 
+def _openapi(args) -> int:
+    from .web import openapi_main
+    return openapi_main()
+
+
 def _serve(args) -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     store, index, tmux = Store(), TranscriptIndex(), Tmux()
     supervisor = Supervisor(store, index, tmux, Connectivity(), interval_s=args.interval,
                             notifier=Notifier(default_script()))
     app = make_app(store, index, supervisor, tmux, Trash(), CODEX_SOCKET, hosts=Hosts())
-    listeners = Listeners(args.host or list(DEFAULT_HOSTS), args.port, lambda host, port: make_server(app, host, port))
-    stop = threading.Event()
-    index_worker = SearchIndexScheduler().start(stop)
-
-    def shutdown(*_):
-        stop.set()
-        supervisor.wake()
-        threading.Thread(target=listeners.shutdown, daemon=True).start()
-
-    signal.signal(signal.SIGTERM, shutdown)
-    signal.signal(signal.SIGINT, shutdown)
-    worker = threading.Thread(target=supervisor.run_forever, args=(stop,), name="supervisor")
-    worker.start()
-    listeners.serve()
-    worker.join(timeout=10)
-    index_worker.join(timeout=10)
-    # The tmux server is left running on purpose: restarting this service
-    # must not interrupt the Claude sessions. `stop-all` closes them.
-    return 0
+    from .http.server import run_service
+    from .web import create_http_app
+    return run_service(create_http_app(app, manage_lifecycle=True), args.host or list(DEFAULT_HOSTS), args.port)
 
 
 def _list(args) -> int:
