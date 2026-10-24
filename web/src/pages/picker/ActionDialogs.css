@@ -1,0 +1,36 @@
+.dialog-title {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.dialog-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mantine-spacing-md);
+}
+
+.dialog-paragraph {
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
+.dialog-items {
+  margin: 0;
+  padding-left: 1.2em;
+  font-size: var(--mantine-font-size-sm);
+  overflow-wrap: anywhere;
+}
+
+.dialog-error {
+  margin: 0;
+  color: var(--bad);
+  font-size: var(--mantine-font-size-sm);
+}
+
+.dialog-buttons {
+  margin-top: var(--mantine-spacing-xs);
+}
+
+.dialog-mono {
+  font-family: var(--mantine-font-family-monospace);
+}

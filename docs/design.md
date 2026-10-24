@@ -104,6 +104,14 @@ the first screen, the last one may take two taps.
 - Mac rows say why they can't do something (offline, open elsewhere) on the
   disabled control's tooltip, not in a paragraph.
 
+- Blue marks a selection (checkbox, row tint, keyboard cursor); orange marks
+  kept-running sessions. The two never share a meaning.
+- The old page's selected-folder chips under the toolbar are gone: the
+  Folders button names the one picked folder (home-relative, in its
+  machine's color) or the count, and Reset clears it in one tap.
+- The old footer line explaining how kept sessions run is gone; the keep
+  switch's tooltip says it.
+
 ## Density and spacing
 
 - Density is set once, in `web/src/theme.ts`: compact control sizes as the
@@ -117,6 +125,9 @@ the first screen, the last one may take two taps.
   a fingertip, the eye doesn't.*
 - Inputs are 16px on touch screens (set once in the theme): iOS zooms into
   any smaller focused field and leaves the page zoomed and scrolling sideways.
+- On a phone the Sort button shows a short value (Kept, Recent, A–Z…) and
+  tints when it isn't the default; desktop shows the full label. The search
+  box keeps its own line at every width.
 - Spacing comes from the theme's scale (`xs` 4 to `xl` 24-ish); rows sit
   6-8px apart; the page has a 16px side gutter on a phone and a 860px max
   width on desktop.

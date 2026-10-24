@@ -1,0 +1,51 @@
+.bulkbar {
+  position: fixed;
+  left: 50%;
+  bottom: 0;
+  z-index: 200;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--mantine-spacing-sm);
+  width: min(860px, 100vw);
+  padding: 8px 12px max(8px, env(safe-area-inset-bottom));
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  box-shadow: 0 -4px 20px var(--shadow);
+}
+
+.bulkbar-count {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--mantine-font-size-sm);
+  font-weight: 600;
+}
+
+.bulkbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+
+/* A phone shows Keep running and Delete; the rest wait in the ⋯ menu. */
+@media (max-width: 47.99em) {
+  .bulkbar-wide {
+    display: none;
+  }
+}
+
+@media (min-width: 48em) {
+  .bulkbar {
+    border: 1px solid var(--border);
+    border-bottom: 0;
+    border-radius: 12px 12px 0 0;
+  }
+
+  .bulkbar-narrow {
+    display: none;
+  }
+}

@@ -2,7 +2,7 @@
 
 export const nowS = (): number => Date.now() / 1000
 
-export const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`
+export const plural = (n: number, word: string, many = `${word}s`): string => `${n} ${n === 1 ? word : many}`
 
 /** "just now", "5m ago", "3h ago", "2d ago" for a Unix time in seconds; "" when unknown. */
 export function age(t: number | null | undefined, now: number = nowS()): string {

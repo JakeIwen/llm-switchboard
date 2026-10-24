@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { getJson } from '../../api/client'
 import type { SessionRow } from '../../api/sessionRow'
-import type { SessionsPayload } from '../../api/sessionsPayload'
+import type { SessionsPayload, TrashItem } from '../../api/sessionsPayload'
 
 const DEFAULT_POLL_SECONDS = 4
 
@@ -21,21 +21,28 @@ function stabilize(prev: SessionRow[], next: SessionRow[]): SessionRow[] {
 
 export interface SessionsState {
   data: SessionsPayload | null
+  trash: TrashItem[]
   /** Why the last poll failed, while the last good list stays shown. */
   error: string
   refresh: () => Promise<void>
 }
 
-/** Poll `GET /api/sessions` every `poll_seconds` while the page is visible. */
+/** Poll `GET /api/sessions` and `/api/trash` every `poll_seconds` while the
+    page is visible, and at once when it becomes visible again. */
 export function useSessions(): SessionsState {
   const [data, setData] = useState<SessionsPayload | null>(null)
   const [error, setError] = useState('')
+  const [trash, setTrash] = useState<TrashItem[]>([])
   const inFlight = useRef<Promise<void> | null>(null)
 
   const refresh = useCallback(() => {
-    inFlight.current ??= getJson<SessionsPayload>('/api/sessions')
-      .then((next) => {
+    inFlight.current ??= Promise.all([
+      getJson<SessionsPayload>('/api/sessions'),
+      getJson<{ trash: TrashItem[] }>('/api/trash'),
+    ])
+      .then(([next, deleted]) => {
         setData((prev) => ({ ...next, sessions: stabilize(prev?.sessions ?? [], next.sessions) }))
+        setTrash((prev) => (JSON.stringify(prev) === JSON.stringify(deleted.trash) ? prev : deleted.trash))
         setError('')
       })
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
@@ -61,5 +68,5 @@ export function useSessions(): SessionsState {
     }
   }, [refresh, pollSeconds])
 
-  return { data, error, refresh }
+  return { data, trash, error, refresh }
 }

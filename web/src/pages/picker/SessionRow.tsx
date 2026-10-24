@@ -1,26 +1,30 @@
-import { memo, type ReactNode } from 'react'
+import { memo, useEffect, useState, type ReactNode } from 'react'
 import { Badge, Checkbox, Switch, Tooltip } from '@mantine/core'
 import type { SessionRow as Row } from '../../api/sessionRow'
 import { age, size } from '../../format/format'
-import { rowBadges, toneClass } from './rowBadges'
-import { SessionDetails } from './SessionDetails'
+import { badges, type BadgeTone } from '../../sessions/badges'
+import { SessionDetails, type RowActions } from './SessionDetails'
+import type { RowNotice } from './useHostActions'
+import type { SelectEvent } from './useSelection'
 import './SessionRow.css'
 
-export interface SelectEvent {
-  shiftKey: boolean
-  metaKey: boolean
-  ctrlKey: boolean
-}
 
 interface Props {
   row: Row
   expanded: boolean
   selected: boolean
   now: number
-  onExpand: (id: string) => void
+  /** A plain click expands; ⌘/Ctrl or Shift selects instead (PickerPage decides). */
+  onExpand: (id: string, event: SelectEvent) => void
   onSelect: (id: string, event: SelectEvent) => void
-  onKeep: (row: Row, keep: boolean) => void
+  /** Resolves false when the change was cancelled or refused. */
+  onKeep: (row: Row, keep: boolean) => Promise<boolean>
   onFolder: (row: Row) => void
+  actions: RowActions
+  /** A queued Mac action's state, shown as the first pill. */
+  notice?: RowNotice
+  /** Ahead of the keyboard cursor. */
+  cursor?: boolean
   /** Show the transcript size (when sorting by size); the details always do. */
   showSize?: boolean
   /** Extra lines under the meta line (a transcript hit's excerpt). */
@@ -29,6 +33,20 @@ interface Props {
 
 // A collapsed row shows at most this many state pills; the rest are in the details.
 const MAX_PILLS = 2
+const TONE_CLASS: Record<BadgeTone, string> = {
+  ok: 'tone-ok',
+  info: 'tone-info',
+  warn: 'tone-warn',
+  bad: 'tone-bad',
+  idle: 'tone-idle',
+}
+
+/** The row's pills. A Mac row's first badge is its host status; while the Mac
+    is online the header already says so and the row isn't dimmed, so drop it. */
+function pills(row: Row) {
+  const all = badges(row)
+  return (row.host && row.host_online ? all.slice(1) : all).slice(0, MAX_PILLS)
+}
 const keepable = (row: Row) => !row.host && row.tool === 'claude'
 
 function IdentityTag({ row }: { row: Row }) {
@@ -42,9 +60,12 @@ function IdentityTag({ row }: { row: Row }) {
 
 export const SessionRow = memo(function SessionRow(p: Props) {
   const { row } = p
-  const pills = rowBadges(row).slice(0, MAX_PILLS)
   const offline = Boolean(row.host) && row.host_online === false
-  const classes = ['session-row', row.enabled && 'is-kept', p.selected && 'is-selected', offline && 'is-offline']
+  const shownPills = pills(row)
+  // The switch moves at once; the server's answer (or a cancel) settles it.
+  const [keepShown, setKeepShown] = useState<boolean | null>(null)
+  useEffect(() => setKeepShown(null), [row.enabled])
+  const classes = ['session-row', row.enabled && 'is-kept', p.selected && 'is-selected', p.cursor && 'is-cursor', offline && 'is-offline']
   return (
     <div className={classes.filter(Boolean).join(' ')} data-id={row.id}>
       <label className="session-hit session-check">
@@ -56,7 +77,7 @@ export const SessionRow = memo(function SessionRow(p: Props) {
         />
       </label>
       <div className="session-main">
-        <button type="button" className="session-title" aria-expanded={p.expanded} onClick={() => p.onExpand(row.id)}>
+        <button type="button" className="session-title" aria-expanded={p.expanded} onClick={(e) => p.onExpand(row.id, e)}>
           {row.title || '(untitled)'}
         </button>
         <div className="session-meta">
@@ -71,24 +92,41 @@ export const SessionRow = memo(function SessionRow(p: Props) {
           </button>
           <span>{age(row.mtime, p.now)}</span>
           {p.showSize && row.size ? <span>{size(row.size)}</span> : null}
-          {pills.map((b) => (
-            <Badge key={b.label} className={toneClass[b.tone]}>
-              {b.label}
-            </Badge>
-          ))}
+          {(p.notice || shownPills.length > 0) && (
+            <span className="session-pills">
+              {p.notice && (
+                <Badge className={TONE_CLASS[p.notice.tone]} title={p.notice.title}>
+                  {p.notice.label}
+                </Badge>
+              )}
+              {shownPills.map((b) => (
+                <Badge key={b.label} className={TONE_CLASS[b.tone]}>
+                  {b.label}
+                </Badge>
+              ))}
+            </span>
+          )}
         </div>
         {p.extra}
       </div>
       {keepable(row) ? (
         <Tooltip label={row.enabled ? 'Kept running with Remote Control; switch off to stop keeping it' : 'Keep running in tmux with Remote Control'}>
           <label className="session-hit session-keep">
-            <Switch aria-label="Keep running" checked={row.enabled} onChange={(e) => p.onKeep(row, e.currentTarget.checked)} />
+            <Switch
+              aria-label="Keep running"
+              checked={keepShown ?? row.enabled}
+              onChange={(e) => {
+                const on = e.currentTarget.checked
+                setKeepShown(on)
+                void p.onKeep(row, on).then((ok) => ok || setKeepShown(null))
+              }}
+            />
           </label>
         </Tooltip>
       ) : (
         <span className="session-keep" />
       )}
-      {p.expanded && <SessionDetails row={row} />}
+      {p.expanded && <SessionDetails row={row} actions={p.actions} />}
     </div>
   )
 })

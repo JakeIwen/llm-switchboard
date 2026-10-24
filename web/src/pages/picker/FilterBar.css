@@ -1,7 +1,7 @@
 /* Fixed columns: a value change never moves the buttons after it. */
 .filter-bar {
   display: grid;
-  grid-template-columns: 8rem minmax(0, 1fr) 2.25rem 3.5rem;
+  grid-template-columns: 7rem minmax(0, 1fr) 5rem 3.5rem;
   gap: 6px;
 }
 
@@ -26,6 +26,14 @@
   color: var(--text);
 }
 
+.is-local-path {
+  color: var(--dev-local);
+}
+
+.is-host-path {
+  color: var(--dev-host);
+}
+
 .filter-reset {
   padding: 0 4px;
 }
@@ -34,18 +42,18 @@
   background: transparent;
 }
 
-/* Sort is changed rarely: on a phone only its icon shows. */
-@media (max-width: 47.99em) {
-  .filter-sort {
-    padding: 0;
-  }
+/* A phone shows the sort's short name and drops the folder icon for room. */
+.filter-sort-short {
+  display: none;
+}
 
-  .filter-sort .filter-button-inner {
+@media (max-width: 47.99em) {
+  .filter-sort-long {
     display: none;
   }
 
-  .filter-sort .filter-button-section {
-    margin: 0;
+  .filter-sort-short {
+    display: inline;
   }
 
   .filter-folders .filter-button-section[data-position='left'] {

@@ -56,3 +56,49 @@
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+
+.transcript-index {
+  font-weight: 400;
+}
+
+.transcript-ignored {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--mantine-font-size-sm);
+}
+
+.transcript-open {
+  margin-top: 2px;
+  padding-left: 0;
+  position: relative;
+  z-index: 1;
+}
+
+.transcript-contexts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.transcript-context {
+  padding: 6px 8px;
+  border-radius: var(--mantine-radius-sm);
+  background: var(--surface-2);
+}
+
+.transcript-line {
+  margin: 2px 0;
+  color: var(--muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.transcript-line.is-match {
+  color: var(--text);
+}
+
+.transcript-role {
+  margin-right: 6px;
+  font-weight: 600;
+}

@@ -1,45 +1,13 @@
-import type { SessionRow } from './sessionRow'
+// Response records from the server's OpenAPI schema (`schema.d.ts`).
+import type { components } from './schema'
 
-export interface HostStatus {
-  host: string
-  online: boolean
-  last_seen: number
-}
-
-export interface HostAction {
-  id: string
-  session_id: string
-  tool: string
-  action: string
-  title: string
-  cwd: string
-  queued_at: number
-  state: string
-  message: string
-  host: string
-}
-
-export interface FolderSettings {
-  depth: number
-  min_sessions: number
-  hidden: string[]
-}
-
-export interface InstallSettings {
-  claude_command: string
-  codex_command: string
-  folders: FolderSettings
-  poll_seconds: number
-}
+type Schemas = components['schemas']
 
 /** `GET /api/sessions` */
-export interface SessionsPayload {
-  host: string
-  now: number
-  sessions: SessionRow[]
-  notifications: boolean
-  codex: { enabled: boolean; error: string }
-  hosts: HostStatus[]
-  host_actions: HostAction[]
-  settings: InstallSettings
-}
+export type SessionsPayload = Schemas['SessionsResponse']
+export type HostStatus = Schemas['HostStatus']
+export type HostAction = Schemas['QueuedAction']
+export type FolderSettings = Schemas['FolderSettings']
+export type InstallSettings = Schemas['Settings']
+/** One `GET /api/trash` entry: a Pi entry, or a Mac session row with `deleted_at`. */
+export type TrashItem = Schemas['TrashResponse']['trash'][number]

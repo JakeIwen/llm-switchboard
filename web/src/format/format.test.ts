@@ -24,5 +24,6 @@ describe('size and plural', () => {
   it('pluralizes all but one', () => {
     expect(plural(1, 'session')).toBe('1 session')
     expect(plural(0, 'session')).toBe('0 sessions')
+    expect(plural(6, 'match', 'matches')).toBe('6 matches')
   })
 })
