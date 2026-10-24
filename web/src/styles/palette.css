@@ -30,21 +30,23 @@
 
   /* Roles built from the tokens above, so they follow the mode. */
   --accent-soft: color-mix(in oklch, var(--accent) 12%, var(--surface));
+  --accent-soft-hover: color-mix(in oklch, var(--accent) 20%, var(--surface));
   --accent-edge: color-mix(in oklch, var(--accent) 45%, var(--border));
   --selected: color-mix(in oklch, var(--info) 10%, var(--surface));
 
-  /* Mantine's brand ramp, from the accent. Shade 6 is the filled color in
-     both modes (theme.ts sets primaryShade), 7 its hover. */
-  --brand-0: color-mix(in oklch, var(--accent) 8%, var(--surface));
-  --brand-1: color-mix(in oklch, var(--accent) 16%, var(--surface));
-  --brand-2: color-mix(in oklch, var(--accent) 28%, var(--surface));
-  --brand-3: color-mix(in oklch, var(--accent) 42%, var(--surface));
-  --brand-4: color-mix(in oklch, var(--accent) 60%, var(--surface));
-  --brand-5: color-mix(in oklch, var(--accent) 80%, var(--surface));
+  /* Mantine's brand ramp, from the accent, light to dark in both modes as
+     Mantine expects. Shade 6 is the filled color (theme.ts sets
+     primaryShade), 7 its hover. White and black are fixed ends. */
+  --brand-0: color-mix(in oklch, var(--accent) 10%, white);
+  --brand-1: color-mix(in oklch, var(--accent) 22%, white);
+  --brand-2: color-mix(in oklch, var(--accent) 38%, white);
+  --brand-3: color-mix(in oklch, var(--accent) 55%, white);
+  --brand-4: color-mix(in oklch, var(--accent) 72%, white);
+  --brand-5: color-mix(in oklch, var(--accent) 88%, white);
   --brand-6: var(--accent);
-  --brand-7: color-mix(in oklch, var(--accent), var(--text) 14%);
-  --brand-8: color-mix(in oklch, var(--accent), var(--text) 26%);
-  --brand-9: color-mix(in oklch, var(--accent), var(--text) 38%);
+  --brand-7: color-mix(in oklch, var(--accent), black 12%);
+  --brand-8: color-mix(in oklch, var(--accent), black 24%);
+  --brand-9: color-mix(in oklch, var(--accent), black 36%);
 }
 
 :root[data-mantine-color-scheme='dark'] {

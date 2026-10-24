@@ -4,3 +4,11 @@ body {
   color: var(--text);
   -webkit-text-size-adjust: 100%;
 }
+
+/* iOS zooms the page into any focused field under 16px, so touch screens get
+   16px input text whatever the control's size. */
+@media (pointer: coarse) {
+  .app-input {
+    font-size: max(16px, 1rem);
+  }
+}

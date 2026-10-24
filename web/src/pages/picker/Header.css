@@ -1,0 +1,44 @@
+/* Phone: title and buttons on one line, the summary under them in small type.
+   Desktop: the summary sits between them. */
+.picker-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: 'title actions' 'summary summary';
+  align-items: center;
+  column-gap: var(--mantine-spacing-md);
+  padding: var(--mantine-spacing-md) 0 var(--mantine-spacing-xs);
+}
+
+.picker-title {
+  grid-area: title;
+  white-space: nowrap;
+}
+
+.picker-summary {
+  grid-area: summary;
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: var(--mantine-font-size-xs);
+  overflow-wrap: anywhere;
+}
+
+.picker-summary.is-error {
+  color: var(--bad);
+}
+
+.picker-header-actions {
+  grid-area: actions;
+  display: flex;
+  gap: var(--mantine-spacing-xs);
+}
+
+@media (min-width: 48em) {
+  .picker-header {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas: 'title summary actions';
+  }
+
+  .picker-summary {
+    margin: 0;
+  }
+}
