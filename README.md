@@ -196,6 +196,11 @@ find the same sessions.
 
 ## Install
 
+Needs system Python 3.11+, [uv](https://docs.astral.sh/uv/) and tmux.
+`install.sh` runs `UV_PYTHON_PREFERENCE=only-system uv sync --frozen` (it never
+downloads a Python) before installing or restarting the service, and stops
+with a message when uv is missing.
+
 ```
 ./install.sh
 loginctl enable-linger "$USER"   # once, so user services start at boot
@@ -233,6 +238,7 @@ llm-switchboard fork c96934f7 "try another approach" [--folder ~/dev] [--keep]
 llm-switchboard search '"some phrase" by:me tool:codex' [--limit 20] [--session codex:019f] [--json]
 llm-switchboard index                # update the transcript index now
 llm-switchboard stop-all             # kill the tmux server
+llm-switchboard openapi              # the HTTP API's schema as JSON; starts nothing
 llm-switchboard host-authorize mac < key.pub   # install a Mac's restricted key (run over SSH)
 llm-switchboard host-exchange mac  # the restricted key's forced command (JSON on stdin)
 # On the Mac (python3 -m llm_switchboard …):
@@ -265,7 +271,9 @@ Ids can be any unique prefix; Codex sessions also go by the short id `list` show
 
 ## Development
 
-The checkout runs on Python 3.11+ without Python dependencies. A rebuilt page
+The HTTP backend runs on FastAPI, Pydantic v2 and Uvicorn under uv. The shared
+domain modules, the Mac host agent, the SSH commands, `search`/`index` and the
+`settings` CLI stay standard-library only. A rebuilt page
 (React and Mantine, in `web/`) is served at `/next/` beside the current one
 while it is tried out; `npm ci && npm run build` in `web/` builds it, and
 `npm run dev` there serves it against the Pi read-only. Its design rules are
@@ -277,12 +285,13 @@ their storage and runtime consumers; existing public imports remain supported.
 ## Tests
 
 ```
-npm ci --prefix web                        # once: the page's build and test tools
-python3 -m unittest discover -s tests -f   # Python, Node, web/, architecture and layout checks
+UV_PYTHON_PREFERENCE=only-system uv sync --frozen   # once: the Python environment
+npm ci --prefix web                                  # once: the page's build and test tools
+.venv/bin/python -m unittest discover -s tests -f    # Python, Node, web/, architecture and layout checks
 python3 scripts/check_layout.py          # standalone layout report
 ```
 
-Node is required for the whole suite; Python remains standard-library only.
+Node and the uv environment are required for the whole suite.
 The generic layout report is advisory until Jacob explicitly establishes a
 baseline; focused architecture tests enforce the documented boundaries today.
 See [organization and verification notes](docs/backend-organization.md).

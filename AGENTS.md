@@ -1,9 +1,14 @@
 # llm-switchboard
 
-Python 3.11 standard library only for the backend; the rebuilt page in `web/`
+Python 3.11+ backend on FastAPI and Pydantic v2, served by Uvicorn, with
+dependencies locked by uv. The Mac host agent, the SSH commands
+(`host-exchange`, `host-authorize`), `search`/`index` and the `settings` CLI
+stay standard-library only and must not import the HTTP stack
+(`tests/test_http_imports.py`). Use the system Python only:
+`UV_PYTHON_PREFERENCE=only-system uv sync --frozen`. The rebuilt page in `web/`
 (Vite, React, TypeScript, Mantine) is served at `/next/` beside the old page
 until Jacob approves the swap. Run `npm ci` in `web/` once, then the whole
-suite with `python3 -m unittest discover -s tests -f` (Python, required Node
+suite with `.venv/bin/python -m unittest discover -s tests -f` (Python, required Node
 tests in `tests/js`, the `web/` typecheck, unit tests, react-app checks and
 build, architecture contracts, and the repo-owned backend-layout suite). After
 UI changes, use the existing `browser_clean` MCP driver with isolated fixtures
@@ -13,10 +18,16 @@ only under this checkout). The page's design rules are `docs/design.md`. Use sep
 tmux sockets and loopback ports. For refactor comparisons, keep fixture timestamps
 and path lengths equivalent, compute DOM/style hashes inside the page, and return
 only hashes and bounded diagnostics to the driver. Use bounded action timeouts
-and small comparison batches. The service runs from this checkout
-(`bin/llm-switchboard` → `python3 -m llm_switchboard`), so after a
-code change: `systemctl --user restart llm-switchboard` (sessions keep
-running; the supervisor adopts their windows).
+and small comparison batches. The service runs from this checkout:
+`bin/llm-switchboard` runs the checkout's `.venv/bin/python` when it exists,
+otherwise `python3`; the fallback serves only the standard-library commands,
+so never restart the service without `.venv`. After a code change:
+`systemctl --user restart llm-switchboard` (sessions keep running; the
+supervisor adopts their windows). Production logs a response that doesn't
+match its schema and still sends it; `LLM_SWITCHBOARD_STRICT_RESPONSES=1`
+(set by the tests and the parity runner) makes that fatal. After changing a
+route or record, run `npm run gen:api` in `web/`; a test fails while the
+generated schema and types are stale.
 
 To run a second instance (say, to try UI changes) without touching the real
 one, give it its own HOME, socket and port (and `LLM_SWITCHBOARD_CODEX_SOCKET=`
@@ -77,7 +88,15 @@ Sharing the socket would let its supervisor close the real windows.
 | `llm_switchboard/search_process.py` | `serve`'s 30 s low-priority indexer child |
 | `llm_switchboard/search_api.py`, `search_cli.py` | Search routes (plus Mac title/folder matches) and the `search` / `index` commands (light imports; `__main__` dispatches them before cli.py) |
 | `llm_switchboard/listen.py` | Where `serve` listens (localhost + Tailscale, bound once Tailscale is up) and which peers it answers |
-| `llm_switchboard/web.py` | HTTP API and static page; `make_app` wires both session sources |
+| `llm_switchboard/web.py` | FastAPI routes, the old page's static files, `/next/` and the deterministic OpenAPI export; keeps the `App` and `make_app` imports |
+| `llm_switchboard/web_app.py` | HTTP-independent picker operations and the composition of local, Codex and Mac session sources |
+| `llm_switchboard/http/records.py` | Pydantic projections of the canonical stdlib records; never imported by light paths |
+| `llm_switchboard/http/requests.py`, `http/responses.py` | HTTP request and response schemas; the existing domain validators keep the rules |
+| `llm_switchboard/http/transport.py` | JSON encoding as before, request guards (JSON-only POST, 16 KiB), error mapping, the POST audit log, escaped-path compatibility |
+| `llm_switchboard/http/server.py` | Uvicorn sockets, late Tailscale binding, peer rejection, clean SIGTERM |
+| `llm_switchboard/http/lifespan.py` | Starts and stops the supervisor and the search-index child; leaves tmux running |
+| `scripts/api_parity/` | Old/new HTTP comparison on isolated fixtures (`python -m scripts.api_parity`) |
+| `pyproject.toml`, `uv.lock` | Locked HTTP and development dependencies under uv; system Python only |
 | `llm_switchboard/next_page.py` | The rebuilt page (`web/`, built into `web/dist`) at `/next/`: path to file and cache headers |
 | `web/` | The rebuilt page: Vite, React, TypeScript, Mantine; design rules in `docs/design.md`; `npm run build` writes `web/dist` (not tracked), which the service serves at `/next/` |
 | `web/src/api/` | The page's JSON calls (`client.ts`) and the types generated from the server's OpenAPI schema (`schema.d.ts` from `web/openapi.json`, `npm run gen:api`) |
@@ -114,12 +133,14 @@ Sharing the socket would let its supervisor close the real windows.
 
 | Path | Caller | Owner |
 | --- | --- | --- |
-| `bin/llm-switchboard` | Pi systemd, installed CLI link, SSH forced command | `llm_switchboard/__main__.py` |
+| `bin/llm-switchboard` | Pi systemd, installed CLI link, SSH forced command (runs `.venv/bin/python` when present) | `llm_switchboard/__main__.py` |
 | `python3 -m llm_switchboard` | Mac launchd, Mac setup, search index child, shell callers | `llm_switchboard/__main__.py` (light host/search dispatch), `cli.py` |
 | `systemd/llm-switchboard.service` | `install.sh` template input | `install.sh` |
 | `install.sh` | Pi operator installation | `systemd/llm-switchboard.service` and `bin/llm-switchboard` |
 | `scripts/setup-mac.sh` | Mac operator setup | `llm_switchboard/host_cli.py`, `host_launchd.py` |
 | `scripts/check_layout.py` | Developer checks and unittest bridge | `scripts/backend_layout/cli.py` |
+| `python -m llm_switchboard openapi` | `web/` type generation (`npm run gen:api`) and the stale-types test | `llm_switchboard/cli.py`, `web.py` |
+| `python -m scripts.api_parity` | Developer HTTP parity checks | `scripts/api_parity/__main__.py` |
 
 The package remains shared by Pi and Mac. Public cross-feature boundaries are
 listed in the ownership map; import records from their pure owner rather than
