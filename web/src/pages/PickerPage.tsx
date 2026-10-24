@@ -20,6 +20,9 @@ import './PickerPage.css'
 
 // Room the selection bar takes at the bottom, so the toast sits above it.
 const BULKBAR_SPACE = '64px'
+// Rows show ages in whole minutes, so they get a clock that moves once a
+// minute; with the poll's exact time every row would re-render every poll.
+const minuteClock = (now: number) => Math.floor(now / 60) * 60
 
 const toggle = (set: ReadonlySet<string>, id: string) => {
   const next = new Set(set)
@@ -95,7 +98,7 @@ export function PickerPage() {
   const rowProps = {
     expanded,
     selected: selection.ids,
-    now: filters.now,
+    now: minuteClock(filters.now),
     onExpand,
     onSelect: selection.onSelect,
     onKeep: act.keep,
