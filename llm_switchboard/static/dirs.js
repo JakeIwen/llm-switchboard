@@ -7,8 +7,9 @@
 export const CHIP_DEPTH = 2;
 export const MIN_SESSIONS = 2;
 export const UNKNOWN_DIR = "(unknown folder)";
-// Default exclusions also hide everything below each prefix.
-const HIDDEN_FOLDERS = ["~/ais"];
+// Fallbacks for a payload without settings; they mirror DEFAULTS in settings.py
+// (the server's folders.hidden is the real list, and each prefix hides its subtree).
+const HIDDEN_FOLDERS = [];
 // Both the Pi's and the Mac's home folders arrive shortened to ~
 // (transcripts.display_path, hosts.host_display_path).
 const UNDER_HOME = /^~(\/.*)?$/;

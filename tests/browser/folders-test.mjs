@@ -172,6 +172,8 @@ async function phoneChecks({ page, check, waitFor, shots }) {
 async function excludedAndPhoneChecks({ page, check, waitFor, shots }) {
   const catalogue = await page.evaluate(async () => (await fetch("/api/sessions")).json());
   const payload = extraCatalogue(catalogue);
+  // The server's default hides nothing; this install-style setting hides ~/ais.
+  payload.settings = { ...payload.settings, folders: { depth: 2, min_sessions: 2, hidden: ["~/ais"] } };
   const isolated = await page.browser().newPage();
   const errors = [];
   isolated.on("pageerror", (error) => errors.push(error.message));
@@ -186,7 +188,7 @@ async function excludedAndPhoneChecks({ page, check, waitFor, shots }) {
     });
     await isolated.goto(page.url(), { waitUntil: "domcontentloaded", timeout: 10000 });
     await isolated.waitForSelector("#list .card", { timeout: 5000 });
-    check("default total excludes deep, one-off, ais and outside-home rows", await total(isolated) === 42 && await count(isolated) === 50);
+    check("total excludes deep, one-off, hidden-prefix and outside-home rows", await total(isolated) === 42 && await count(isolated) === 50);
     await open(isolated);
     await isolated.click(alpha);
     await isolated.click('#folder-options input[data-folder="mac:~/dev/alpha"]');

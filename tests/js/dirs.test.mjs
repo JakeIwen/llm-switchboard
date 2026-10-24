@@ -16,10 +16,12 @@ test("deeper folders and folders outside home don't", () => {
   }
 });
 
-test("a folder with one session, or ~/ais and below, doesn't", () => {
+test("a folder with one session, or a hidden prefix and below, doesn't", () => {
   assert.ok(!listed("~/dev/openwrt", 1));
   assert.ok(!listed("~/dev/openwrt", 0));
-  for (const p of ["~/ais", "~/ais/", "~/ais/form-engine"]) assert.ok(!listed(p, 9), p);
+  for (const p of ["~/ais", "~/ais/", "~/ais/form-engine"]) assert.ok(!listed(p, 9, { hidden: ["~/ais"] }), p);
+  // Nothing is hidden until the settings say so.
+  assert.ok(listed("~/ais", 9));
 });
 
 test("the same folder on two machines gets two keys and two tints", () => {
@@ -40,7 +42,7 @@ test("the default total adds only offered folders using all their sessions", () 
     ...sessionsIn("~/ais", 7), ...sessionsIn("~/ais/agent", 3),
     ...sessionsIn("/tmp/project", 6), ...sessionsIn(undefined, 5),
   ];
-  const { choices, total } = folderChoices(sessions);
+  const { choices, total } = folderChoices(sessions, [], { hidden: ["~/ais"] });
   assert.equal(total, 6);
   assert.deepEqual(choices.map(({ project, count }) => [project, count]), [["~", 2], ["~/dev/project", 4]]);
   assert.ok(choices.every((folder) => folder.defaultListed));
@@ -91,7 +93,8 @@ test("folder eligibility accepts depth, minimum sessions and hidden-prefix setti
   assert.ok(listed("~", 2, { depth: 0 }));
   assert.ok(!listed("~/dev", 2, { depth: 0 }));
   const sessions = [...sessionsIn("~/dev/project/worktree", 1), ...sessionsIn("~/ais", 2)];
-  assert.equal(folderChoices(sessions).total, 0);
+  assert.equal(folderChoices(sessions, [], { hidden: ["~/ais"] }).total, 0);
+  assert.equal(folderChoices(sessions).total, 2);
   assert.equal(folderChoices(sessions, [], { depth: 3, minSessions: 1, hidden: [] }).total, 3);
 });
 
