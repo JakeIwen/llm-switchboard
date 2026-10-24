@@ -7,6 +7,8 @@
   --folder-shadow: rgba(0,0,0,.2); --folder-backdrop: rgba(0,0,0,.42);
   --folder-selected: color-mix(in srgb, var(--accent) 11%, var(--surface));
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --session-tag-width: 44px; --session-tag-font: 10px; --session-tag-tracking: .02em;
+  --session-tag-gap: 3px; --session-tag-padding: 1px 0; --session-tag-offset: 2px;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -123,7 +125,7 @@ a.btn { text-decoration: none; display: inline-block; }
 .card { position: relative; }
 .card.selected { border-color: var(--info); background: color-mix(in srgb, var(--info) 9%, var(--surface)); }
 .card.cursor { box-shadow: 0 0 0 2px color-mix(in srgb, var(--info) 55%, transparent); }
-.card > .row { cursor: default; }
+.card > .row { cursor: pointer; }
 .check {
   flex: none; width: 22px; height: 22px; margin-top: 3px; border-radius: 50%; border: 1.5px solid var(--muted);
   background: transparent; padding: 0; cursor: pointer; display: grid; place-items: center; color: transparent; font-size: 13px;
@@ -206,10 +208,15 @@ select.dlg-input {
 .menu button:hover, .menu button:focus-visible { background: var(--surface-2); }
 .menu button small { display: block; font-size: 12px; color: var(--muted); }
 
-/* Codex rows have no keep-running switch; a tag sits in its place. */
+/* Rows without a keep-running switch show their machine and tool in its column. */
+.session-tags {
+  display: flex; flex-direction: column; flex: none; width: var(--session-tag-width);
+  gap: var(--session-tag-gap); margin-top: var(--session-tag-offset);
+}
 .tool-tag {
-  flex: none; width: 44px; text-align: center; font-size: 11px; font-weight: 600; letter-spacing: .02em;
-  color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 3px 0; margin-top: 2px;
+  flex: none; width: var(--session-tag-width); text-align: center; font-size: var(--session-tag-font);
+  font-weight: 600; letter-spacing: var(--session-tag-tracking);
+  color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: var(--session-tag-padding);
 }
 
 /* Full-text transcript search is a separate mode from the ordinary list filter. */

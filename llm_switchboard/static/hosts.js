@@ -9,7 +9,7 @@ const ACTION_STATE = { queued: "queued", sent: "queued (delivered; awaiting resu
 const seenTime = (time) => new Date(time * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
 export const hostStatus = (host) => host.online ? "online" : `offline, last seen ${seenTime(host.last_seen)}`;
 export const hostSummary = (hosts = []) => hosts.map((h) => `${h.host}: ${hostStatus(h)}`).join(" · ");
-export const hostBadge = (s) => `<span class="badge ${s.host_online ? "b-info" : "b-idle"}">${esc(s.host)} · ${esc(hostStatus({ online: s.host_online, last_seen: s.last_seen }))} · ${s.tool === "codex" ? "Codex" : "Claude"}</span>`;
+export const hostBadge = (s) => `<span class="badge ${s.host_online ? "b-info" : "b-idle"}">${esc(s.host)} · ${esc(hostStatus({ online: s.host_online, last_seen: s.last_seen }))}</span>`;
 export function hostLock(s) {
   if (!s.host) return "";
   if (!s.host_online) return "Mac is offline; wait for its next push.";

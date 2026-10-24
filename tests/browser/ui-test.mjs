@@ -53,6 +53,17 @@ const waitFor = async (fn, ms = 8000) => {
   return false;
 };
 
+const tagsFit = (selector, labels, titles) => page.$$eval(selector, (cards, expected) => cards.length > 0 && cards.every((card) => {
+  const column = card.querySelector(".session-tags");
+  const tags = [...(column?.querySelectorAll(".tool-tag") || [])];
+  if (tags.length !== 2 || column.getBoundingClientRect().width !== 44) return false;
+  const boxes = tags.map((tag) => tag.getBoundingClientRect());
+  return tags.every((tag, i) => tag.textContent === expected.labels[i] && tag.title === expected.titles[i]
+    && tag.scrollWidth <= tag.clientWidth && boxes[i].width === 44
+    && boxes[i].left >= 0 && boxes[i].right <= innerWidth)
+    && boxes[0].left === boxes[1].left && boxes[0].bottom < boxes[1].top;
+}), { labels, titles });
+
 check("Codex sessions are listed too", await waitFor(async () => (await count()) === 12), String(await count()));
 await (await import("./folders-test.mjs")).checkFolders({ page, check, waitFor, shots: SHOTS });
 // The checks up to the Codex section are about Claude sessions.
@@ -93,19 +104,41 @@ await page.select("#sort", "kept"); await sleep(50);
 await search("");
 await page.$eval("#q", (el) => el.blur());
 
-// --- mouse selection
+// --- mouse details and selection
 await clickCard(0);
-check("click selects one", (await selected()) === 1 && (await bulkShown()));
+check("plain click opens details without selecting", Boolean(await page.$("#list .card:first-child .panel"))
+  && (await selected()) === 0 && !(await bulkShown())
+  && await page.$eval("#list .card:first-child", (el) => el.classList.contains("cursor")));
+await page.click("#list .card:first-child .panel .cmd"); await sleep(30);
+check("clicking expanded panel content leaves it open", Boolean(await page.$("#list .card:first-child .panel")) && (await selected()) === 0);
+await clickCard(0);
+check("another plain click closes details", !(await page.$("#list .panel")) && (await selected()) === 0);
+await page.click("#list .card .more"); await sleep(30);
+check("details button still opens without selecting", Boolean(await page.$("#list .card:first-child .panel")) && (await selected()) === 0);
+await page.click("#list .card .more"); await sleep(30);
+await page.click("#list .card .check"); await sleep(30);
+check("circle selects one without opening details", (await selected()) === 1 && (await bulkShown()) && !(await page.$("#list .panel")));
+await page.click("#list .card .check"); await sleep(30);
+check("circle toggles selection off", (await selected()) === 0 && !(await bulkShown()));
+await page.click("#list .card .check"); await sleep(30);
 await clickCard(2, ["Control"]);
 check("ctrl-click adds", (await selected()) === 2);
+await clickCard(2, ["Control"]);
+check("ctrl-click toggles selection off", (await selected()) === 1);
+await clickCard(2, ["Meta"]);
+check("cmd-click adds", (await selected()) === 2);
 await clickCard(4, ["Shift"]);
 check("shift-click selects range from anchor", (await selected()) === 3, String(await selected()));
 await clickCard(6, ["Control", "Shift"]);
 check("ctrl+shift-click extends keeping selection", (await selected()) === 5, String(await selected()));
+check("modifier clicks do not expand cards", !(await page.$("#list .panel")));
+await clickCard(1);
+check("opening details preserves the selection", (await selected()) === 5 && Boolean(await page.$("#list .panel")));
+await clickCard(1);
 await page.keyboard.press("Escape"); await sleep(30);
 check("Escape clears", (await selected()) === 0 && !(await bulkShown()));
 await page.click("#list .card .check"); await sleep(30);
-check("checkbox selects", (await selected()) === 1);
+check("circle selects", (await selected()) === 1);
 await page.keyboard.press("Escape"); await sleep(30);
 
 // --- keyboard selection
@@ -113,6 +146,10 @@ await page.keyboard.press("ArrowDown"); await page.keyboard.press("ArrowDown"); 
 const cursorIdx = await page.$$eval("#list .card", (els) => els.findIndex((e) => e.classList.contains("cursor")));
 // The checkbox click left the cursor on row 0; Escape keeps the cursor.
 check("arrows move the cursor", cursorIdx === 2, String(cursorIdx));
+await page.keyboard.press("Enter"); await sleep(30);
+check("Enter still opens details without selecting", Boolean(await page.$("#list .card.cursor .panel")) && (await selected()) === 0);
+await page.keyboard.press("Enter"); await sleep(30);
+check("Enter toggles details closed", !(await page.$("#list .panel")));
 await page.keyboard.press("Space"); await sleep(30);
 check("Space selects the cursor row", (await selected()) === 1);
 await page.keyboard.down("Shift"); await page.keyboard.press("ArrowDown"); await page.keyboard.up("Shift"); await sleep(30);
@@ -273,8 +310,13 @@ check("renaming to a taken name is refused", await waitFor(async () =>
 // --- Codex sessions
 const api = async () => (await (await fetch(BASE + "api/sessions")).json()).sessions;
 await page.click("#t-codex"); await sleep(100);
-check("Codex filter shows only Codex sessions", (await count()) === 2 && (await page.$$("#list .tool-tag")).length === 2);
+check("Codex filter shows only Codex sessions", (await count()) === 2);
 check("Codex rows have no keep-running switch", (await page.$$("#list .switch")).length === 0);
+await page.setViewport({ width: 390, height: 844 }); await sleep(50);
+check("Codex and Pi tags stack in a 44px column at 390px", await tagsFit("#list .card", ["Codex", "Pi"], ["A Codex session", "This Pi"]));
+check("Codex cards fit the phone width", await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+if (SHOTS) await page.screenshot({ path: `${SHOTS}/cards-codex-mobile.png`, fullPage: true });
+await page.setViewport({ width: 1000, height: 900 });
 await page.click("#t-all"); await sleep(50);
 await search("is:codex"); check("is:codex", (await count()) === 2);
 await search("is:codex dir:alpha");
@@ -330,7 +372,7 @@ await page.keyboard.press("Enter");
 check("Empty now clears the trash", await waitFor(async () => fs.readdirSync(trashDir).length === 0));
 
 if (SHOTS) {
-  await clickCard(1); await clickCard(3, ["Control"]);
+  await page.click("#list .card:nth-child(2) .check"); await clickCard(3, ["Control"]);
   await page.screenshot({ path: `${SHOTS}/desktop.png`, fullPage: true });
   await page.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true });
   await sleep(200);
@@ -338,6 +380,11 @@ if (SHOTS) {
 }
 
 await (await import("./hosts-test.mjs")).checkHosts({ page, home: HOME, check, waitFor });
+await page.setViewport({ width: 390, height: 844 }); await sleep(50);
+check("Mac and Claude tags stack in a 44px column at 390px", await tagsFit('#list [data-card^="mac:"]', ["Mac", "Claude"], ["mac", "A Claude Code session"]));
+check("Mac badge does not repeat the tool", await page.$eval('#list [data-card^="mac:"] .badge', (el) => el.textContent === "mac · online"));
+check("Mac cards fit the phone width", await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+if (SHOTS) await page.screenshot({ path: `${SHOTS}/cards-mac-mobile.png`, fullPage: true });
 
 check("no page errors", errors.length === 0, errors.join(" | "));
 await browser.close();

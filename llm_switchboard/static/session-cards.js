@@ -40,6 +40,13 @@ function badges(session) {
   return out.length ? `<div class="badges">${out.join("")}</div>` : "";
 }
 
+function identityTags(session) {
+  const codex = isCodex(session);
+  const tool = `<span class="tool-tag" title="${codex ? "A Codex session" : "A Claude Code session"}">${codex ? "Codex" : "Claude"}</span>`;
+  const machine = `<span class="tool-tag machine-tag" title="${esc(session.host || "This Pi")}">${session.host ? "Mac" : "Pi"}</span>`;
+  return `<div class="session-tags">${session.host ? machine + tool : tool + machine}</div>`;
+}
+
 export function createSessionCards(selection, expanded, screens, peeks, directoryOf, menuState) {
   const copyButton = (text) => `<button class="btn" data-act="copy" data-text="${esc(text)}">Copy</button>`;
 
@@ -138,7 +145,7 @@ export function createSessionCards(selection, expanded, screens, peeks, director
       return `<div class="${cls}" data-card="${session.id}">
     <div class="row">
       <button type="button" class="check" data-act="select" data-id="${session.id}" aria-label="Select" aria-pressed="${selection.has(session.id)}"></button>
-      ${session.host ? '<span class="tool-tag">Mac</span>' : isCodex(session) ? '<span class="tool-tag" title="A Codex session">Codex</span>' : `<label class="switch" title="${session.enabled ? "Stop keeping this running" : "Keep this running with Remote Control"}">
+      ${session.host || isCodex(session) ? identityTags(session) : `<label class="switch" title="${session.enabled ? "Stop keeping this running" : "Keep this running with Remote Control"}">
         <input type="checkbox" data-act="toggle" data-id="${session.id}" ${session.enabled ? "checked" : ""} aria-label="Keep running">
         <span></span>
       </label>`}

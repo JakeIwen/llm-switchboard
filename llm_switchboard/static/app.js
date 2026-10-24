@@ -359,10 +359,7 @@ async function onAction(el) {
   if (s?.host && !["select", "expand", "copy", "delete"].includes(el.dataset.act)) return toast("This action is unavailable on the Mac.");
   switch (el.dataset.act) {
     case "select": sel.toggle(id); return render();
-    case "expand":
-      expanded.has(id) ? expanded.delete(id) : expanded.add(id);
-      sel.moveCursor(id);
-      return render();
+    case "expand": return onCardClick(id);
     case "delete": return deleteSessions([id]);
     case "move": return moveSessions([id], $("cwd-" + id).value);
     case "menu":
@@ -400,11 +397,14 @@ async function onAction(el) {
 
 // ---- events ----------------------------------------------------------------
 
-function onCardClick(id, ev) {
+function onCardClick(id, ev = {}) {
   const mod = ev.metaKey || ev.ctrlKey;
   if (ev.shiftKey) sel.extendTo(order, id, mod);
   else if (mod) sel.toggle(id);
-  else sel.only(id);
+  else {
+    expanded.has(id) ? expanded.delete(id) : expanded.add(id);
+    sel.moveCursor(id);
+  }
   render();
 }
 
