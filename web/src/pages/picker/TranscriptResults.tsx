@@ -122,6 +122,7 @@ export function TranscriptResults(p: Props) {
   const byId = new Map(p.rows.map((r) => [r.id, r]))
   const found = results && 'results' in results ? results.results : null
   const indexText = transcriptIndexStatus(index, p.now)
+  const hidden = found ? found.filter((hit) => !byId.has(hit.id)).length : 0
 
   return (
     <div className="transcript-results">
@@ -163,6 +164,11 @@ export function TranscriptResults(p: Props) {
             ) : null
           })}
         </div>
+      )}
+      {found && found.length > 0 && hidden > 0 && (
+        <p className="transcript-ignored">
+          {plural(hidden, 'more session')} matched but {hidden === 1 ? "isn't" : "aren't"} in the list (deleted, or not loaded yet).
+        </p>
       )}
       {found && found.length === 0 && <p className="transcript-none">No transcripts match.</p>}
     </div>

@@ -3,6 +3,8 @@ import { useEffect, useRef } from 'react'
 export interface KeyHandlers {
   /** False while a dialog is open or the page isn't showing the session list. */
   active: boolean
+  /** In Transcripts mode Escape goes back to the session list, wherever focus is. */
+  leaveTranscripts: (() => void) | null
   move: (delta: number, extend: boolean) => void
   toggleSelect: () => void
   toggleExpand: () => void
@@ -17,6 +19,11 @@ const typing = (target: EventTarget | null) =>
   target instanceof HTMLElement &&
   (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))
 
+// Focus inside an open menu, popover or sheet belongs to it: Backspace or `n`
+// there must not reach a session.
+const inOverlay = (target: EventTarget | null) =>
+  target instanceof HTMLElement && Boolean(target.closest('[role="menu"], [role="dialog"], [role="listbox"], .mantine-Popover-dropdown'))
+
 // A focused control handles its own Space and Enter.
 const ownsKeys = (target: EventTarget | null) =>
   target instanceof HTMLElement && Boolean(target.closest('button, a, summary, [role="menuitem"]'))
@@ -28,7 +35,8 @@ export function useKeyboard(handlers: KeyHandlers) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const h = ref.current
-      if (!h.active || e.altKey || typing(e.target)) return
+      if (e.key === 'Escape' && h.leaveTranscripts && !inOverlay(e.target)) return h.leaveTranscripts()
+      if (!h.active || e.altKey || typing(e.target) || inOverlay(e.target)) return
       const mod = e.metaKey || e.ctrlKey
       const key = e.key
       if (key === '/' && !mod) return void (e.preventDefault(), h.focusSearch())

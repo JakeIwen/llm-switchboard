@@ -19,8 +19,8 @@ it('new Claude loads allowed folders, honours a preferred local folder, and star
     { key: 'cwd', label: 'Folder', value: '/other', options: [{ value: folder.cwd, label: '~/project  (2 sessions)' }, { value: '/other', label: '~/other  (1 session)' }] },
     { key: 'name', label: 'Name', required: true, autofocus: true, maxLength: 120, placeholder: 'What is this session for?' },
   ] })
-  expect(state.forms[0].body).toContain("starts through claudepd with Remote Control on, and is kept running. You'll get a notification when it's ready.")
-  expect(state.forms[0].body).toContain('~/gone: The folder no longer exists.')
+  expect(state.forms[0].body).toEqual(["Starts with Remote Control on and is kept running. You'll get a notification when it's ready."])
+  expect(state.forms[0].fields[0].description).toContain('~/gone (The folder no longer exists.)')
   expect(state.requests).toEqual([['/api/sessions/new', { tool: 'claude', cwd: '/other', name: 'New' }]])
   expect([...ctx.watching]).toEqual([['made', 'New']])
   expect(state.toasts).toEqual([{ message: 'Starting “New”…', durationMs: 30000 }])
@@ -38,10 +38,10 @@ it('healthy Codex offers tool-specific folders and a conditional required first 
   expect(form.fields[0]).toMatchObject({ key: 'tool', value: 'codex', options: [{ value: 'claude', label: 'Claude Code' }, { value: 'codex', label: 'Codex' }] })
   expect(form.fields[1]).toMatchObject({ key: 'cwd', options: [{ value: folder.cwd }, { value: untrusted.cwd }] })
   const prompt = form.fields.at(-1)!
-  expect(prompt).toMatchObject({ key: 'prompt', label: 'First message', required: true, maxLength: 20000, placeholder: 'What should Codex do first?' })
+  expect(prompt).toMatchObject({ kind: 'textarea', key: 'prompt', label: 'First message', required: true, maxLength: 20000, placeholder: 'What should Codex do first?' })
   expect(prompt.showWhen?.({ tool: 'claude' })).toBe(false)
   expect(prompt.showWhen?.({ tool: 'codex' })).toBe(true)
-  expect(form.body).toContain('Codex: starts in the Codex daemon and works on your first message right away, without asking for approvals (as codexp). Codex saves a session only once it has a message.')
+  expect(form.body).toEqual(['Claude Code starts with Remote Control on and is kept running. Codex starts working on its first message at once, without asking for approvals.'])
   expect(form.validate?.({ tool: 'claude', cwd: untrusted.cwd, name: 'New' })).toBe(`Claude Code can't start here: ${untrusted.blocked}`)
   expect(form.validate?.({ tool: 'codex', cwd: missing.cwd, name: 'New', prompt: 'go' })).toBe("Codex can't start here: The folder no longer exists.")
   expect(state.requests).toEqual([['/api/sessions/new', { tool: 'codex', cwd: untrusted.cwd, name: 'New Codex', prompt: 'Do the work' }]])
