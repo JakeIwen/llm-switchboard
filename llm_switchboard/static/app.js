@@ -1,3 +1,4 @@
+import { openSettings, pollIntervalMs } from "./settings.js";
 import { hostSummary, hostAction, actionPath, actionSummary, hasRemote, trashHost, restoreLock } from "./hosts.js";
 import { compileQuery } from "./search.js";
 import { deviceClass, deviceTitle, dirKey, UNKNOWN_DIR } from "./dirs.js";
@@ -64,9 +65,19 @@ let folderStorage;
 try { folderStorage = localStorage; } catch {}
 const folderFilter = new FolderFilter({ setHTML, onChange: render, storage: folderStorage });
 
+let pollTimer = null, pollDelay = 0;
+function armPoll() {
+  const delay = pollIntervalMs(data?.settings);
+  if (delay === pollDelay) return;
+  clearInterval(pollTimer);
+  pollDelay = delay;
+  pollTimer = setInterval(refresh, delay);
+}
+
 async function refresh() {
   try {
     [data, { trash }] = await Promise.all([api("/api/sessions"), api("/api/trash")]);
+    armPoll();
     if (!pointerDown) render();
     fulltext?.poll();
     checkWatched();
@@ -563,6 +574,12 @@ $("help-btn").addEventListener("click", () => {
   $("help-btn").setAttribute("aria-expanded", String(!$("help").hidden));
 });
 
+$("settings-btn").addEventListener("click", async () => {
+  $("settings-btn").disabled = true;
+  try { await openSettings(refresh); }
+  finally { $("settings-btn").disabled = false; }
+});
+
 fulltext = initFullText({ api, setHTML, esc, age, copyText, toast, normalRender: render });
 refresh();
-setInterval(refresh, 4000);
+armPoll();

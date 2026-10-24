@@ -96,6 +96,34 @@ await (await import("./folders-test.mjs")).checkFolders({ page, check, waitFor, 
 await page.click("#t-claude"); await sleep(50);
 check("loads all sessions", (await count()) === 10, String(await count()));
 
+// --- install settings
+const settingsCard = await page.$eval("#list .card", (el) => el.dataset.card);
+await clickSettled(`[data-card="${settingsCard}"] [data-act=expand]`);
+await page.waitForSelector(`[data-card="${settingsCard}"] .cmd`);
+await page.click("#settings-btn");
+check("settings gear opens the install-wide dialog", await waitFor(dialogOpen)
+  && (await page.$eval("dialog[open] h2", (el) => el.textContent)) === "Settings");
+await page.$eval('dialog[open] input[name="claude_command"]', (el) => {
+  el.value = "bad command"; el.dispatchEvent(new Event("input"));
+});
+check("settings reject shell commands with spaces", await page.$eval("dialog[open] [value=ok]", (el) => el.disabled));
+await page.$eval('dialog[open] input[name="claude_command"]', (el) => {
+  el.value = "claudep"; el.dispatchEvent(new Event("input"));
+});
+await page.click("dialog[open] [value=ok]");
+check("saving Claude command updates a Pi card resume line", await waitFor(() =>
+  page.$eval(`[data-card="${settingsCard}"] .cmd`, (el) => el.textContent.includes("claudep --resume"))));
+await page.waitForFunction(() => !document.getElementById("settings-btn").disabled);
+await page.click("#settings-btn");
+await page.waitForSelector('dialog[open] input[name="claude_command"]');
+check("settings reopen with the saved command", (await page.$eval('dialog[open] input[name="claude_command"]', (el) => el.value)) === "claudep");
+await page.$eval('dialog[open] input[name="claude_command"]', (el) => {
+  el.value = "claude"; el.dispatchEvent(new Event("input"));
+});
+await page.click("dialog[open] [value=ok]");
+await page.waitForFunction(() => !document.querySelector("dialog[open]") && !document.getElementById("settings-btn").disabled);
+await clickSettled(`[data-card="${settingsCard}"] [data-act=expand]`);
+
 // --- search modifiers
 await search("-alpha"); check("-alpha excludes", (await count()) === 6, String(await count()));
 await search("alpha -can"); check("alpha -can", (await count()) === 3);
@@ -147,7 +175,7 @@ check("transcript search finds the matching session", await waitFor(() => page.$
 check("transcript result shows an excerpt", (await page.$eval("#list .search-excerpt", (e) => e.textContent)).includes("reply about Alpha CAN decoder"));
 await page.click("[data-search-open]");
 check("opening a transcript result shows context", await waitFor(() => page.$("#list .search-detail").then(Boolean)));
-check("matching context includes a resume command", (await page.$eval("#list .search-detail", (e) => e.textContent)).includes("claudepd --resume"));
+check("matching context includes a resume command", (await page.$eval("#list .search-detail", (e) => e.textContent)).includes("claude --resume"));
 await page.$eval("#q", (el) => { el.value = ""; el.dispatchEvent(new Event("input")); });
 check("clearing transcript search returns to the normal list", await waitFor(async () => (await count()) === 10));
 await search("alpha -can");
@@ -356,7 +384,9 @@ const forked = await waitFor(async () => {
   const f = r.sessions.find((s) => s.title === "Forked copy");
   return f && f.cwd === `${HOME}/dev/beta` && !f.enabled && r.sessions.some((s) => s.id === id);
 });
-check("Fork makes a copy in that folder and keeps the original", forked);
+check("Fork makes a copy in that folder and keeps the original", forked, forked ? "" : JSON.stringify(
+  (await (await fetch(BASE + "api/sessions")).json()).sessions.filter((s) => s.title === "Forked copy" || s.id === id)
+    .map((s) => ({ id: s.id, title: s.title, cwd: s.cwd, enabled: s.enabled }))));
 check("the page confirms the fork", await waitFor(async () =>
   (await page.$eval("#toast-msg", (e) => e.textContent)).includes("Forked as “Forked copy”")));
 await page.$eval(`#title-${id}`, (el) => { el.value = "forked COPY"; });

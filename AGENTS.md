@@ -24,6 +24,7 @@ Sharing the socket would let its supervisor close the real windows.
 | Module | Concern |
 | --- | --- |
 | `llm_switchboard/paths.py` | Shared locations, names, the managed-process env marker, default port |
+| `llm_switchboard/settings.py`, `settings_cli.py` | Canonical install settings, validation and locked `settings.json` persistence; the lightweight `settings` / `settings set` CLI |
 | `llm_switchboard/local_config.py` | This install's machine names from the untracked `local.env` (`local.env.example` lists them) |
 | `llm_switchboard/session_id.py` | Session id validation and short ids |
 | `llm_switchboard/store.py` | The enabled-session list (locked, atomic JSON) |
@@ -88,11 +89,13 @@ Sharing the socket would let its supervisor close the real windows.
 | `llm_switchboard/static/selection.js` | Multi-select: click, cmd/shift ranges, keyboard cursor |
 | `llm_switchboard/static/fulltext.js` | The Transcripts search mode: results, context, index status |
 | `llm_switchboard/static/hosts.js`, `hosts.css` | Other machines' rows: badge, panel, locks, action routes and status |
+| `llm_switchboard/static/settings.js` | Install settings dialog, field validation, and poll-interval fallback; mirrors the keys in `settings.py` |
 | `llm_switchboard/static/dialog.js` | Modal confirm/prompt/form (text, select, checkbox fields; `validate`; Enter confirms, Esc cancels) |
 | `tests/fake_codex.py` | In-memory Codex daemon for the unit and browser tests |
 | `systemd/`, `install.sh` | User unit template and installer |
 | `scripts/setup-mac.sh` | Mac setup: key, `host-authorize` over SSH, one push, launchd job |
 | `scripts/check_layout.py`, `scripts/backend_layout/` | Repo-owned read-only layout checker; `.codeshape/config.json` declares its scope |
+| `tests/test_settings.py`, `tests/js/settings.test.mjs` | Settings persistence, CLI, manual-launch isolation, and page field/polling contracts |
 | `tests/test_architecture.py` | Enforced pure-owner imports, Mac/Pi separation, rendered systemd and launchd targets, checkout wrapper |
 
 ## Contracts
@@ -190,7 +193,11 @@ the report instead of leaving it silently stale.
   (`search_process.py`), never in the supervisor or a request thread; after
   changing what is extracted, rebuild: stop the service and delete
   `transcript-search.sqlite3*`.
-- The page polls every 4s; only rewrite DOM through `setHTML` (skips
+- Manual resume commands use `claude_command` / `codex_command` from install settings
+  (`STATE_DIR/settings.json`, normally `~/.config/llm-switchboard/settings.json`).
+  These settings never change the supervisor's `claudepd` launch function. Search
+  responses rebuild resume commands from current settings without reindexing.
+- The page polls at `poll_seconds` (4s by default); only rewrite DOM through `setHTML` (skips
   unchanged markup) so clicks aren't lost to a redraw mid-click.
 - Machine names (the Pi's SSH alias, the Mac's name, Tailscale names and
   addresses, LAN URLs) live only in the gitignored `local.env`, never in

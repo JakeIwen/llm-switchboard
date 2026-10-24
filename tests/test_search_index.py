@@ -39,10 +39,10 @@ class SearchIndexTest(unittest.TestCase):
         [claude] = self.search("amber")
         self.assertEqual((claude["tool"], claude["id"], claude["title"]),
                          ("claude", CLAUDE_ID, "Alpha indexed session"))
-        self.assertIn("claudepd --resume", claude["resume_cmd"])
+        self.assertIn("claude --resume", claude["resume_cmd"])
         [codex] = self.search("ochre")
         self.assertEqual((codex["tool"], codex["title"]), ("codex", "Named Codex thread"))
-        self.assertIn("codexp resume", codex["resume_cmd"])
+        self.assertIn("codex resume", codex["resume_cmd"])
         status = TranscriptSearch(self.index_file).status()
         self.assertEqual((status["state"], status["sessions"], status["files"]), ("ready", 2, 2))
 

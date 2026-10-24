@@ -48,7 +48,8 @@ class Fixture(unittest.TestCase):
         state.write_text(json.dumps({"projects": {str(self.root): {"hasTrustDialogAccepted": True}}}))
         self.app = make_app(self.store, self.index, self.sup, self.tmux, Trash(self.root / "trash"), self.root / "codex.sock",
                             registry=lambda: [], codex_trash=CodexTrash(self.root / "codex-trash.json"),
-                            folders=partial(new_session_folders, state_file=state, home=self.root / "home"))
+                            folders=partial(new_session_folders, state_file=state, home=self.root / "home"),
+                            settings_file=self.root / "settings.json")
         self.codex = self.app.codex
         self.codex.clock = self.clock
 
@@ -67,7 +68,7 @@ class CatalogTest(Fixture):
         self.assertEqual(rows[T1]["title"], "Find compass signal")
         self.assertEqual(rows[T2]["title"], "untitled first prompt")
         self.assertNotIn(SUB, rows)
-        self.assertIn(f"codexp resume {T1}", rows[T1]["resume_cmd"])
+        self.assertIn(f"codex resume {T1}", rows[T1]["resume_cmd"])
         self.assertEqual(self.app.list_sessions()["codex"], {"enabled": True, "error": ""})
 
     def test_unreachable_daemon_is_reported_not_fatal(self):

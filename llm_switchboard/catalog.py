@@ -8,6 +8,7 @@ from .codex_threads import CodexThread, codex_short_id
 from .launcher import codex_resume_command, resume_command
 from .live_registry import LiveProcess
 from .session_id import short_id
+from .settings import Settings
 from .store import Entry
 from .supervisor_state import Status
 from .transcripts import Transcript, display_path
@@ -18,13 +19,14 @@ def session_rows(
     entries: dict[str, Entry],
     live: list[LiveProcess],
     statuses: dict[str, Status],
+    settings: Settings | None = None,
 ) -> list[dict]:
     by_id = {t.session_id: t for t in transcripts}
     ids = list(by_id) + [sid for sid in entries if sid not in by_id]
-    return [_row(sid, by_id.get(sid), entries.get(sid), live, statuses.get(sid)) for sid in ids]
+    return [_row(sid, by_id.get(sid), entries.get(sid), live, statuses.get(sid), settings) for sid in ids]
 
 
-def codex_rows(threads: list[CodexThread]) -> list[dict]:
+def codex_rows(threads: list[CodexThread], settings: Settings | None = None) -> list[dict]:
     return [{
         "id": t.thread_id,
         "tool": "codex",
@@ -37,7 +39,7 @@ def codex_rows(threads: list[CodexThread]) -> list[dict]:
         "mtime": t.mtime,
         "size": t.size,
         "remote_url": "",
-        "resume_cmd": codex_resume_command(t.thread_id, t.cwd),
+        "resume_cmd": codex_resume_command(t.thread_id, t.cwd, settings),
         "new": False,
         "enabled": False,
         "rc_name": "",
@@ -53,7 +55,8 @@ def sort_rows(rows: list[dict]) -> list[dict]:
     return sorted(rows, key=lambda r: (not r["enabled"], -(r["mtime"] or 0)))
 
 
-def _row(sid: str, t: Transcript | None, entry: Entry | None, live: list[LiveProcess], status: Status | None) -> dict:
+def _row(sid: str, t: Transcript | None, entry: Entry | None, live: list[LiveProcess],
+         status: Status | None, settings: Settings | None) -> dict:
     open_elsewhere = [p for p in live if p.session_id == sid and p.managed_for != sid]
     # A session created here has no transcript until Claude Code writes one.
     pending = t is None and bool(entry and entry.cwd)
@@ -70,7 +73,7 @@ def _row(sid: str, t: Transcript | None, entry: Entry | None, live: list[LivePro
         "mtime": t.mtime if t else (entry.updated_at if pending else None),
         "size": t.size if t else None,
         "remote_url": t.remote_url if t else "",
-        "resume_cmd": resume_command(sid, cwd),
+        "resume_cmd": resume_command(sid, cwd, settings),
         "new": pending,
         "enabled": bool(entry and entry.enabled),
         "rc_name": entry.name if entry else "",

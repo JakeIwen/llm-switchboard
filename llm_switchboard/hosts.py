@@ -2,13 +2,14 @@
 
 from pathlib import Path
 import json
-import shlex
 import time
 
 from .host_protocol import MAC_HOME, MAX_METADATA_BYTES, OFFLINE_AFTER, VERSION, SessionState, host_name, push
 from .host_actions_protocol import MAX_EXCHANGE_BYTES, ActionKind, ActionState, results, trash_items
 from . import host_queue
 from .json_file import JsonFile
+from .launcher import resume_for_tool
+from .settings import Settings
 from .paths import HOSTS_DIR
 
 
@@ -72,7 +73,7 @@ class Hosts:
                        for i in data.get("actions", []))
         return MAX_EXCHANGE_BYTES if awaiting else MAX_METADATA_BYTES
 
-    def snapshot(self) -> dict:
+    def snapshot(self, settings: Settings | None = None) -> dict:
         hosts, rows, trash, actions = [], [], [], []
         for path in sorted(self.root.glob("*.json")):
             try:
@@ -87,8 +88,8 @@ class Hosts:
             last_seen = data.get("last_seen", 0)
             online = self.clock() - last_seen < OFFLINE_AFTER
             hosts.append({"host": host, "online": online, "last_seen": last_seen})
-            rows.extend(page_row(r, host, online, last_seen) for r in data.get("rows", []))
-            trash.extend(page_row(r, host, online, last_seen) for r in data.get("trash", []))
+            rows.extend(page_row(r, host, online, last_seen, settings) for r in data.get("rows", []))
+            trash.extend(page_row(r, host, online, last_seen, settings) for r in data.get("trash", []))
             actions.extend({**a, "host": host} for a in data.get("actions", []))
         return {"hosts": hosts, "sessions": rows, "trash": trash, "actions": actions}
 
@@ -98,12 +99,12 @@ def host_display_path(cwd: str) -> str:
     return MAC_HOME.sub("~", cwd, count=1)
 
 
-def page_row(row: dict, host: str, online: bool, last_seen: float) -> dict:
+def page_row(row: dict, host: str, online: bool, last_seen: float, settings: Settings | None = None) -> dict:
     sid, cwd = row["id"], row["cwd"]
-    command = f"{'codex resume' if row['tool'] == 'codex' else 'claude --resume'} {shlex.quote(sid)}"
+    command = resume_for_tool(row["tool"], sid, cwd, settings)
     return {**row, "id": f"{host}:{sid}", "session_id": sid, "host": host,
             "host_online": online, "last_seen": last_seen, "short_id": sid[:8],
-            "project": host_display_path(cwd), "resume_cmd": f"cd -- {shlex.quote(cwd)} && {command}",
+            "project": host_display_path(cwd), "resume_cmd": command,
             "enabled": False, "new": False, "remote_url": "", "rc_name": "", "status": None,
             "open_elsewhere": [] if row["state"] == SessionState.CLOSED else [{"status": row["state"]}],
             "codex_state": "active" if row["state"] == SessionState.BUSY else "notLoaded"}
