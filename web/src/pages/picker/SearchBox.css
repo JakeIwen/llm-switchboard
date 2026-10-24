@@ -44,3 +44,10 @@
   margin: var(--mantine-spacing-md) 0 0;
   color: var(--muted);
 }
+
+/* Keyboard shortcuts mean nothing on a touch-only screen. */
+@media (hover: none) {
+  .search-help-keys {
+    display: none;
+  }
+}

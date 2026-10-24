@@ -102,6 +102,8 @@ export function FolderPicker({
           size="auto"
           title="Folders"
           classNames={{ content: 'folder-sheet', body: 'folder-sheet-body' }}
+          // Focus the close button, not the find box, so the phone keyboard stays down.
+          closeButtonProps={{ 'aria-label': 'Close folders', 'data-autofocus': true } as Record<string, unknown>}
         >
           {chips}
         </Drawer>
