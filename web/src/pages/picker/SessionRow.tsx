@@ -41,11 +41,16 @@ const TONE_CLASS: Record<BadgeTone, string> = {
   idle: 'tone-idle',
 }
 
+// Memory is the least urgent pill: "Open in a terminal" explains why Rename,
+// Move and Delete are disabled, so it wins the second slot.
+const pillRank = (label: string) => (label.endsWith(' MB RAM') ? 1 : 0)
+
 /** The row's pills. A Mac row's first badge is its host status; while the Mac
     is online the header already says so and the row isn't dimmed, so drop it. */
 function pills(row: Row) {
   const all = badges(row)
-  return (row.host && row.host_online ? all.slice(1) : all).slice(0, MAX_PILLS)
+  const shown = row.host && row.host_online ? all.slice(1) : all
+  return [...shown].sort((a, b) => pillRank(a.label) - pillRank(b.label)).slice(0, MAX_PILLS)
 }
 const keepable = (row: Row) => !row.host && row.tool === 'claude'
 

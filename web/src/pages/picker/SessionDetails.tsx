@@ -59,7 +59,15 @@ function Guarded({ reason, children, onClick, color, variant, className }: {
 }) {
   return (
     <Tooltip label={reason} disabled={!reason}>
-      <Button disabled={Boolean(reason)} onClick={onClick} color={color} variant={variant} className={className}>
+      {/* data-disabled, not disabled: a disabled button gets no pointer events, so its tooltip could never open. */}
+      <Button
+        data-disabled={reason ? true : undefined}
+        aria-disabled={reason ? true : undefined}
+        onClick={(e) => (reason ? e.preventDefault() : onClick())}
+        color={color}
+        variant={variant}
+        className={className}
+      >
         {children}
       </Button>
     </Tooltip>

@@ -4,8 +4,9 @@ import type { SessionsPayload } from '../../api/sessionsPayload'
 import { hostSummary } from '../../hosts/hostRow'
 import './Header.css'
 
-function summary(data: SessionsPayload | null, error: string): string {
-  if (!data) return error ? `Can't reach the Pi: ${error}` : 'loading…'
+function summary(data: SessionsPayload | null): string {
+  // Until the first list arrives the page body says loading, or why not.
+  if (!data) return ''
   const local = data.sessions.filter((r) => !r.host)
   const kept = local.filter((r) => r.enabled).length
   const rc = local.filter((r) => r.enabled && r.status?.state === 'running').length
@@ -25,7 +26,7 @@ export function Header({ data, error, onNew, onSettings }: Props) {
       <Title order={1} className="picker-title">
         LLM Switchboard
       </Title>
-      <p className={error ? 'picker-summary is-error' : 'picker-summary'}>{summary(data, error)}</p>
+      <p className={error ? 'picker-summary is-error' : 'picker-summary'}>{summary(data)}</p>
       <div className="picker-header-actions">
         <Tooltip label="New session (n)">
           <Button variant="light" leftSection={<IconPlus size={14} />} onClick={onNew}>

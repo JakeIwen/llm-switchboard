@@ -18,7 +18,12 @@ export function useSelection(order: readonly string[]) {
 
   // Prune while rendering (the model is mutable), so a filter change never
   // leaves hidden rows selected for a bulk action.
-  useMemo(() => model.current.prune(order), [order])
+  // The key changes only when pruning removed something, so the returned api
+  // (and every row's props) stays the same object across ordinary polls.
+  const pruned = useMemo(() => {
+    model.current.prune(order)
+    return `${model.current.size}|${model.current.cursor}|${model.current.anchor}`
+  }, [order])
 
   /** The checkbox: toggles one row; Shift picks a range, ⌘/Ctrl+Shift adds one. */
   const onSelect = useCallback(
@@ -74,7 +79,7 @@ export function useSelection(order: readonly string[]) {
         bump()
       },
     }),
-    [version, onSelect, bump],
+    [version, pruned, onSelect, bump],
   )
   return api
 }

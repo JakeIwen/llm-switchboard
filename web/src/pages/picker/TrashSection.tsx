@@ -38,7 +38,7 @@ export function TrashSection({ items, now, onRestore, onEmpty }: Props) {
                 </div>
               </div>
               <Tooltip label={lock} disabled={!lock}>
-                <Button disabled={Boolean(lock)} onClick={() => onRestore(t)}>
+                <Button data-disabled={lock ? true : undefined} aria-disabled={lock ? true : undefined} onClick={() => lock || onRestore(t)}>
                   Restore
                 </Button>
               </Tooltip>
@@ -48,7 +48,13 @@ export function TrashSection({ items, now, onRestore, onEmpty }: Props) {
       </div>
       <div className="trash-foot">
         <Tooltip label="Mac trash is managed on the Mac" disabled={local > 0}>
-          <Button color="var(--bad)" variant="subtle" disabled={local === 0} onClick={onEmpty}>
+          <Button
+            color="var(--bad)"
+            variant="subtle"
+            data-disabled={local === 0 ? true : undefined}
+            aria-disabled={local === 0 ? true : undefined}
+            onClick={() => local > 0 && onEmpty()}
+          >
             Empty Pi trash now{local ? ` (${plural(local, 'session')})` : ''}
           </Button>
         </Tooltip>

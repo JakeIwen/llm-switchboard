@@ -72,6 +72,7 @@ export function PickerPage() {
   const sessionsMode = filters.mode === 'sessions'
   useKeyboard({
     active: Boolean(data) && sessionsMode && !dialogOpen,
+    leaveTranscripts: !sessionsMode && !dialogOpen ? filters.backToSessions : null,
     move: (delta, extend) => {
       const id = selection.step(delta, extend)
       if (id) document.querySelector(`[data-id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: 'nearest' })
