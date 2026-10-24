@@ -265,7 +265,11 @@ Ids can be any unique prefix; Codex sessions also go by the short id `list` show
 
 ## Development
 
-The checkout runs on Python 3.11+ without Python dependencies. The package is
+The checkout runs on Python 3.11+ without Python dependencies. A rebuilt page
+(React and Mantine, in `web/`) is served at `/next/` beside the current one
+while it is tried out; `npm ci && npm run build` in `web/` builds it, and
+`npm run dev` there serves it against the Pi read-only. Its design rules are
+in [docs/design.md](docs/design.md). The package is
 shared by Pi and Mac; [AGENTS.md](AGENTS.md) lists module owners and supported
 launch paths. Pure naming and supervisor-state contracts are separate from
 their storage and runtime consumers; existing public imports remain supported.
@@ -273,7 +277,8 @@ their storage and runtime consumers; existing public imports remain supported.
 ## Tests
 
 ```
-python3 -m unittest discover -s tests -f   # Python, Node, architecture and layout checks
+npm ci --prefix web                        # once: the page's build and test tools
+python3 -m unittest discover -s tests -f   # Python, Node, web/, architecture and layout checks
 python3 scripts/check_layout.py          # standalone layout report
 ```
 

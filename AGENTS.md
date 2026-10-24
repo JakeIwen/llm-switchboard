@@ -1,10 +1,15 @@
 # llm-switchboard
 
-Python 3.11 standard library only. Run tests with
-`python3 -m unittest discover -s tests -f` (Python, required Node tests in
-`tests/js`, architecture contracts, and the repo-owned backend-layout suite). After UI changes, use the existing
-`browser_clean` MCP driver with isolated fixtures from `tests/browser/fixture.py`
-and the behaviors in `tests/browser/ui-test.mjs`. Use separate fixture homes,
+Python 3.11 standard library only for the backend; the rebuilt page in `web/`
+(Vite, React, TypeScript, Mantine) is served at `/next/` beside the old page
+until Jacob approves the swap. Run `npm ci` in `web/` once, then the whole
+suite with `python3 -m unittest discover -s tests -f` (Python, required Node
+tests in `tests/js`, the `web/` typecheck, unit tests, react-app checks and
+build, architecture contracts, and the repo-owned backend-layout suite). After
+UI changes, use the existing `browser_clean` MCP driver with isolated fixtures
+from `tests/browser/fixture.py` and the behaviors in `tests/browser/ui-test.mjs`
+(old page) or `tests/browser/next-ui.mjs` (`web/`; browser_clean reads files
+only under this checkout). The page's design rules are `docs/design.md`. Use separate fixture homes,
 tmux sockets and loopback ports. For refactor comparisons, keep fixture timestamps
 and path lengths equivalent, compute DOM/style hashes inside the page, and return
 only hashes and bounded diagnostics to the driver. Use bounded action timeouts
@@ -74,7 +79,12 @@ Sharing the socket would let its supervisor close the real windows.
 | `llm_switchboard/listen.py` | Where `serve` listens (localhost + Tailscale, bound once Tailscale is up) and which peers it answers |
 | `llm_switchboard/web.py` | HTTP API and static page; `make_app` wires both session sources |
 | `llm_switchboard/next_page.py` | The rebuilt page (`web/`, built into `web/dist`) at `/next/`: path to file and cache headers |
-| `web/` | The rebuilt page: Vite, React, TypeScript, Mantine; design rules in `docs/design.md` |
+| `web/` | The rebuilt page: Vite, React, TypeScript, Mantine; design rules in `docs/design.md`; `npm run build` writes `web/dist` (not tracked), which the service serves at `/next/` |
+| `web/src/api/` | The page's JSON calls (`client.ts`) and the types generated from the server's OpenAPI schema (`schema.d.ts` from `web/openapi.json`, `npm run gen:api`) |
+| `web/src/actions/` | Action flows (every POST with its confirms, forms, toasts and undo) behind the `ActionUi` seam in `ui.ts`; no DOM |
+| `web/src/search/`, `sessions/`, `folders/`, `hosts/`, `settings/`, `format/` | Pure helpers ported from `static/`: query syntax, sort, selection, badges, bulk partitioning, folder choices and saved selection, Mac locks, settings fields, text formatting |
+| `web/src/pages/PickerPage.tsx`, `pages/picker/` | The one page (wiring only) and its sections and hooks: polling, filters, selection, keyboard, dialogs and toasts |
+| `web/vite.config.ts` | Dev server on 127.0.0.1:5173 proxying `/api` to `SWITCHBOARD_API` (default the Pi's 8777 through an SSH tunnel), read-only unless `SWITCHBOARD_WRITES=1` |
 | `llm_switchboard/cli.py` | argparse entry point |
 | `llm_switchboard/static/index.html`, `app.css` | The picker's markup and styles |
 | `llm_switchboard/static/app.js` | Picker state, polling and event wiring (ES module, no build step) |
