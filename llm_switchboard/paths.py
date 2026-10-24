@@ -30,6 +30,7 @@ CODEX_SOCKET = _codex_socket()
 
 STATE_DIR = Path(os.environ.get("XDG_CONFIG_HOME") or HOME / ".config") / "llm-switchboard"
 STORE_FILE = STATE_DIR / "sessions.json"
+SETTINGS_FILE = STATE_DIR / "settings.json"
 # Codex sessions deleted here are archived in Codex; this remembers which ones,
 # so they show under "Recently deleted" and are deleted for good after 30 days.
 CODEX_TRASH_FILE = STATE_DIR / "codex-trash.json"

@@ -10,6 +10,9 @@ import threading
 import urllib.error
 import urllib.request
 
+from . import settings
+from .launcher import codex_resume_command
+from .settings_cli import add_parsers as add_settings_parsers
 from .catalog import session_rows, sort_rows
 from .connectivity import Connectivity
 from .host_cli import add_parsers
@@ -84,6 +87,7 @@ def _parser() -> argparse.ArgumentParser:
     s.set_defaults(func=_fork)
 
     add_search_parsers(sub)
+    add_settings_parsers(sub)
 
     s = sub.add_parser("stop-all", help="kill the tmux server and every session in it")
     s.set_defaults(func=_stop_all)
@@ -195,7 +199,7 @@ def _new(args) -> int:
         result = _post(args.port, "/api/sessions/new",
                        {"tool": "codex", "cwd": folder, "name": args.name, "prompt": args.codex})
         print(f"Started Codex session {result['id']} ({result['title']}); it's working on your message. "
-              f"Open it with: cd {folder} && codexp resume {result['id']}")
+              f"Open it with: {codex_resume_command(result['id'], folder, settings.load())}")
         return 0
     result = _post(args.port, "/api/sessions/new", {"cwd": folder, "name": args.name})
     print(f"Starting {result['id']} ({result['title']}); `llm-switchboard status` shows when it's ready.")
@@ -239,7 +243,7 @@ def _rows(port: int) -> list[dict]:
             return json.load(resp)["sessions"]
     except (urllib.error.URLError, OSError):
         print("(service not reachable; showing sessions without supervisor state)", file=sys.stderr)
-        return sort_rows(session_rows(TranscriptIndex().all(), Store().load(), live_processes(), {}))
+        return sort_rows(session_rows(TranscriptIndex().all(), Store().load(), live_processes(), {}, settings.load()))
 
 
 def _post(port: int, path: str, body: dict | None = None) -> dict:

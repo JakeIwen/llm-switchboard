@@ -6,6 +6,8 @@ import re
 import time
 from urllib.parse import parse_qs, urlsplit
 
+from . import settings
+from .launcher import resume_for_tool
 from .search_index import SearchTimeout, TranscriptSearch
 from .search_query import QueryError, SearchQuery, parse_query
 from .search_records import SearchResult
@@ -15,8 +17,9 @@ _SEARCH_DETAIL = re.compile(r"^/api/search/(claude|codex)/([0-9a-f-]+)$")
 
 
 class SearchHandlers:
-    def __init__(self, index_file: Path):
+    def __init__(self, index_file: Path, settings_provider=settings.load):
         self.index = TranscriptSearch(index_file)
+        self.settings_provider = settings_provider
 
     def status(self) -> dict:
         return {"index": self.index.status()}
@@ -27,6 +30,9 @@ class SearchHandlers:
             local = self.index.search(query, limit=limit)
         except SearchTimeout as exc:
             raise QueryError(str(exc)) from exc
+        current = self.settings_provider()
+        for row in local:
+            self._resume_command(row, current)
         remote = remote_title_matches(query, session_rows)
         results = sorted([*local, *remote], key=lambda row: row.get("matched_at") or row.get("mtime") or 0,
                          reverse=True)[:limit]
@@ -38,7 +44,14 @@ class SearchHandlers:
             detail = self.index.detail(query, tool, session_id)
         except SearchTimeout as exc:
             raise QueryError(str(exc)) from exc
+        if detail:
+            self._resume_command(detail["result"], self.settings_provider())
         return {"query": raw_query, "detail": detail, "index": self.index.status()} if detail else None
+
+    @staticmethod
+    def _resume_command(row: dict, current: settings.Settings) -> None:
+        # Index metadata outlives install settings; resolve commands at response time.
+        row["resume_cmd"] = resume_for_tool(row["tool"], row["id"], row["cwd"], current)
 
 
 def route_search_get(raw_path: str, handlers: SearchHandlers, session_rows) -> tuple[dict, HTTPStatus] | None:

@@ -14,6 +14,7 @@ import re
 import socket
 import time
 
+from . import settings
 from .catalog import codex_rows, session_rows, sort_rows
 from .codex_actions import CodexActions
 from .codex_client import CodexClient, CodexError, CodexUnavailable
@@ -51,7 +52,7 @@ _STATIC_TYPES = {"js": "text/javascript; charset=utf-8", "css": "text/css; chars
 class App:
     def __init__(self, store: Store, index: TranscriptIndex, supervisor: Supervisor, tmux: Tmux, trash: Trash,
                  registry=live_processes, actions: SessionActions | None = None, codex: CodexActions | None = None,
-                 hosts: Hosts | None = None, search: SearchHandlers | None = None):
+                 hosts: Hosts | None = None, search: SearchHandlers | None = None, settings_file: Path | None = None):
         self.store = store
         self.index = index
         self.supervisor = supervisor
@@ -61,12 +62,20 @@ class App:
         self.actions = actions or SessionActions(store, index, supervisor, tmux, trash, registry=registry)
         # Codex sessions, when Codex support is on (codex_actions.py).
         self.codex = codex
-        self.search = search or SearchHandlers(SEARCH_INDEX_FILE)
+        self.settings_file = settings_file
+        self.search = search or SearchHandlers(SEARCH_INDEX_FILE, lambda: settings.load(self.settings_file))
         # Other machines' pushed sessions (hosts.py); None leaves them out.
         self.hosts = hosts
 
-    def remote(self) -> dict:
-        return self.hosts.snapshot() if self.hosts else {"hosts": [], "sessions": [], "trash": [], "actions": []}
+    def settings_payload(self, partial: dict | None = None) -> dict:
+        current = (settings.load(self.settings_file) if partial is None
+                   else settings.save(partial, self.settings_file))
+        return {"settings": current, "defaults": settings.defaults()}
+
+    def remote(self, current: settings.Settings | None = None) -> dict:
+        if not self.hosts:
+            return {"hosts": [], "sessions": [], "trash": [], "actions": []}
+        return self.hosts.snapshot(current or settings.load(self.settings_file))
 
     def queue_remote(self, host: str, sid: str, action: str, body: dict) -> dict:
         if not self.hosts:
@@ -77,16 +86,17 @@ class App:
         return self.codex.catalog.threads() if self.codex else []
 
     def list_sessions(self) -> dict:
-        rows = session_rows(self.index.all(), self.store.load(), self.registry(), self.supervisor.snapshot())
+        current = settings.load(self.settings_file)
+        rows = session_rows(self.index.all(), self.store.load(), self.registry(), self.supervisor.snapshot(), current)
         codex = {"enabled": self.codex is not None, "error": ""}
         if self.codex:
-            rows += codex_rows(self.codex.catalog.threads())
+            rows += codex_rows(self.codex.catalog.threads(), current)
             codex["error"] = self.codex.catalog.error
-        remote = self.remote()
+        remote = self.remote(current)
         rows += remote["sessions"]
         return {"host": socket.gethostname(), "now": time.time(), "sessions": sort_rows(rows),
                 "notifications": self.supervisor.notifier.enabled, "codex": codex,
-                "hosts": remote["hosts"], "host_actions": remote["actions"]}
+                "hosts": remote["hosts"], "host_actions": remote["actions"], "settings": current}
 
     def list_folders(self) -> dict:
         return {"folders": [
@@ -174,7 +184,7 @@ class App:
 
 def make_app(store: Store, index: TranscriptIndex, supervisor: Supervisor, tmux: Tmux, trash: Trash,
              codex_socket: Path | None, registry=live_processes, codex_trash: CodexTrash | None = None,
-             folders=new_session_folders, hosts: Hosts | None = None) -> App:
+             folders=new_session_folders, hosts: Hosts | None = None, settings_file: Path | None = None) -> App:
     """The App with both session sources wired up, sharing one name check.
     codex_socket None leaves Codex out; hosts None leaves other machines out."""
     names = Names(claude_names(index, store))
@@ -186,7 +196,8 @@ def make_app(store: Store, index: TranscriptIndex, supervisor: Supervisor, tmux:
     threads = (lambda: codex.catalog.threads()) if codex else (lambda: [])
     actions = SessionActions(store, index, supervisor, tmux, trash, registry=registry, names=names,
                              folders=lambda transcripts: folders(transcripts, codex=threads()))
-    return App(store, index, supervisor, tmux, trash, registry=registry, actions=actions, codex=codex, hosts=hosts)
+    return App(store, index, supervisor, tmux, trash, registry=registry, actions=actions, codex=codex, hosts=hosts,
+               settings_file=settings_file)
 
 
 def make_handler(app: App):
@@ -202,6 +213,8 @@ def make_handler(app: App):
             static = _STATIC_RE.match(self.path)
             if static and (STATIC_DIR / static.group(1)).is_file():
                 return self._send_file(STATIC_DIR / static.group(1), _STATIC_TYPES[static.group(2)])
+            if self.path == "/api/settings":
+                return self._send_json(app.settings_payload())
             if self.path == "/api/sessions":
                 return self._send_json(app.list_sessions())
             if self.path == "/api/trash":
@@ -220,6 +233,10 @@ def make_handler(app: App):
             self._send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
 
         def do_POST(self):
+            if self.path == "/api/settings":
+                if not self._is_json():
+                    return self._send_json({"error": "send application/json"}, HTTPStatus.UNSUPPORTED_MEDIA_TYPE)
+                return self._guarded(app.settings_payload, "settings")
             remote = action_route(self.path)
             if remote:
                 if not self._is_json():

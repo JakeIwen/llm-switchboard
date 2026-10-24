@@ -6,7 +6,7 @@ import sys
 _LIGHT_COMMANDS = {
     "host-exchange": "host_cli", "host-authorize": "host_cli",
     "host-agent": "host_cli", "host-install": "host_cli",
-    "search": "search_cli", "index": "search_cli",
+    "search": "search_cli", "index": "search_cli", "settings": "settings_cli",
 }
 
 module = _LIGHT_COMMANDS.get(sys.argv[1] if len(sys.argv) > 1 else "")
@@ -14,6 +14,8 @@ if module == "host_cli":
     from .host_cli import main
 elif module == "search_cli":
     from .search_cli import main
+elif module == "settings_cli":
+    from .settings_cli import main
 else:
     from .cli import main
 
