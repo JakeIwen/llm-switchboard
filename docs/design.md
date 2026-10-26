@@ -39,13 +39,15 @@ the first screen, the last one may take two taps.
   *Why: on a phone the thumb reaches the top of a sticky bar faster than it
   scrolls back up.*
 - **One search box, two scopes, both named.** Typing filters the session list
-  live (titles, first prompts, folders, ids). A reserved line under the box
-  offers "Search inside transcripts for '…'" (Enter does the same); while the
-  box is empty that line says so as a hint, so rows never jump while typing.
+  live (titles, first prompts, folders, ids). A reserved line under the
+  filter row offers "Search inside transcripts for '…'" (Enter does the same);
+  while the box is empty that line holds the session count, so rows never jump
+  while typing.
   Choosing it is a mode switch: the filter row gives way to a scope line
   (Transcripts, how many sessions matched, the index state, Back), and hits
   render as ordinary rows with their match count and excerpt, so a hit can be
-  opened or kept directly. *Why: Jacob asked that each search say what it searches and that
+  opened or kept directly. Their checkboxes have no selection bar in this
+  mode; bulk actions belong to the Sessions list. *Why: Jacob asked that each search say what it searches and that
   the box get room; a scope toggle beside the box took both away. This is the
   "search suggestions" pattern: the second scope is offered where the eye
   already is.*
@@ -53,7 +55,8 @@ the first screen, the last one may take two taps.
   headless runs in one menu), Places, Sort, and Reset at the end. Each shows its current value
   and is accent-tinted when not the default; Reset is always there, dimmed
   when everything is at its default, so clearing never needs a menu open and
-  nothing moves. *Why: Jacob asked for a clear-all that works without opening
+  nothing moves. Reset clears Show and Places; the search text and Sort stay
+  (Jacob, 2026-10-26). *Why: Jacob asked for a clear-all that works without opening
   the dropdown, and disliked Clear jumping around; controls that move make the
   thumb miss.* Short choices open a menu under the button on every screen;
   only Places opens a bottom sheet on a phone.
@@ -73,8 +76,8 @@ the first screen, the last one may take two taps.
 
 ## Session rows
 
-- A row shows, in this order of weight: the title (up to two lines; the
-  expanded row shows it whole), then one meta line (machine and tool tags as
+- A row shows, in this order of weight: the title (up to two lines, also
+  when expanded), then one meta line (machine and tool tags as
   a pair, the folder tinted by machine, last activity, size) that ends with at
   most two state pills: the state, then memory on kept rows; otherwise
   Working or Open in a terminal. Sentence case, never shouting capitals.
@@ -86,7 +89,8 @@ the first screen, the last one may take two taps.
 - The keep-running switch sits at the right of rows that can be kept (Pi
   Claude sessions). Kept rows get an accent edge so the group reads as one.
 - No delete button on the collapsed row: Delete is in the expanded row and in
-  the selection bar, always with Undo. *Judgment call: a × on every row is
+  the selection bar, with Undo, except a delete queued for the Mac, which
+  runs there later and has none. *Judgment call: a × on every row is
   clutter and the easiest wrong tap on a phone; deleting is rarer than
   opening.*
 - The expanded row puts the actions first, then facts (folder, ids, Remote
@@ -161,9 +165,9 @@ the first screen, the last one may take two taps.
 
 ## Other views
 
-- **New session**: a form with tool, folder (autocomplete over allowed
+- **New session**: a form with tool, folder (a select over allowed
   folders), name, and a first message for Codex; a toast when it is ready.
-- **Settings**: a sheet with Appearance (System, Light or Dark; this device
+- **Settings**: a dialog with Appearance (System, Light or Dark; this device
   only, kept in the browser) above the resume commands, folder listing rules
   and poll interval, which are saved to the server.
 - **Headless runs** (`claude -p`, `codex exec`, and Codex threads another app
