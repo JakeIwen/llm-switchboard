@@ -145,7 +145,7 @@ export function SessionDetails({ row, actions }: { row: SessionRow; actions: Row
         <Guarded reason={blocked} onClick={() => actions.rename(row)}>
           Rename…
         </Guarded>
-        {piClaude && <Button onClick={() => actions.remoteControlName(row)}>Remote Control name…</Button>}
+        {piClaude && <Button onClick={() => actions.remoteControlName(row)}>RC Name…</Button>}
         {codex ? (
           <Guarded reason={lock} onClick={() => actions.fork(row)}>
             {remote ? 'Fork on the Mac…' : 'Fork…'}

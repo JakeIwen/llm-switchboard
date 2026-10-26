@@ -86,7 +86,7 @@ the first screen, the last one may take two taps.
   opening.*
 - The expanded row puts the actions first, then facts (folder, ids, Remote
   Control name, state detail), with Delete last and set apart. Rename, Move,
-  Fork and Remote Control name open small forms (prefilled; folders from an
+  Fork and RC Name (the Remote Control name) open small forms (prefilled; folders from an
   autocomplete over known folders) instead of four always-open text fields.
   Move keeps the split button Jacob asked for: a drop-down arrow beside it
   offers Fork.
