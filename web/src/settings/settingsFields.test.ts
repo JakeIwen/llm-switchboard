@@ -57,18 +57,3 @@ test("inclusive limits and permitted shell-word characters remain accepted", () 
   ]) assert.equal(settingsProblem({ ...values, ...update }), "");
   for (const seconds of [NaN, Infinity, 2.5, -1, true, null]) assert.equal(pollIntervalMs({ poll_seconds: seconds }), 4000);
 });
-
-test("validation, conversion and polling match the old page", async () => {
-  const url = new URL('../../../llm_switchboard/static/settings.js', import.meta.url).href;
-  const legacy = await import(url);
-  const values = settingsValues(defaults);
-  for (const update of [{}, { claude_command: "bad command" }, { "folders.hidden": "~/a\n" },
-    { "folders.hidden": "~/a,~,~/a" }, { "folders.depth": "006" }, { poll_seconds: "2.5" }]) {
-    const input = { ...values, ...update };
-    assert.equal(settingsProblem(input), legacy.settingsProblem(input));
-    assert.deepEqual(settingsUpdate(input), legacy.settingsUpdate(input));
-  }
-  for (const poll_seconds of [undefined, null, 0, 2, 60, 61, "2", NaN]) {
-    assert.equal(pollIntervalMs({ poll_seconds }), legacy.pollIntervalMs({ poll_seconds }));
-  }
-});

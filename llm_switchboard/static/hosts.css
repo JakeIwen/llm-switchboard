@@ -1,4 +1,0 @@
-.card.host-offline { color: var(--muted); background: var(--surface-2); }
-.card.host-offline .title { opacity: .65; }
-.host-actions { margin: 8px 0; padding: 8px 12px; border: 1px solid var(--border); border-radius: 10px; font-size: 13px; overflow-wrap: anywhere; }
-.host-actions:empty { display: none; }

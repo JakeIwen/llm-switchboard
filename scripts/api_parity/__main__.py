@@ -61,7 +61,7 @@ def run(repo, workspace, report):
             server.start()
         codex = json.loads((homes[0] / "codex-seed.json").read_text())[0]["tid"]
         variables = [{"home": str(home), "codex": codex} for home in homes]
-        exercise(get_cases(repo, sid, trashed) + post_cases(sid, trashed), servers, comparison, variables)
+        exercise(get_cases(sid) + post_cases(sid, trashed), servers, comparison, variables)
         for server in servers:
             server.stop_codex()
         unavailable = [Case("Codex unavailable GET", "/api/sessions/{codex}/messages", status=503),

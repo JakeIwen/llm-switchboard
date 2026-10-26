@@ -1,7 +1,6 @@
 """Route × case inventory for the old/new HTTP oracle."""
 
 from dataclasses import dataclass
-from pathlib import Path
 
 from .fixtures import MISSING, REMOTE_IDS
 
@@ -18,9 +17,8 @@ class Case:
     save: str = ""
 
 
-def get_cases(repo: Path, sid, trash_sid):
-    cases = [Case("page", "/"), Case("index alias", "/index.html"),
-             Case("double-slash prefix", "//api/settings"),
+def get_cases(sid):
+    cases = [Case("double-slash prefix", "//api/settings"),
              Case("sessions with Mac metadata", "/api/sessions"), Case("folders", "/api/folders"),
              Case("local and Mac trash", "/api/trash"), Case("settings", "/api/settings"),
              Case("Claude messages", f"/api/sessions/{sid}/messages"),
@@ -40,10 +38,8 @@ def get_cases(repo: Path, sid, trash_sid):
              Case("missing search detail", f"/api/search/claude/{MISSING}?q=prompt", status=404),
              Case("malformed detail", "/api/search/claude/nope?q=prompt", status=404),
              Case("wrong tool", f"/api/search/nope/{sid}?q=prompt", status=404)]
-    cases += [Case("static " + path.name, "/static/" + path.name)
-              for path in sorted((repo / "llm_switchboard/static").iterdir()) if path.suffix in (".js", ".css")]
+    # The root picker and its assets intentionally differ from the old server.
     cases += [Case("not found " + path, path, status=404) for path in (
-        "/missing", "/static/nope.js", "/static/../web.py", "/static/%2e%2e/web.py", "/static/index.html",
         "/api/settings?x=1", "/api/sessions/", "/api/sessions/nope/explode", "/api/%73ettings",
         "/api/hosts/mac/sessions/" + sid + "/messages")]
     return cases

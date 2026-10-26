@@ -136,19 +136,3 @@ test("matching rows outside the catalogue are ignored and prefix matching keeps 
   assert.ok(!listed("~/dev", 3, { hidden: ["~"] }));
   assert.ok(listed("~/dev/private", 3, { hidden: ["~/dev/"] }));
 });
-
-test("folder choices match the old module for counts, missing paths and settings", async () => {
-  const url = new URL('../../../llm_switchboard/static/dirs.js', import.meta.url).href;
-  const legacy = await import(url);
-  const sessions = [...sessionsIn("~/dev/project", 3), ...sessionsIn("~/DEV/Project", 2),
-    ...sessionsIn("~/dev/project/deep", 1), ...sessionsIn(undefined, 3, "mac"),
-    ...sessionsIn("~/dev/project", 2, "mac")];
-  const selected = ["mac:(unknown folder)", "~/dev/project/deep", "abc:~/gone", "Invalid:~/gone"];
-  for (const options of [{}, { depth: 3, minSessions: 1 }, { depth: 0 }, { hidden: ["~/dev/"] }]) {
-    const { choices, total } = folderChoices(sessions, selected, options, sessions.slice(1, 5));
-    const old = legacy.folderChoices(sessions, selected, options, sessions.slice(1, 5));
-    // The new page drops folders with no matching session unless picked (Jacob, 2026-10-26).
-    const kept = old.choices.filter((c: { key: string; count: number }) => c.count > 0 || selected.includes(c.key));
-    assert.deepEqual({ choices, total }, { choices: kept, total: old.total });
-  }
-});

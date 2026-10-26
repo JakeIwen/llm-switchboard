@@ -9,9 +9,9 @@ stay standard-library only and must not import the HTTP stack
 (Vite, React, TypeScript, Mantine) is served at `/`; former `/next/` URLs
 permanently redirect to the same root path, preserving the query string.
 Run `npm ci` in `web/` once, then the whole
-suite with `.venv/bin/python -m unittest discover -s tests -f` (Python, required Node
-tests in `tests/js`, the `web/` typecheck, unit tests, react-app checks and
-build, architecture contracts, and the repo-owned backend-layout suite). After
+suite with `.venv/bin/python -m unittest discover -s tests -f` (Python, the
+`web/` typecheck, unit tests, Node-based react-app checks and build,
+architecture contracts, and the repo-owned backend-layout suite). After
 UI changes, use the existing `browser_clean` MCP driver with isolated fixtures
 from `tests/browser/fixture.py` and the behaviors in `tests/browser/next-ui.mjs`
 (at `/`; also checks the `/next/` redirect; browser_clean reads files
@@ -102,32 +102,15 @@ Sharing the socket would let its supervisor close the real windows.
 | `web/` | The picker: Vite, React, TypeScript, Mantine; design rules in `docs/design.md`; `npm run build` writes `web/dist` (not tracked), which the service serves at `/` |
 | `web/src/api/` | The page's JSON calls (`client.ts`) and the types generated from the server's OpenAPI schema (`schema.d.ts` from `web/openapi.json`, `npm run gen:api`) |
 | `web/src/actions/` | Action flows (every POST with its confirms, forms, toasts and undo) behind the `ActionUi` seam in `ui.ts`; no DOM |
-| `web/src/search/`, `sessions/`, `folders/`, `hosts/`, `settings/`, `format/` | Pure helpers ported from `static/`: query syntax, sort, selection, badges, bulk partitioning, folder choices and saved selection, Mac locks, settings fields, text formatting |
+| `web/src/search/`, `sessions/`, `folders/`, `hosts/`, `settings/`, `format/` | Pure helpers: query syntax, sort, selection, badges, bulk partitioning, folder choices and saved selection, Mac locks, settings fields, text formatting |
 | `web/src/pages/PickerPage.tsx`, `pages/picker/` | The one page (wiring only) and its sections and hooks: polling, filters, selection, keyboard, dialogs and toasts |
 | `web/vite.config.ts` | Dev server on 127.0.0.1:5173 proxying `/api` to `SWITCHBOARD_API` (default the Pi's 8777 through an SSH tunnel), read-only unless `SWITCHBOARD_WRITES=1` |
 | `llm_switchboard/cli.py` | argparse entry point |
-| `llm_switchboard/static/index.html`, `app.css` | The picker's markup and styles |
-| `llm_switchboard/static/app.js` | Picker state, polling and event wiring (ES module, no build step) |
-| `llm_switchboard/static/session-cards.js` | Session-card badges and row markup; state labels mirror `Supervisor.State` |
-| `llm_switchboard/static/session-actions.js` | Sequential bulk execution/progress and blocked-session partitioning |
-| `llm_switchboard/static/api.js` | The page's JSON calls to the server (`api`) |
-| `llm_switchboard/static/format.js` | Text formatting for the page: `esc`, `age`, `size`, `plural`, `nowS` |
-| `llm_switchboard/static/feedback.js` | Toasts, dialog bodies listing sessions, the clipboard |
-| `llm_switchboard/static/search.js` | The Sessions filter syntax (`-neg`, `"phrase"`, `dir:`, `is:`, `age:`) and compatible-query translation into Transcripts |
-| `llm_switchboard/static/toolbar.css` | Responsive search-scope / search / sort row and the status / tool / folder row |
-| `llm_switchboard/static/dirs.js` | Stable folder choices from unfiltered eligibility (`listed` options: depth, minSessions, hidden); counts and total after other filters; per-machine keys and path tints |
-| `llm_switchboard/static/folder-filter.js`, `folder-filter.css` | Persisted folder multiselect, searchable machine groups, removable chips, and mobile bottom sheet |
-| `llm_switchboard/static/sort.js` | List orders (`SORTS`, `sortRows`): kept first, activity, name, folder, size |
-| `llm_switchboard/static/selection.js` | Multi-select: click, cmd/shift ranges, keyboard cursor |
-| `llm_switchboard/static/fulltext.js` | The Transcripts search mode: results, context, index status |
-| `llm_switchboard/static/hosts.js`, `hosts.css` | Other machines' rows: badge, panel, locks, action routes and status |
-| `llm_switchboard/static/settings.js` | Install settings dialog, field validation, and poll-interval fallback; mirrors the keys in `settings.py` |
-| `llm_switchboard/static/dialog.js` | Modal confirm/prompt/form (text, select, checkbox fields; `validate`; Enter confirms, Esc cancels) |
 | `tests/fake_codex.py` | In-memory Codex daemon for the unit and browser tests |
 | `systemd/`, `install.sh` | User unit template and installer |
 | `scripts/setup-mac.sh` | Mac setup: key, `host-authorize` over SSH, one push, launchd job |
 | `scripts/check_layout.py`, `scripts/backend_layout/` | Repo-owned read-only layout checker; `.codeshape/config.json` declares its scope |
-| `tests/test_settings.py`, `tests/js/settings.test.mjs` | Settings persistence, CLI, manual-launch isolation, and page field/polling contracts |
+| `tests/test_settings.py`, `web/src/settings/settingsFields.test.ts` | Settings persistence, CLI, manual-launch isolation, and page field/polling contracts |
 | `tests/test_architecture.py` | Enforced pure-owner imports, Mac/Pi separation, rendered systemd and launchd targets, checkout wrapper |
 
 ## Contracts

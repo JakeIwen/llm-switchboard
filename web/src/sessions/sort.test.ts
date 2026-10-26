@@ -49,11 +49,3 @@ test("ties retain server order, absent activity is zero, and rows retain identit
   assert.deepEqual(sortRows([], "kept"), []);
   assert.equal(ids("constructor"), "bdca");
 });
-
-test("every order matches the live page's pure module", async () => {
-  const url = new URL('../../../llm_switchboard/static/sort.js', import.meta.url).href;
-  const legacy = await import(url);
-  for (const key of [...SORTS.map((sort) => sort.key), undefined, 'no-such-sort', '__proto__']) {
-    assert.deepEqual(sortRows(rows, key), legacy.sortRows(rows, key));
-  }
-});

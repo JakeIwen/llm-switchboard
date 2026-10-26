@@ -1,5 +1,4 @@
-/* Every color in the app is a token here, and only here. The values are the
-   old page's palette (llm_switchboard/static/app.css), kept on purpose.
+/* Every color in the app is a token here, and only here.
    Mantine sets data-mantine-color-scheme on <html>; dark overrides follow it. */
 :root {
   color-scheme: light;

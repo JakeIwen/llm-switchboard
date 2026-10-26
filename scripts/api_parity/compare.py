@@ -56,7 +56,7 @@ class Comparison:
     def report(self, servers):
         failures = [row for row in self.results if not row["matched"]]
         lines = ["# HTTP parity", "", f"{len(self.results) - len(failures)}/{len(self.results)} cases matched.", "",
-                 "Status, Content-Type, Cache-Control, JSON field order/types and bodies are compared. Static files are byte-hashed.",
+                 "Status, Content-Type, Cache-Control, JSON field order/types and API bodies are compared; the retired page and its static assets are excluded.",
                  "Only times, generated UUIDs/short ids, and equivalent fixture HOME prefixes are normalized.",
                  "Both use the real supervisor/indexer/tmux with an offline connectivity probe; no model process can start.",
                  "LLM_SWITCHBOARD_STRICT_RESPONSES=1 makes any new-server schema mismatch fatal during this comparison.", "",

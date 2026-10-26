@@ -76,29 +76,5 @@ describe('identity and blocked reasons', () => {
     expect(sessionBlockedReason({ ...base, host: 'mac', host_online: false, open_elsewhere })).toBe('Mac is offline; wait for its next push.')
     expect(sessionBlockedReason({ ...base, host: 'mac', host_online: true, mutable: true, state: 'closed' })).toBe('')
   })
-  it('matches the old card badge data across all supervisor and optional branches', async () => {
-    const url = new URL('../../../llm_switchboard/static/session-cards.js', import.meta.url).href
-    const legacy = await import(url)
-    const selection = { has: () => false, cursor: null }
-    const cards = legacy.createSessionCards(selection, new Set(), new Map(), new Map(), (row: SessionRow) => row.project, () => null)
-    const rows: BadgeRow[] = [base, { ...base, enabled: true }, { ...base, new: true },
-      { ...base, host: 'mac', host_online: true }, { ...base, host: 'mac', host_online: false, last_seen: 100 },
-      { ...base, tool: 'codex', codex_state: 'active' }]
-    for (const state of Object.keys(STATE) as SessionStatus['state'][]) {
-      for (const enabled of [true, false]) {
-        rows.push({ ...base, enabled, status: status({ state, busy: true, rss_kb: 2048 }),
-          open_elsewhere: [{ pid: 42, status: 'idle' }] })
-      }
-    }
-    for (const row of rows) {
-      const fullRow = { id: 'a', title: 'Alpha', short_id: 'a', cwd: '/work/project', project: '~/project',
-        mtime: 0, size: 12, rc_name: '', ...row }
-      const html: string = cards.render(fullRow)
-      const expected = [...html.matchAll(/<span class="badge b-([a-z]+)">([^<]*)<\/span>/g)]
-        // The new page says "MB RAM" so memory isn't read as the transcript's size.
-        .map((match) => ({ tone: match[1], label: match[2].replace(/^(\d+) MB$/, '$1 MB RAM') }))
-      expect(badges(row)).toEqual(expected)
-      expect(sessionBlockedReason(row)).toBe(legacy.sessionBlockedReason(row))
-    }
-  })
+
 })

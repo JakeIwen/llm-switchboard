@@ -90,23 +90,3 @@ test("empty order, boundary stepping, clear and select-all retain anchor contrac
   assert.equal(sel.anchor, null);
   assert.equal(sel.cursor, null);
 });
-
-test("state transitions match the old page after every operation", async () => {
-  const url = new URL('../../../llm_switchboard/static/selection.js', import.meta.url).href;
-  const legacy = await import(url);
-  const actual = new Selection(), previous = new legacy.Selection();
-  const operations = [
-    (s: Selection) => s.only("b"), (s: Selection) => s.only("b"),
-    (s: Selection) => s.toggle("e"), (s: Selection) => s.extendTo(order, "b", true),
-    (s: Selection) => s.extendTo(order, "d"), (s: Selection) => s.moveCursor("missing"),
-    (s: Selection) => s.extendTo(order, "a"), (s: Selection) => s.selectAll(order),
-    (s: Selection) => s.prune(["b", "e"]), (s: Selection) => s.clear(),
-  ];
-  for (const operation of operations) {
-    operation(actual); operation(previous);
-    assert.deepEqual([...actual.ids], [...previous.ids]);
-    assert.equal(actual.anchor, previous.anchor);
-    assert.equal(actual.cursor, previous.cursor);
-    for (const delta of [-10, -1, 0, 1, 10]) assert.equal(actual.step(order, delta), previous.step(order, delta));
-  }
-});

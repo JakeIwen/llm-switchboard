@@ -136,24 +136,6 @@ test("errors are non-filtering and empty quotes and half-typed prefixes retain l
   assert.throws(() => compileQuery('is:__proto__').test(S({}), NOW), TypeError);
 });
 
-test("all query results and bridges match the old page on a branch-covering matrix", async () => {
-  const url = new URL('../../../llm_switchboard/static/search.js', import.meta.url).href;
-  const legacy = await import(url);
-  const inputs = [...sessions, S({ first_prompt: 'https://host', rc_name: 'Remote', mtime: null }),
-    S({ enabled: true, status: { state: 'attention' } }),
-    S({ tool: 'codex', codex_state: 'active' }), S({ open_elsewhere: [{ status: 'busy' }] })];
-  const queries = ['', '-', '""', 'dir:', '-dir:', 'is:', 'is:constructor', 'https://host', 'title:remote',
-    'unique -nope', 'age:<=1m', 'age:>=1m', 'age:<1m', 'age:>1w', 'age:soon',
-    ...IS_VALUES.map((value) => `is:${value}`), 'state:attention', 'is:nope',
-    'CAN is:claude -IS:"CODEX" title:"two words"', 'constructor:foo', 'in:obd'];
-  for (const query of queries) {
-    const actual = compileQuery(query), previous = legacy.compileQuery(query);
-    assert.deepEqual(actual.errors, previous.errors, query);
-    assert.equal(actual.empty, previous.empty, query);
-    assert.deepEqual(transcriptQuery(query), legacy.transcriptQuery(query), query);
-    for (const row of inputs) assert.equal(actual.test(row, NOW), previous.test(row, NOW), query);
-  }
-});
 
 test("transcript index status retains every fulltext status branch", () => {
   assert.equal(transcriptIndexStatus(null, NOW), 'Transcript index: checking…');
