@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from .codex_client import CodexClient
-from .codex_threads import CodexCatalog, CodexState, is_exec_source, is_subagent_meta
+from .codex_threads import CodexCatalog, CodexState, is_headless_thread, is_subagent_meta
 from .host_protocol import MAX_ROWS, SessionState, row, session_id
 from .mac_registry import mac_live_processes
 from .paths import CODEX_DIR, CODEX_SOCKET
@@ -65,7 +65,7 @@ def codex_disk_rows(root: Path) -> list[dict]:
             stat = path.stat()
             candidate = dict(id=sid, tool="codex", title=titles.get(sid, "(untitled)"), cwd=meta.get("cwd"),
                              mtime=stat.st_mtime, size=stat.st_size, state=SessionState.CLOSED, mutable=False,
-                             headless=is_exec_source(meta.get("source")))
+                             headless=is_headless_thread(meta.get("source"), meta.get("originator")))
             found[sid] = row(candidate)
         except (OSError, ValueError, TypeError, AttributeError):
             continue

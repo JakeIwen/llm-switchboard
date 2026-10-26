@@ -167,7 +167,8 @@ the first screen, the last one may take two taps.
 - **Settings**: a sheet with Appearance (System, Light or Dark; this device
   only, kept in the browser) above the resume commands, folder listing rules
   and poll interval, which are saved to the server.
-- **Headless runs** (`claude -p`, `codex exec`: transcripts nobody typed in)
+- **Headless runs** (`claude -p`, `codex exec`, and Codex threads another app
+  opened through Codex's API, judged by originator: transcripts nobody typed in)
   are hidden unless Show's "Headless runs" is checked; a kept one always
   shows. *Why: script and agent probes filled the list with "(untitled)" rows
   in scratchpad folders.*

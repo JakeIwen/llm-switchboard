@@ -97,7 +97,7 @@ export function FilterBar(p: Props) {
             <>
               <Menu.Divider />
               <Tooltip
-                label="Runs started by a script or agent (claude -p, codex exec), which nobody typed in"
+                label="Runs nobody typed in: started by a script, an agent or another app (claude -p, codex exec, apps on Codex's API)"
                 position="left"
                 multiline
                 w={220}

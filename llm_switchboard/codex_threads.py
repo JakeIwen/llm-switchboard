@@ -37,7 +37,7 @@ class CodexThread:
     mtime: float | None
     size: int | None
     state: str
-    # Started by `codex exec`: nobody ever typed in it.
+    # Started by `codex exec` or another app on Codex's API: nobody typed in it.
     headless: bool = False
 
     @property
@@ -50,9 +50,16 @@ def is_subagent_meta(meta: dict) -> bool:
     return isinstance(meta.get("source"), dict) and "subagent" in meta["source"]
 
 
-def is_exec_source(source) -> bool:
-    """Whether a thread's source (thread/list, or a rollout's session_meta) is `codex exec`."""
-    return source == "exec"
+# Front ends a person types into. The switchboard counts: its New form takes
+# the first message. Any other originator is an app driving Codex's API.
+INTERACTIVE_ORIGINATORS = frozenset({"codex-tui", "codex_cli_rs", "codex_vscode", "Codex Desktop", "llm-switchboard"})
+
+
+def is_headless_thread(source, originator) -> bool:
+    """Whether nobody typed in a thread (thread/list fields, or a rollout's
+    session_meta): `codex exec`, or another app on Codex's API. Threads from
+    before Codex recorded an originator are judged by source alone."""
+    return source == "exec" or (bool(originator) and originator not in INTERACTIVE_ORIGINATORS)
 
 
 def codex_short_id(thread_id: str) -> str:
@@ -83,7 +90,7 @@ def thread_from_api(t: dict, *, metadata_only: bool = False) -> CodexThread | No
         mtime=mtime or t.get("recencyAt") or t.get("updatedAt"),
         size=size,
         state=str((t.get("status") or {}).get("type") or CodexState.NOT_LOADED),
-        headless=is_exec_source(t.get("source")),
+        headless=is_headless_thread(t.get("source"), t.get("originator")),
     )
 
 

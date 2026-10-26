@@ -17,6 +17,7 @@ from llm_switchboard.host_exchange import exchange
 from llm_switchboard.host_launchd import job
 from llm_switchboard.host_protocol import MAX_METADATA_BYTES, MAX_ROWS
 from llm_switchboard.hosts import Hosts, host_display_path
+from llm_switchboard.codex_threads import thread_from_api
 from llm_switchboard.mac_catalog import MacCatalog, codex_disk_rows
 from llm_switchboard.mac_registry import mac_live_processes
 from llm_switchboard.transcripts import TranscriptIndex
@@ -134,12 +135,23 @@ class HostTests(unittest.TestCase):
         self.hosts.exchange("mac", {"version": 1, "rows": [sample()]})
         self.assertFalse(self.hosts.snapshot()["sessions"][0]["headless"])
 
-    def test_codex_exec_rollouts_are_headless(self):
+    def test_codex_threads_nobody_typed_in_are_headless(self):
+        cases = {
+            ("exec", "codex_exec"): True,
+            ("vscode", "a_job_search_app"): True,
+            ("vscode", "codex-tui"): False,
+            ("vscode", "llm-switchboard"): False,
+            ("cli", None): False,
+        }
         sessions = self.root / "sessions"
         sessions.mkdir()
-        (sessions / "rollout.jsonl").write_text(json.dumps(
-            {"type": "session_meta", "payload": {"id": SID, "cwd": "/Users/me/dev/a", "source": "exec"}}) + "\n")
-        self.assertTrue(codex_disk_rows(self.root)[0]["headless"])
+        for (source, originator), headless in cases.items():
+            with self.subTest(source=source, originator=originator):
+                meta = {"id": SID, "cwd": "/Users/me/dev/a", "source": source, "originator": originator}
+                (sessions / "rollout.jsonl").write_text(json.dumps({"type": "session_meta", "payload": meta}) + "\n")
+                self.assertEqual(codex_disk_rows(self.root)[0]["headless"], headless)
+                thread = thread_from_api({"id": SID, "cwd": "/Users/me/dev/a", "source": source, "originator": originator})
+                self.assertEqual(thread.headless, headless)
 
     def test_codex_fallback_is_metadata_only(self):
         sessions = self.root / "sessions"
