@@ -27,12 +27,13 @@ async (page) => {
   await page.waitForSelector('.session-row')
 
   await check('preview bookmarks redirect to the root and keep the query', async () => {
-    const response = await page.goto(new URL('/next/?bookmark=1', page.url()).href, { waitUntil: 'networkidle' })
+    // The MCP's code sandbox has no URL global, so origins are plain strings.
+    const origin = page.url().match(/^https?:\/\/[^/]+/)[0]
+    const response = await page.goto(`${origin}/next/?bookmark=1`, { waitUntil: 'networkidle' })
     const redirect = response.request().redirectedFrom()
     expect(redirect && (await redirect.response()).status() === 308, 'not a permanent redirect')
-    const destination = new URL(page.url())
-    expect(destination.pathname === '/' && destination.search === '?bookmark=1', `destination: ${destination}`)
-    await page.goto(new URL('/', page.url()).href, { waitUntil: 'networkidle' })
+    expect(page.url() === `${origin}/?bookmark=1`, `destination: ${page.url()}`)
+    await page.goto(`${origin}/`, { waitUntil: 'networkidle' })
     await page.waitForSelector('.session-row')
   })
 
