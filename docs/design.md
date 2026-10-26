@@ -139,7 +139,8 @@ the first screen, the last one may take two taps.
 
 - The old page's palette stays (Jacob: keep the color): warm paper
   background, orange accent, semantic green/blue/amber/red badges, teal for
-  this Pi's paths and violet for the Mac's. Light and dark follow the system.
+  this Pi's paths and violet for the Mac's. Light and dark follow the system
+  unless Settings' Appearance overrides it on that device.
 - Buttons are quiet: neutral by default; the one primary action in a place
   (New, Open in Claude) gets a tinted background, never a solid fill. *Why:
   Jacob has asked, in several projects, for buttons "a lot less loud".*
@@ -153,8 +154,9 @@ the first screen, the last one may take two taps.
 
 - **New session**: a form with tool, folder (autocomplete over allowed
   folders), name, and a first message for Codex; a toast when it is ready.
-- **Settings**: a sheet with the resume commands, folder listing rules and
-  poll interval, saved to the server.
+- **Settings**: a sheet with Appearance (System, Light or Dark; this device
+  only, kept in the browser) above the resume commands, folder listing rules
+  and poll interval, which are saved to the server.
 - **Headless runs** (`claude -p`, `codex exec`: transcripts nobody typed in)
   are hidden unless Show's "Headless runs" is checked; a kept one always
   shows. *Why: script and agent probes filled the list with "(untitled)" rows

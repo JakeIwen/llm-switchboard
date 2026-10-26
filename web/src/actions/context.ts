@@ -1,6 +1,7 @@
 import type { getJson, postJson } from '../api/client'
 import type { SessionRow } from '../api/sessionRow'
 import type { SessionsPayload } from '../api/sessionsPayload'
+import type { Appearance } from '../settings/appearance'
 import type { ActionUi } from './ui'
 
 /** The page supplies live snapshots, not a catalogue captured when a button rendered. */
@@ -19,6 +20,8 @@ export interface ActionContext {
   focus(id: string): void
   /** Expand, move the cursor and scroll to a row (the Details toast action). */
   reveal(id: string): void
+  /** Light or dark on this device only; 'auto' follows the system. */
+  appearance: { get(): Appearance; set(value: Appearance): void }
   /** Owned by the page; call checkClaudeReadiness after each successful catalogue refresh. */
   watching: Map<string, string>
 }

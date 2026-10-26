@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef } from 'react'
+import { useMantineColorScheme } from '@mantine/core'
 import type { ActionContext } from '../../actions/context'
 import { deleteSession, deleteSessions, restoreSessions } from '../../actions/deleteRestore'
 import { forkOntoPi, forkSession } from '../../actions/fork'
@@ -38,6 +39,9 @@ const scrollTo = (id: string) =>
 export function usePickerActions(deps: Deps) {
   const latest = useRef(deps)
   latest.current = deps
+  const scheme = useMantineColorScheme()
+  const schemeRef = useRef(scheme)
+  schemeRef.current = scheme
   const watching = useRef(new Map<string, string>())
 
   const ctx = useMemo<ActionContext>(
@@ -57,6 +61,10 @@ export function usePickerActions(deps: Deps) {
         scrollTo(id)
       },
       reveal: (id) => latest.current.reveal(id),
+      appearance: {
+        get: () => schemeRef.current.colorScheme,
+        set: (value) => schemeRef.current.setColorScheme(value),
+      },
       watching: watching.current,
     }),
     [deps.ui],

@@ -12,8 +12,9 @@ it('loads fresh settings and saves all FIELDS with numeric leaves, depth zero an
   state.answers.push({ claude_command: 'claudep', 'folders.depth': '0', 'folders.hidden': '', poll_seconds: '7' })
   await openSettings(ctx)
   expect(state.gets).toEqual(['/api/settings'])
-  expect(state.forms[0]).toMatchObject({ title: 'Settings', confirmLabel: 'Save', body: ['These settings apply to this install, in all browsers.'] })
-  expect(state.forms[0].fields.map(({ key, label }) => ({ key, label }))).toEqual(FIELDS.map(({ name, label }) => ({ key: name, label })))
+  expect(state.forms[0]).toMatchObject({ title: 'Settings', confirmLabel: 'Save', body: ['Appearance is for this device. The rest apply to this install, in all browsers.'] })
+  expect(state.forms[0].fields.map(({ key, label }) => ({ key, label }))).toEqual([
+    { key: 'appearance', label: 'Appearance' }, ...FIELDS.map(({ name, label }) => ({ key: name, label }))])
   expect(state.requests).toEqual([['/api/settings', { ...settings, claude_command: 'claudep', folders: { ...settings.folders, depth: 0 }, poll_seconds: 7 }]])
   expect(state.toasts).toEqual([{ message: 'Settings saved for this install.' }])
   expect(state.refreshes).toBe(1)
@@ -72,4 +73,22 @@ it('load failure is shown as returned and opens no stale form', async () => {
   expect(state.toasts).toEqual([{ message: "Couldn't load settings: Cannot read settings", tone: 'error' }])
   expect(state.forms).toEqual([])
   expect(state.requests).toEqual([])
+})
+
+it('appearance defaults to the system and applies to this device on save', async () => {
+  const { ctx, state } = actionHarness()
+  state.getResults.push({ settings })
+  state.answers.push({ appearance: 'dark' })
+  await openSettings(ctx)
+  expect(state.forms[0].fields[0]).toMatchObject({ kind: 'select', value: 'auto',
+    options: [{ value: 'auto', label: 'System' }, { value: 'light', label: 'Light' }, { value: 'dark', label: 'Dark' }] })
+  expect(state.appearance).toBe('dark')
+})
+
+it('cancelling leaves the appearance alone', async () => {
+  const { ctx, state } = actionHarness()
+  state.getResults.push({ settings })
+  state.answers.push(null)
+  await openSettings(ctx)
+  expect(state.appearance).toBe('auto')
 })

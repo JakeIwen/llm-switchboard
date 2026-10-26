@@ -1,4 +1,5 @@
 import type { SessionRow, SessionStatus } from '../api/sessionRow'
+import type { Appearance } from '../settings/appearance'
 import type { ActionContext } from './context'
 import type { ActionUi, ConfirmOptions, FieldValues, FormOptions, ToastOptions } from './ui'
 
@@ -25,7 +26,7 @@ export function actionHarness(initialRows: SessionRow[] = []) {
     postResults: [] as unknown[], getResults: [] as unknown[],
     events: [] as string[], delays: [] as number[], forgotten: [] as string[][],
     focused: [] as string[], revealed: [] as string[], folders: ['/work/project', '/work/other'],
-    refreshes: 0,
+    refreshes: 0, appearance: 'auto' as Appearance,
   }
   const ui: ActionUi = {
     confirm: async (options) => { state.confirmations.push(options); return state.confirms.shift() ?? false },
@@ -65,6 +66,7 @@ export function actionHarness(initialRows: SessionRow[] = []) {
     knownFolders: () => state.folders, forget: (ids) => { state.forgotten.push([...ids]) },
     focus: (id) => { state.focused.push(id); state.events.push(`focus ${id}`) },
     reveal: (id) => { state.revealed.push(id) }, watching: new Map(),
+    appearance: { get: () => state.appearance, set: (value) => { state.appearance = value } },
   }
   return { ctx, state }
 }
