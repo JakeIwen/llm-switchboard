@@ -100,6 +100,28 @@ def codex_names(path: Path) -> dict[str, str]:
     return names
 
 
+def codex_first_prompt(path: Path) -> str:
+    """Your first prompt in a Codex rollout, one line, or "" when it has none."""
+    import json
+
+    try:
+        lines = path.open("rb")
+    except OSError:
+        return ""
+    with lines:
+        for line in lines:
+            if not codex_line_may_matter(line):
+                continue
+            try:
+                record = json.loads(line)
+            except (ValueError, UnicodeDecodeError):
+                continue
+            for chunk in extract_codex_record(record).chunks:
+                if chunk.role == SearchRole.ME and chunk.text:
+                    return one_line(chunk.text)
+    return ""
+
+
 def parse_timestamp(value) -> float | None:
     if isinstance(value, (int, float)):
         return float(value)

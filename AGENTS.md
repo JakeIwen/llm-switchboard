@@ -83,7 +83,7 @@ Sharing the socket would let its supervisor close the real windows.
 | `llm_switchboard/mac_uploads.py` | Mac side: the one transcript export path (notification, log, 10/hour quota) |
 | `llm_switchboard/search_records.py` | Transcript search vocabulary (`SearchTool`, `SearchRole`, `IndexState`) and API record shapes |
 | `llm_switchboard/search_query.py` | Transcript search syntax; user terms become quoted, bound FTS5 parameters |
-| `llm_switchboard/search_extract.py` | What is indexed from Claude Code and Codex JSONL: your prompts and the visible replies |
+| `llm_switchboard/search_extract.py` | What is indexed from Claude Code and Codex JSONL: your prompts and the visible replies; a Codex rollout's first prompt (the Mac's title for an unnamed session when Codex is offline) |
 | `llm_switchboard/search_index.py` | The SQLite FTS5 schema, status, results grouped per session, context around a match |
 | `llm_switchboard/search_indexer.py` | Incremental indexing: offsets, rebuilds on shrink or new inode, removals, the bulk first build |
 | `llm_switchboard/search_process.py` | `serve`'s 30 s low-priority indexer child |

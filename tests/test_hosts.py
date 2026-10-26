@@ -170,6 +170,26 @@ class HostTests(unittest.TestCase):
         self.assertFalse(rows[0]["mutable"])
         self.assertNotIn("secret", json.dumps(rows))
 
+    def test_codex_fallback_titles_an_unnamed_session_by_its_first_prompt(self):
+        sessions = self.root / "sessions"
+        sessions.mkdir()
+        injected = {"type": "response_item", "payload": {"type": "message", "role": "user",
+                                                         "content": [{"type": "input_text", "text": "AGENTS.md says"}]}}
+        prompt = {"type": "event_msg", "payload": {"type": "user_message", "message": "why does\n'sudo blkid' hang?"}}
+        later = {"type": "event_msg", "payload": {"type": "user_message", "message": "second prompt"}}
+        rollout = sessions / "rollout.jsonl"
+        rollout.write_text(json.dumps({"type": "session_meta", "payload": {"id": SID, "cwd": "/Users/me/dev/a"}}) + "\n"
+                           + json.dumps(injected) + "\n")
+        cache = {}
+        self.assertEqual(codex_disk_rows(self.root, cache)[0]["title"], "(untitled)")
+        # The prompt arrives after the first push: a grown rollout is read again.
+        with rollout.open("a") as f:
+            f.write(json.dumps(prompt) + "\n" + json.dumps(later) + "\n")
+        self.assertEqual(codex_disk_rows(self.root, cache)[0]["title"], "why does 'sudo blkid' hang?")
+        # A name, when Codex has one, still wins.
+        (self.root / "session_index.jsonl").write_text(json.dumps({"id": SID, "thread_name": "Blkid hang"}) + "\n")
+        self.assertEqual(codex_disk_rows(self.root, cache)[0]["title"], "Blkid hang")
+
     def test_mac_liveness_and_no_process_launch(self):
         (self.root / "1.json").write_text(json.dumps({"pid": 1, "sessionId": SID, "status": "busy"}))
         kill = Mock()
