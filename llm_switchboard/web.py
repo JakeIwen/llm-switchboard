@@ -13,7 +13,7 @@ from fastapi import Body, FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException
 
-from . import next_page
+from . import page as picker_page
 from .host_actions_protocol import ActionKind
 from .host_web import action_route
 from .http.lifespan import service_lifespan
@@ -184,13 +184,13 @@ def _static_routes(app):
         return error_response("not found", 404)
     for path in ("/", "/index.html", "/static/{filename:path}"):
         app.add_api_route(path, page, methods=["GET"], response_class=Response, include_in_schema=False)
-    for path in (next_page.PREFIX.rstrip("/"), next_page.PREFIX + "{filename:path}"):
+    for path in (picker_page.PREFIX.rstrip("/"), picker_page.PREFIX + "{filename:path}"):
         app.add_api_route(path, _preview_page, methods=["GET"], response_class=Response, include_in_schema=False)
 
 
 def _preview_page(request: Request):
     raw_path = request.scope["raw_path"].decode("ascii")
-    page = next_page.resolve(raw_path)
+    page = picker_page.resolve(raw_path)
     if page is None:
         return error_response("not found", 404)
     return Response(page.body, status_code=page.status,

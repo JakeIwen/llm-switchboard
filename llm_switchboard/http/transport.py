@@ -10,7 +10,7 @@ from fastapi.routing import APIRoute
 from pydantic import TypeAdapter, ValidationError
 
 from ..host_web import action_route
-from ..next_page import PREFIX as PREVIEW_PREFIX
+from ..page import PREFIX as PREVIEW_PREFIX
 
 from ..codex_client import CodexError, CodexUnavailable
 from ..conflict import Conflict

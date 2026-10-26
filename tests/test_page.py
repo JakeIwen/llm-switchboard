@@ -8,7 +8,7 @@ import urllib.request
 from pathlib import Path
 from unittest import mock
 
-from llm_switchboard import next_page
+from llm_switchboard import page as picker_page
 from llm_switchboard.store import Store
 from llm_switchboard.supervisor import Supervisor
 from llm_switchboard.trash import Trash
@@ -33,7 +33,7 @@ class ResolveTest(unittest.TestCase):
         self.dist = build(Path(tmp.name))
 
     def resolve(self, path):
-        return next_page.resolve(path, self.dist)
+        return picker_page.resolve(path, self.dist)
 
     def test_other_paths_are_not_the_new_pages(self):
         for path in ("/", "/static/app.js", "/api/sessions", "/nextish"):
@@ -47,7 +47,7 @@ class ResolveTest(unittest.TestCase):
 
     def test_hashed_assets_are_cached_for_good_and_the_rest_not(self):
         asset = self.resolve("/next/assets/index-Ab12.js")
-        self.assertEqual((asset.status, asset.cache_control), (200, next_page.IMMUTABLE))
+        self.assertEqual((asset.status, asset.cache_control), (200, picker_page.IMMUTABLE))
         self.assertEqual(asset.content_type, "text/javascript; charset=utf-8")
         self.assertEqual(self.resolve("/next/theme.js").cache_control, "no-store")
 
@@ -64,7 +64,7 @@ class ResolveTest(unittest.TestCase):
         self.assertIn(b"<title>next</title>", self.resolve("/next/settings").body)
 
     def test_unbuilt_says_how_to_build(self):
-        page = next_page.resolve("/next/", self.dist.parent / "nowhere")
+        page = picker_page.resolve("/next/", self.dist.parent / "nowhere")
         self.assertEqual(page.status, 503)
         self.assertIn(b"npm run build", page.body)
 
@@ -84,9 +84,9 @@ class ServeTest(unittest.TestCase):
         self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)
         base = f"http://127.0.0.1:{server.server_address[1]}"
-        with mock.patch.object(next_page, "DIST_DIR", dist):
+        with mock.patch.object(picker_page, "DIST_DIR", dist):
             with urllib.request.urlopen(base + "/next/assets/index-Ab12.js") as resp:
-                self.assertEqual(resp.headers["Cache-Control"], next_page.IMMUTABLE)
+                self.assertEqual(resp.headers["Cache-Control"], picker_page.IMMUTABLE)
                 self.assertEqual(resp.read(), b"console.log(1)")
             with self.assertRaises(urllib.error.HTTPError) as missing:
                 urllib.request.urlopen(base + "/next/assets/missing.js")

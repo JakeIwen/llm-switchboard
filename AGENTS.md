@@ -97,7 +97,7 @@ Sharing the socket would let its supervisor close the real windows.
 | `llm_switchboard/http/lifespan.py` | Starts and stops the supervisor and the search-index child; leaves tmux running |
 | `scripts/api_parity/` | Old/new HTTP comparison on isolated fixtures (`python -m scripts.api_parity`) |
 | `pyproject.toml`, `uv.lock` | Locked HTTP and development dependencies under uv; system Python only |
-| `llm_switchboard/next_page.py` | The rebuilt page (`web/`, built into `web/dist`) at `/next/`: path to file and cache headers |
+| `llm_switchboard/page.py` | The rebuilt page (`web/`, built into `web/dist`) at `/next/`: path to file and cache headers |
 | `web/` | The rebuilt page: Vite, React, TypeScript, Mantine; design rules in `docs/design.md`; `npm run build` writes `web/dist` (not tracked), which the service serves at `/next/` |
 | `web/src/api/` | The page's JSON calls (`client.ts`) and the types generated from the server's OpenAPI schema (`schema.d.ts` from `web/openapi.json`, `npm run gen:api`) |
 | `web/src/actions/` | Action flows (every POST with its confirms, forms, toasts and undo) behind the `ActionUi` seam in `ui.ts`; no DOM |
