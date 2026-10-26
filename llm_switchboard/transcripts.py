@@ -78,21 +78,18 @@ def summarize(path: Path, *, metadata_only: bool = False) -> Transcript | None:
                 custom_title = str(_loads(line).get("customTitle") or custom_title)
             elif _AI_TITLE in line:
                 ai_title = str(_loads(line).get("aiTitle") or ai_title)
-            elif not metadata_only and _SUMMARY in line:
+            elif _SUMMARY in line:
                 summary = str(_loads(line).get("summary") or summary)
             elif BRIDGE_RECORD in line:
                 bridge_id = str(_loads(line).get("bridgeSessionId") or bridge_id)
             elif not first_prompt and _USER in line:
                 first_prompt = prompt_text(_loads(line))
-    if metadata_only:
-        # Prompts never leave a metadata-only read, but a transcript with none
-        # (slash commands only, or opened and quit) is skipped as it is in full mode.
-        title = custom_title or ai_title or ("(untitled)" if first_prompt else "")
-        first_prompt = summary = ""
-    else:
-        title = custom_title or ai_title or summary or first_prompt
+    title = custom_title or ai_title or summary or first_prompt
     if not title:
         return None
+    if metadata_only:
+        # Another machine gets the title, one line at most, never the prompt itself.
+        first_prompt = ""
     return Transcript(
         session_id=path.stem,
         path=path,
@@ -171,7 +168,9 @@ def age_label(mtime: float | None) -> str:
 
 
 def one_line(text: str) -> str:
-    text = " ".join(text.split())
+    # Control characters (escape codes pasted into a prompt) would also fail the
+    # host exchange's title check and drop the row.
+    text = " ".join("".join(c for c in text if c.isprintable() or c.isspace()).split())
     return text if len(text) <= _TITLE_LEN else text[: _TITLE_LEN - 1] + "…"
 
 

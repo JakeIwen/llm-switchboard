@@ -107,17 +107,24 @@ class HostTests(unittest.TestCase):
                 authorize("mac", bad, self.root)
         self.assertEqual(path.read_bytes(), first)
 
-    def test_metadata_does_not_fall_back_to_message(self):
+    def test_metadata_titles_an_unnamed_session_by_one_line_of_its_first_prompt(self):
         project = self.root / "projects" / "folder"
         project.mkdir(parents=True)
         path = project / f"{SID}.jsonl"
-        path.write_text(json.dumps({"type": "user", "cwd": "/Users/me/dev/a", "message": {"content": "secret"}}, separators=(",", ":")) + "\n")
+        prompt = "fix the lookup\n" + "x" * 130 + " secret-past-the-cut"
+        records = [{"type": "user", "cwd": "/Users/me/dev/a", "message": {"content": prompt}},
+                   {"type": "assistant", "message": {"content": [{"type": "text", "text": "secret-reply"}]}}]
+        path.write_text("".join(json.dumps(r, separators=(",", ":")) + "\n" for r in records))
         codex = Mock(error="offline")
         codex.threads.return_value = []
         rows = MacCatalog(TranscriptIndex(project.parent, metadata_only=True), codex, self.root, registry=lambda: []).rows()
-        self.assertEqual(rows[0]["title"], "(untitled)")
+        self.assertTrue(rows[0]["title"].startswith("fix the lookup xxx"), rows[0]["title"])
+        self.assertEqual(len(rows[0]["title"]), 120)
         self.assertNotIn("secret", json.dumps(rows))
         self.assertNotIn("first_prompt", rows[0])
+        # The title passes the exchange's own validation on the Pi.
+        self.hosts.exchange("mac", {"version": 1, "rows": rows})
+        self.assertEqual(self.hosts.snapshot()["sessions"][0]["title"], rows[0]["title"])
 
     def test_headless_flag_travels_from_the_mac_to_page_rows(self):
         project = self.root / "projects" / "folder"

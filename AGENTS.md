@@ -77,7 +77,7 @@ Sharing the socket would let its supervisor close the real windows.
 | `llm_switchboard/host_cli.py` | `host-exchange`, `host-authorize`, `host-agent`, `host-install` (light imports; `__main__` dispatches them before cli.py) |
 | `llm_switchboard/host_agent.py`, `host_transport.py` | Mac side: the 10 s push loop, and bounded `ssh` I/O |
 | `llm_switchboard/host_launchd.py` | Mac side: the launchd job (`dev.llm-switchboard.host-agent`) |
-| `llm_switchboard/mac_catalog.py`, `mac_registry.py` | Mac side: metadata-only rows (no prompts), macOS live-process check |
+| `llm_switchboard/mac_catalog.py`, `mac_registry.py` | Mac side: metadata-only rows (titles, no prompt fields), macOS live-process check |
 | `llm_switchboard/mac_actions.py`, `mac_action_runner.py` | Mac side: running allowed actions with its own checks; the durable ledger that never repeats one |
 | `llm_switchboard/mac_uploads.py` | Mac side: the one transcript export path (notification, log, 10/hour quota) |
 | `llm_switchboard/search_records.py` | Transcript search vocabulary (`SearchTool`, `SearchRole`, `IndexState`) and API record shapes |
@@ -205,7 +205,9 @@ the report instead of leaving it silently stale.
   by `supervisor.py`); the page's `STATE`
   table in `session-cards.js` mirrors them for labels.
 - Mac sessions: the Mac pushes; the Pi never connects to it. Rows from a
-  host carry metadata only (no prompts, messages or screens), and only the
+  host carry metadata only (no prompts, messages or screens; an unnamed
+  session's title is its first prompt cut to one line, Jacob's call on
+  2026-10-26), and only the
   actions in `ActionKind` can be queued; the Mac re-checks every one. Nothing
   queued may start a process or send a prompt there. A transcript leaves the
   Mac only through `fork-pi` (mac_uploads.py).

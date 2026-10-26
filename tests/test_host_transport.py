@@ -43,9 +43,10 @@ class MacCodexTests(unittest.TestCase):
             codex = CodexCatalog(CodexClient(root / "codex.sock"), metadata_only=True)
             catalog = MacCatalog(TranscriptIndex(root / "projects", metadata_only=True), codex, root / "codex", registry=lambda: [])
             rows = catalog.rows()
+            # A named thread's prompt stays on the Mac; an unnamed one is titled by it.
             self.assertNotIn("PRIVATE", json.dumps(rows))
-            self.assertNotIn("SECRET", json.dumps(rows))
-            self.assertEqual(next(r for r in rows if r["id"] == SID2)["title"], "(untitled)")
+            self.assertEqual(next(r for r in rows if r["id"] == SID2)["title"], "SECRET")
+            self.assertFalse(any("first_prompt" in r for r in rows))
             actions = MacActions(catalog, Trash(root / "trash"), CodexTrash(root / "codex-trash.json"))
             actions.execute(queued(tool="codex", body={"title": "Changed"}))
             result, upload = actions.execute(queued("fork", {"title": "Copy", "cwd": str(root)}, tool="codex"))

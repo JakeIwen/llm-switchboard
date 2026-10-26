@@ -81,12 +81,13 @@ def thread_from_api(t: dict, *, metadata_only: bool = False) -> CodexThread | No
             mtime, size = st.st_mtime, st.st_size
         except OSError:
             pass
-    preview = "" if metadata_only else one_line(str(t.get("preview") or ""))
+    preview = one_line(str(t.get("preview") or ""))
     return CodexThread(
         thread_id=t["id"],
         cwd=str(t.get("cwd") or ""),
         title=one_line(str(t.get("name") or "")) or preview or "(untitled)",
-        first_prompt=preview,
+        # Another machine gets the title (which may be the preview), never the prompt field.
+        first_prompt="" if metadata_only else preview,
         mtime=mtime or t.get("recencyAt") or t.get("updatedAt"),
         size=size,
         state=str((t.get("status") or {}).get("type") or CodexState.NOT_LOADED),

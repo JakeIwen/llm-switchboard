@@ -1,4 +1,5 @@
-"""Mac metadata sources. Prompt-derived fallback titles are deliberately omitted."""
+"""Mac metadata sources: titles (an unnamed session's first prompt, one line at
+most) but no prompt, message or screen fields."""
 
 import json
 from pathlib import Path
