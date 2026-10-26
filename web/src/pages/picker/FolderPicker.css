@@ -24,6 +24,17 @@
   color: var(--dev-host);
 }
 
+/* The machine's chip is its group's heading: the same color, in bold. */
+.folder-group-name .folder-machine-label {
+  color: inherit;
+  font-weight: 600;
+}
+
+.folder-group-heading {
+  margin: 0;
+  font: inherit;
+}
+
 /* Chips wrap to use the width instead of one folder per row. */
 .folder-chips {
   display: flex;

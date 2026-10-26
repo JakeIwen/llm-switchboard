@@ -1,6 +1,6 @@
 import { test } from "vitest";
 import assert from "node:assert/strict";
-import { deviceClass, dirKey, folderChoices, listed, UNKNOWN_DIR } from "./folderChoices";
+import { deviceClass, dirKey, folderChoices, listed, machineKey, UNKNOWN_DIR } from "./folderChoices";
 
 test("home and up to two levels below it are listed", () => {
   for (const p of ["~", "~/dev", "~/dev/llm-switchboard", "~/dev/llm-switchboard/", "~/aisle"]) {
@@ -98,21 +98,34 @@ test("folder eligibility accepts depth, minimum sessions and hidden-prefix setti
   assert.equal(folderChoices(sessions, [], { depth: 3, minSessions: 1, hidden: [] }).total, 3);
 });
 
-test("counts follow matching sessions but zero-count choices remain eligible", () => {
+test("counts follow matching sessions, and a folder with none is hidden unless picked", () => {
   const sessions = [...sessionsIn("~/dev/alpha", 4), ...sessionsIn("~/dev/beta", 3), ...sessionsIn("~/dev/scratch", 1)];
   const matching = sessions.filter((session) => session.tool === "codex" && session.project?.includes("alpha"));
   const filtered = folderChoices(sessions, [], {}, matching);
-  assert.deepEqual(filtered.choices.map(({ key, count }) => [key, count]), [["~/dev/alpha", 2], ["~/dev/beta", 0]]);
+  assert.deepEqual(filtered.choices.map(({ key, count }) => [key, count]), [["~/dev/alpha", 2]]);
   assert.equal(filtered.total, 2);
-  const empty = folderChoices(sessions, [], {}, []);
-  assert.deepEqual(empty.choices.map(({ key }) => key), filtered.choices.map(({ key }) => key));
-  assert.equal(empty.total, 0);
+  assert.deepEqual(folderChoices(sessions, [], {}, []).choices, []);
+  // A picked folder stays, so it can be unpicked.
+  assert.deepEqual(folderChoices(sessions, ["~/dev/beta"], {}, matching).choices.map(({ key, count }) => [key, count]),
+    [["~/dev/alpha", 2], ["~/dev/beta", 0]]);
+});
+
+test("each machine with matching sessions is a place of its own", () => {
+  const sessions = [...sessionsIn("~/dev/alpha", 3), ...sessionsIn("~/dev/alpha", 2, "mac"), ...sessionsIn("/tmp/x", 1, "mac")];
+  const places = (matching: typeof sessions, selected: string[] = []) =>
+    folderChoices(sessions, selected, {}, matching).machines.map(({ key, host, count }) => [key, host, count]);
+  assert.deepEqual(places(sessions), [["@", "", 3], ["@mac", "mac", 3]]);
+  const local = sessions.filter((session) => !session.host);
+  assert.deepEqual(places(local), [["@", "", 3]]);
+  assert.deepEqual(places(local, [machineKey("mac")]), [["@", "", 3], ["@mac", "mac", 0]]);
+  // A picked machine is not mistaken for a folder.
+  assert.deepEqual(folderChoices(sessions, ["@mac"], {}, local).choices.map(({ key }) => key), ["~/dev/alpha"]);
 });
 
 test("an empty catalogue has no default total and deduplicates retained selections", () => {
-  assert.deepEqual(folderChoices([]), { choices: [], total: 0 });
+  assert.deepEqual(folderChoices([]), { choices: [], machines: [], total: 0 });
   assert.deepEqual(folderChoices([], ["~/dev/gone", "~/dev/gone"]), {
-    choices: [{ key: "~/dev/gone", host: "", project: "~/dev/gone", count: 0, defaultListed: false }], total: 0,
+    choices: [{ key: "~/dev/gone", host: "", project: "~/dev/gone", count: 0, defaultListed: false }], machines: [], total: 0,
   });
 });
 
@@ -132,7 +145,10 @@ test("folder choices match the old module for counts, missing paths and settings
     ...sessionsIn("~/dev/project", 2, "mac")];
   const selected = ["mac:(unknown folder)", "~/dev/project/deep", "abc:~/gone", "Invalid:~/gone"];
   for (const options of [{}, { depth: 3, minSessions: 1 }, { depth: 0 }, { hidden: ["~/dev/"] }]) {
-    assert.deepEqual(folderChoices(sessions, selected, options, sessions.slice(1, 5)),
-      legacy.folderChoices(sessions, selected, options, sessions.slice(1, 5)));
+    const { choices, total } = folderChoices(sessions, selected, options, sessions.slice(1, 5));
+    const old = legacy.folderChoices(sessions, selected, options, sessions.slice(1, 5));
+    // The new page drops folders with no matching session unless picked (Jacob, 2026-10-26).
+    const kept = old.choices.filter((c: { key: string; count: number }) => c.count > 0 || selected.includes(c.key));
+    assert.deepEqual({ choices, total }, { choices: kept, total: old.total });
   }
 });

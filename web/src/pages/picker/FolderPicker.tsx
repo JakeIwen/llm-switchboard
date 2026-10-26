@@ -1,13 +1,14 @@
 import { useMemo, useState, type ReactElement } from 'react'
 import { Button, Chip, Drawer, Popover, TextInput } from '@mantine/core'
 import { useMediaQuery } from '@mantine/hooks'
-import type { FolderChoice } from '../../folders/folderChoices'
+import { isMachineKey, type FolderChoice, type MachineChoice } from '../../folders/folderChoices'
 import { groupChoices, visibleChoices } from '../../folders/folderSelection'
 import { plural } from '../../format/format'
 import './FolderPicker.css'
 
 interface Props {
   choices: FolderChoice[]
+  machines: MachineChoice[]
   selected: string[]
   hostLabel: string
   onChange: (keys: string[]) => void
@@ -16,20 +17,35 @@ interface Props {
 /** A folder's chip text: home-relative paths without the `~/` every one shares. */
 const chipText = (project: string) => (project.startsWith('~/') ? project.slice(2) : project)
 
-export function folderTriggerLabel(selected: string[], choices: FolderChoice[]): string {
-  if (selected.length === 0) return 'All folders'
-  if (selected.length > 1) return `${selected.length} folders`
-  return chipText(choices.find((c) => c.key === selected[0])?.project ?? selected[0])
+/** A place is a folder or a whole machine; machine keys are "@host". */
+const machineHost = (key: string) => key.slice(1)
+
+export function folderTriggerLabel(selected: string[], choices: FolderChoice[], hostLabel: string): string {
+  if (selected.length === 0) return 'All places'
+  if (selected.length > 1) return `${selected.length} places`
+  const [key] = selected
+  if (isMachineKey(key)) return machineHost(key) || hostLabel
+  return chipText(choices.find((c) => c.key === key)?.project ?? key)
 }
 
-/** The one picked folder's machine, for the trigger's tint; '' for this Pi. */
-export const pickedHost = (selected: string[], choices: FolderChoice[]): string | null =>
-  selected.length === 1 ? (choices.find((c) => c.key === selected[0])?.host ?? null) : null
+/** The one picked place's machine, for the trigger's tint; '' for this Pi. */
+export const pickedHost = (selected: string[], choices: FolderChoice[]): string | null => {
+  if (selected.length !== 1) return null
+  const [key] = selected
+  return isMachineKey(key) ? machineHost(key) : (choices.find((c) => c.key === key)?.host ?? null)
+}
 
-function FolderChips({ choices, selected, hostLabel, onChange, onDone }: Props & { onDone: () => void }) {
+function FolderChips({ choices, machines, selected, hostLabel, onChange, onDone }: Props & { onDone: () => void }) {
   const [find, setFind] = useState('')
   const visible = useMemo(() => visibleChoices(choices, find), [choices, find])
-  const groups = useMemo(() => [...groupChoices(visible)], [visible])
+  const groups = useMemo(() => {
+    const folders = groupChoices(visible)
+    const query = find.trim().toLocaleLowerCase()
+    const named = machines.filter((m) => folders.has(m.host) || (m.host || hostLabel).toLocaleLowerCase().includes(query))
+    // A picked folder can outlast its machine's place (no matches): keep its group.
+    const hosts = [...new Set([...named.map((m) => m.host), ...folders.keys()])]
+    return hosts.map((host) => ({ host, machine: machines.find((m) => m.host === host), folders: folders.get(host) ?? [] }))
+  }, [visible, machines, find, hostLabel])
   const invert = () => {
     const shown = new Set(visible.map((c) => c.key))
     const kept = selected.filter((k) => !shown.has(k))
@@ -39,16 +55,25 @@ function FolderChips({ choices, selected, hostLabel, onChange, onDone }: Props &
     <div className="folder-picker">
       <TextInput
         type="search"
-        placeholder="Find a folder or machine"
-        aria-label="Find a folder or machine"
+        placeholder="Find a place"
+        aria-label="Find a place"
         value={find}
         onChange={(e) => setFind(e.currentTarget.value)}
       />
       <div className="folder-scroll">
         <Chip.Group multiple value={selected} onChange={onChange}>
-          {groups.map(([host, folders]) => (
+          {groups.map(({ host, machine, folders }) => (
             <section key={host || 'local'} className="folder-group">
-              <h3 className={host ? 'folder-group-name is-host' : 'folder-group-name'}>{host || hostLabel}</h3>
+              <div className={host ? 'folder-group-name is-host' : 'folder-group-name'}>
+                {machine ? (
+                  <Chip value={machine.key} size="sm" variant="light" classNames={{ label: 'folder-machine-label' }} title={`Every session on ${host || hostLabel}`}>
+                    {host || hostLabel}
+                    <span className="folder-chip-count">{machine.count}</span>
+                  </Chip>
+                ) : (
+                  <h3 className="folder-group-heading">{host || hostLabel}</h3>
+                )}
+              </div>
               <div className="folder-chips">
                 {folders.map((f) => (
                   <Chip key={f.key} value={f.key} size="sm" variant="light" title={f.project}>
@@ -61,7 +86,7 @@ function FolderChips({ choices, selected, hostLabel, onChange, onDone }: Props &
             </section>
           ))}
         </Chip.Group>
-        {visible.length === 0 && <p className="folder-empty">No folders match your search.</p>}
+        {groups.length === 0 && <p className="folder-empty">No places match your search.</p>}
       </div>
       <div className="folder-foot">
         <Button disabled={selected.length === 0} onClick={() => onChange([])}>
@@ -71,7 +96,7 @@ function FolderChips({ choices, selected, hostLabel, onChange, onDone }: Props &
           Invert
         </Button>
         <span className="folder-foot-status">
-          {selected.length ? `${plural(selected.length, 'folder')} selected` : 'All folders shown'}
+          {selected.length ? `${plural(selected.length, 'place')} selected` : 'All places shown'}
         </span>
         <Button variant="light" onClick={onDone}>
           Done
@@ -81,7 +106,7 @@ function FolderChips({ choices, selected, hostLabel, onChange, onDone }: Props &
   )
 }
 
-/** The folder filter: a bottom sheet on a phone, a popover on a wider screen.
+/** The place filter (folders, and whole machines): a bottom sheet on a phone, a popover on a wider screen.
     The caller owns the trigger button and the open state. */
 export function FolderPicker({
   target,
@@ -100,10 +125,10 @@ export function FolderPicker({
           onClose={() => onOpenChange(false)}
           position="bottom"
           size="auto"
-          title="Folders"
+          title="Places"
           classNames={{ content: 'folder-sheet', body: 'folder-sheet-body' }}
           // Focus the close button, not the find box, so the phone keyboard stays down.
-          closeButtonProps={{ 'aria-label': 'Close folders', 'data-autofocus': true } as Record<string, unknown>}
+          closeButtonProps={{ 'aria-label': 'Close places', 'data-autofocus': true } as Record<string, unknown>}
         >
           {chips}
         </Drawer>

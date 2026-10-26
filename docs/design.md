@@ -50,19 +50,24 @@ the first screen, the last one may take two taps.
   "search suggestions" pattern: the second scope is offered where the eye
   already is.*
 - **Filters are one row of fixed-width buttons**: Show (status, tool and
-  headless runs in one menu), Folders, Sort, and Reset at the end. Each shows its current value
+  headless runs in one menu), Places, Sort, and Reset at the end. Each shows its current value
   and is accent-tinted when not the default; Reset is always there, dimmed
   when everything is at its default, so clearing never needs a menu open and
   nothing moves. *Why: Jacob asked for a clear-all that works without opening
   the dropdown, and disliked Clear jumping around; controls that move make the
   thumb miss.* Short choices open a menu under the button on every screen;
-  only Folders opens a bottom sheet on a phone.
-- **Folder picker**: chips that wrap, grouped by machine (this Pi, then the
-  Mac), labelled without the `~/` prefix, each with its count, a find box on
-  top and Clear / Invert / Done in a footer that stay fixed while the chips
+  only Places opens a bottom sheet on a phone.
+- **Place picker** ("All places"): a place is a folder or a whole machine.
+  Chips that wrap, grouped by machine (this Pi, then the Mac); each group's
+  heading is itself a chip that picks every session on that machine. Folder
+  chips are labelled without the `~/` prefix, each with its count, a find box
+  on top and Clear / Invert / Done in a footer that stay fixed while the chips
   scroll. On a phone it is a bottom sheet sized to its content. Which folders
-  are listed is a setting (`folders.depth`, `min_sessions`, `hidden`). *Why: a one-per-row checklist spent a row of
-  height on a few characters of text; chips use the width.*
+  are listed is a setting (`folders.depth`, `min_sessions`, `hidden`); a place
+  with no session passing the other filters is hidden unless picked.
+  *Why: a one-per-row checklist spent a row of height on a few characters of
+  text; chips use the width. Jacob asked for machines as places and for
+  empty folders to go (2026-10-26).*
 - **Selection actions in a bottom bar** that appears only while something is
   selected, within thumb reach on a phone.
 
@@ -112,8 +117,8 @@ the first screen, the last one may take two taps.
 - Blue marks a selection (checkbox, row tint, keyboard cursor); orange marks
   kept-running sessions. The two never share a meaning.
 - The old page's selected-folder chips under the toolbar are gone: the
-  Folders button names the one picked folder (home-relative, in its
-  machine's color) or the count, and Reset clears it in one tap.
+  Places button names the one picked place (a home-relative folder or a
+  machine, in its machine's color) or the count, and Reset clears it in one tap.
 - The old footer line explaining how kept sessions run is gone; the keep
   switch's tooltip says it.
 

@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Button, Menu, Tooltip } from '@mantine/core'
 import { IconArrowsSort, IconCheck, IconChevronDown, IconFolder } from '@tabler/icons-react'
 import { FolderPicker, folderTriggerLabel, pickedHost } from './FolderPicker'
-import type { FolderChoice } from '../../folders/folderChoices'
+import type { FolderChoice, MachineChoice } from '../../folders/folderChoices'
 import type { SortKey } from '../../sessions/sort'
 import { SORT_LABELS, SORT_SHORT, STATUS_LABELS, TOOL_LABELS, type StatusFilter, type ToolFilter } from './pickerModel'
 import './FilterBar.css'
@@ -13,6 +13,7 @@ interface Props {
   sort: SortKey
   folders: string[]
   folderChoices: FolderChoice[]
+  folderMachines: MachineChoice[]
   hostLabel: string
   showTool: boolean
   headless: boolean
@@ -68,7 +69,7 @@ export function FilterBar(p: Props) {
       aria-expanded={foldersOpen}
     >
       <span className={`filter-button-label${host === null ? '' : host ? ' is-host-path' : ' is-local-path'}`}>
-        {folderTriggerLabel(p.folders, p.folderChoices)}
+        {folderTriggerLabel(p.folders, p.folderChoices, p.hostLabel)}
       </span>
     </Button>
   )
@@ -118,6 +119,7 @@ export function FilterBar(p: Props) {
         opened={foldersOpen}
         onOpenChange={setFoldersOpen}
         choices={p.folderChoices}
+        machines={p.folderMachines}
         selected={p.folders}
         hostLabel={p.hostLabel}
         onChange={p.onFolders}
@@ -138,7 +140,7 @@ export function FilterBar(p: Props) {
           <MenuChoices title="Sort" labels={SORT_LABELS} value={p.sort} onChange={p.onSort} />
         </Menu.Dropdown>
       </Menu>
-      <Tooltip label="Back to the defaults: all sessions, tools and folders, headless runs hidden">
+      <Tooltip label="Back to the defaults: all sessions, tools and places, headless runs hidden">
         <Button className="filter-button filter-reset" variant="subtle" disabled={!anyActive} onClick={p.onReset}>
           Reset
         </Button>

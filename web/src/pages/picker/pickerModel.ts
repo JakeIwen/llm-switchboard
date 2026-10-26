@@ -1,5 +1,5 @@
 import type { SessionRow } from '../../api/sessionRow'
-import { dirKey } from '../../folders/folderChoices'
+import { dirKey, machineKey } from '../../folders/folderChoices'
 import { compileQuery } from '../../search/sessionQuery'
 import { SORTS, type SortKey } from '../../sessions/sort'
 
@@ -51,8 +51,9 @@ export function matchingRows(
   return { rows: rowsOut, errors: compiled.errors }
 }
 
+/** Rows in any picked place: a folder, or a whole machine. */
 export const inFolders = (rows: readonly SessionRow[], picked: ReadonlySet<string>) =>
-  picked.size ? rows.filter((row) => picked.has(dirKey(row.host, row.project))) : [...rows]
+  picked.size ? rows.filter((row) => picked.has(dirKey(row.host, row.project)) || picked.has(machineKey(row.host))) : [...rows]
 
 /** The tool filter applies when Codex is on here or any row (a Mac one, say) is Codex. */
 export const toolFilterApplies = (codexEnabled: boolean, rows: readonly SessionRow[]) =>

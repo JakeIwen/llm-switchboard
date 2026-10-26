@@ -158,5 +158,6 @@ export function usePickerFilters(data: SessionsPayload | null) {
     queryErrors: matching.errors,
     shown,
     choices: choices.choices,
+    machines: choices.machines,
   }
 }
