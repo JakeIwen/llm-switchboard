@@ -18,7 +18,7 @@ the first screen, the last one may take two taps.
    sessions sort first, and a problem shows as a colored state on the row
    without opening anything.
 2. **Find and open**: type a few letters of a title or folder, tap the row,
-   tap Open in Claude (or copy the resume command). When the title doesn't
+   tap Open in Claude (or, at a computer, copy the resume command). When the title doesn't
    ring a bell, search inside the transcripts from the same box.
 3. **Start a session** in a folder, from the header, in one short form.
 4. **Tidy**: rename, move, fork, keep or stop keeping, delete with undo,
@@ -98,6 +98,11 @@ the first screen, the last one may take two taps.
 | Mac Claude | Copy resume | rename, move / fork on the Mac, fork onto the Pi, delete (queued for the Mac) |
 | Mac Codex | Copy resume | rename, fork on the Mac, delete (queued; list-only without its daemon) |
 
+- The Resume and Attach command lines are hidden on touch-only devices
+  (`hover: none` and `pointer: coarse`), so "Copy resume" exists only at a
+  computer. *Why: they are shell commands for a Mac or Pi terminal; a phone
+  has nowhere to run them (Jacob, 2026-10-26). Input, not width, so a narrow
+  desktop window keeps them.*
 - A queued Mac action shows as a pill on its row (queued, delivered, done,
   failed with the Mac's reason) plus a toast with the result, instead of a box
   above the list.

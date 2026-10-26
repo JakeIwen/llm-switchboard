@@ -27,6 +27,15 @@
   color: var(--text);
 }
 
+/* Resume and Attach are shell commands for a Mac or Pi terminal. A touch-only
+   device (a phone, or an iPad without a trackpad) has nowhere to run them, so
+   they go by input, not width: a narrow desktop window keeps them. */
+@media (hover: none) and (pointer: coarse) {
+  .details-command {
+    display: none;
+  }
+}
+
 .details-messages {
   display: flex;
   flex-direction: column;
