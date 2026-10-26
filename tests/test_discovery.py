@@ -64,6 +64,14 @@ class TranscriptIndexTest(unittest.TestCase):
                 self.assertEqual(TranscriptIndex(path.parent.parent).get(SID).headless, headless)
                 path.unlink()
 
+    def test_metadata_only_skips_transcripts_with_no_prompt_and_never_returns_one(self):
+        index = TranscriptIndex(self.root, metadata_only=True)
+        write_jsonl(self.root / "p" / f"{SID}.jsonl", [user("<command-name>/effort</command-name>"), {"type": "system"}])
+        self.assertEqual(index.all(), [])
+        write_jsonl(self.root / "q" / f"{SID2}.jsonl", [user("a secret prompt")])
+        [t] = index.all()
+        self.assertEqual((t.title, t.first_prompt), ("(untitled)", ""))
+
     def test_empty_and_non_session_files_are_skipped(self):
         write_jsonl(self.root / "p" / f"{SID}.jsonl", [{"type": "file-history-snapshot"}])
         write_jsonl(self.root / "p" / "notes.jsonl", [user("hi")])

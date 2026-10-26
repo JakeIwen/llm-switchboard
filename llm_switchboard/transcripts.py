@@ -82,9 +82,15 @@ def summarize(path: Path, *, metadata_only: bool = False) -> Transcript | None:
                 summary = str(_loads(line).get("summary") or summary)
             elif BRIDGE_RECORD in line:
                 bridge_id = str(_loads(line).get("bridgeSessionId") or bridge_id)
-            elif not metadata_only and not first_prompt and _USER in line:
+            elif not first_prompt and _USER in line:
                 first_prompt = prompt_text(_loads(line))
-    title = custom_title or ai_title or ("(untitled)" if metadata_only else summary or first_prompt)
+    if metadata_only:
+        # Prompts never leave a metadata-only read, but a transcript with none
+        # (slash commands only, or opened and quit) is skipped as it is in full mode.
+        title = custom_title or ai_title or ("(untitled)" if first_prompt else "")
+        first_prompt = summary = ""
+    else:
+        title = custom_title or ai_title or summary or first_prompt
     if not title:
         return None
     return Transcript(
