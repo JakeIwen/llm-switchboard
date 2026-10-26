@@ -32,7 +32,11 @@ export async function deleteSessions(ctx: ActionContext, ids: readonly string[])
   if (trashable.length === targets.length) body.push(`${one ? 'It goes' : 'They go'} to Recently deleted for 30 days.`)
   else if (trashable.length) body.push(`${plural(trashable.length, 'session')} will go to Recently deleted for 30 days.`)
   if (trashable.length < targets.length) body.push('Sessions with no transcript are simply stopped and forgotten; there is nothing to restore.')
-  if (kept) body.push(one ? "It's kept running and will be stopped." : `${kept} kept running will be stopped.`)
+  if (kept) body.push(one
+    ? 'Keep running is on, so deleting also stops the running session. Undo restores it with Keep running off.'
+    : kept === 1
+      ? '1 has Keep running on, so deleting also stops it. Undo restores it with Keep running off.'
+      : `${kept} have Keep running on, so deleting also stops them. Undo restores them with Keep running off.`)
   if (busy) body.push(one ? "It's working on a turn right now." : `${busy} are working on a turn right now.`)
   if (blocked.length) body.push(`${plural(blocked.length, 'session')} open, offline or list-only will be skipped.`)
   if (!await ctx.ui.confirm({

@@ -10,7 +10,9 @@ it('confirms a kept/working local delete, forgets it after success, and Undo res
   state.postResults.push({ trashed: true })
   await deleteSession(ctx, row)
   expect(state.confirmations[0]).toEqual({ title: 'Delete “Session a”?', body: [
-    'It goes to Recently deleted for 30 days.', "It's kept running and will be stopped.", "It's working on a turn right now.",
+    'It goes to Recently deleted for 30 days.',
+    'Keep running is on, so deleting also stops the running session. Undo restores it with Keep running off.',
+    "It's working on a turn right now.",
   ], items: [], confirmLabel: 'Delete', danger: true })
   expect(state.requests).toEqual([['/api/sessions/a/delete', {}]])
   expect(state.forgotten).toEqual([['a']])
@@ -123,4 +125,17 @@ it('all failed delete has no success toast or Undo, and a locked restore sends n
   await restoreSessions(ctx, [mac('x', { mutable: false })])
   expect(state.requests).toEqual([['/api/sessions/a/delete', {}]])
   expect(state.toasts[0].message).toBe('Mac Codex is list-only until its app-server daemon is available.')
+})
+
+it('says how many of a selection have Keep running on', async () => {
+  for (const [keptIds, line] of [
+    [['a'], '1 has Keep running on, so deleting also stops it. Undo restores it with Keep running off.'],
+    [['a', 'b'], '2 have Keep running on, so deleting also stops them. Undo restores them with Keep running off.'],
+  ] as const) {
+    const rows = ['a', 'b', 'c'].map((id) => session(id, { enabled: (keptIds as readonly string[]).includes(id) }))
+    const { ctx, state } = actionHarness(rows)
+    state.confirms.push(false)
+    await deleteSessions(ctx, ['a', 'b', 'c'])
+    expect(state.confirmations[0].body).toContain(line)
+  }
 })
