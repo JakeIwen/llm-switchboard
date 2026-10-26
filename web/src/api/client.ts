@@ -1,5 +1,5 @@
-// The page's JSON calls. The API lives at the server root whatever path the
-// page is served from (/next/ now, / after the swap).
+// The page's JSON calls. The API stays at the server root even when
+// SWITCHBOARD_BASE mounts a development build elsewhere.
 
 export class ApiError extends Error {
   readonly status: number

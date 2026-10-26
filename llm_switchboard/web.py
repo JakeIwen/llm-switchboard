@@ -6,8 +6,6 @@ submit an action without a preflight, which this application never approves.
 
 import json
 import os
-from pathlib import Path
-import re
 
 from fastapi import Body, FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
@@ -25,9 +23,6 @@ from .search_api import route_search_get
 # Permanent public imports for CLI and existing callers.
 from .web_app import App, make_app
 
-STATIC_DIR = Path(__file__).resolve().parent / "static"
-_STATIC_RE = re.compile(r"^/static/([a-z][a-z0-9-]*\.(js|css))$")
-_STATIC_TYPES = {"js": "text/javascript; charset=utf-8", "css": "text/css; charset=utf-8"}
 LOCAL_ACTIONS = {
     "enable": (bodies.ActionBody, schemas.ToggleResponse),
     "disable": (bodies.ActionBody, schemas.ToggleResponse),
@@ -62,7 +57,7 @@ def create_http_app(domain: App | None = None, *, manage_lifecycle=False,
     app.add_exception_handler(HTTPException, lambda request, exc: error_response("not found", 404))
     _read_routes(app)
     _write_routes(app)
-    _static_routes(app)
+    _page_routes(app)
     return app
 
 
@@ -173,32 +168,20 @@ def _remote_endpoint(kind, body_model):
     return write
 
 
-def _static_routes(app):
-    def page(request: Request):
-        path = request.url.path
-        if path in ("/", "/index.html"):
-            return _file(STATIC_DIR / "index.html", "text/html; charset=utf-8")
-        match = _STATIC_RE.fullmatch(path)
-        if match and (STATIC_DIR / match[1]).is_file():
-            return _file(STATIC_DIR / match[1], _STATIC_TYPES[match[2]])
-        return error_response("not found", 404)
-    for path in ("/", "/index.html", "/static/{filename:path}"):
-        app.add_api_route(path, page, methods=["GET"], response_class=Response, include_in_schema=False)
-    for path in (picker_page.PREFIX.rstrip("/"), picker_page.PREFIX + "{filename:path}"):
-        app.add_api_route(path, _preview_page, methods=["GET"], response_class=Response, include_in_schema=False)
+def _page_routes(app):
+    for path in ("/", "/{filename:path}"):
+        app.add_api_route(path, _page_response, methods=["GET"], response_class=Response, include_in_schema=False)
 
 
-def _preview_page(request: Request):
+def _page_response(request: Request):
     raw_path = request.scope["raw_path"].decode("ascii")
+    if request.url.query:
+        raw_path += "?" + request.url.query
     page = picker_page.resolve(raw_path)
     if page is None:
         return error_response("not found", 404)
     return Response(page.body, status_code=page.status,
                     headers={"Content-Type": page.content_type, "Cache-Control": page.cache_control, **page.headers})
-
-
-def _file(path, content_type):
-    return Response(path.read_bytes(), headers={"Content-Type": content_type, "Cache-Control": "no-store"})
 
 
 def make_server(app: App, host: str, port: int, *, strict_responses: bool | None = None):

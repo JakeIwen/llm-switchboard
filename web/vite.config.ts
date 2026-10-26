@@ -1,8 +1,8 @@
 import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 
-// The page is served at /next/ beside the old one until the swap.
-const base = process.env.SWITCHBOARD_BASE ?? '/next/'
+// SWITCHBOARD_BASE can override the root when building for another mount.
+const base = process.env.SWITCHBOARD_BASE ?? '/'
 // The API the dev server forwards to: by default the Pi's service through
 // `ssh -N -L 8777:127.0.0.1:8777 <pi>`, or a fixture instance.
 const apiTarget = process.env.SWITCHBOARD_API ?? 'http://127.0.0.1:8777'

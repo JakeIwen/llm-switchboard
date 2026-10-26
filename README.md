@@ -6,7 +6,7 @@ ones, one at a time or in bulk. It also keeps chosen Claude Code sessions
 running in tmux with Remote Control on, so they can always be reached from
 the Claude app or claude.ai/code.
 
-![Session picker populated with sample Claude Code and Codex sessions](docs/images/session-picker.png)
+![The picker on a phone](docs/screenshot.png)
 
 The screenshot uses generated sample sessions; it contains no transcript or
 account data.
@@ -35,6 +35,11 @@ with any change in behaviour, see AGENTS.md.
 - Enabled sessions are stored in `~/.config/llm-switchboard/sessions.json`.
 
 ## Picker
+
+The picker is a React and Mantine app served at `/` from `web/dist`. Build it
+with `npm ci && npm run build` in `web/` before starting the service. Former
+`/next/` bookmarks permanently redirect to the matching root URL, keeping the
+query string.
 
 Toggle a session to keep it running. Folder chips filter the list. Expand a
 session (▾) for:
@@ -273,10 +278,11 @@ Ids can be any unique prefix; Codex sessions also go by the short id `list` show
 
 The HTTP backend runs on FastAPI, Pydantic v2 and Uvicorn under uv. The shared
 domain modules, the Mac host agent, the SSH commands, `search`/`index` and the
-`settings` CLI stay standard-library only. A rebuilt page
-(React and Mantine, in `web/`) is served at `/next/` beside the current one
-while it is tried out; `npm ci && npm run build` in `web/` builds it, and
-`npm run dev` there serves it against the Pi read-only. Its design rules are
+`settings` CLI stay standard-library only. The picker (React and Mantine, in
+`web/`) is served at `/`; `npm ci && npm run build` in `web/` builds it, and
+`npm run dev` there serves it against the Pi read-only. Vite defaults to the
+root base path; `SWITCHBOARD_BASE` overrides it for another mount. The service
+returns a plain 503 with build instructions if `web/dist` is missing. Its design rules are
 in [docs/design.md](docs/design.md). The package is
 shared by Pi and Mac; [AGENTS.md](AGENTS.md) lists module owners and supported
 launch paths. Pure naming and supervisor-state contracts are separate from
@@ -297,6 +303,6 @@ baseline; focused architecture tests enforce the documented boundaries today.
 See [organization and verification notes](docs/backend-organization.md).
 
 UI changes additionally require the existing `browser_clean` MCP driver, using
-`tests/browser/fixture.py` and the behaviors in `tests/browser/ui-test.mjs`,
+`tests/browser/fixture.py` and the behaviors in `tests/browser/next-ui.mjs` at `/`,
 with isolated homes, sockets and ports as described in [AGENTS.md](AGENTS.md).
 That browser gate is separate from the safe automated suite.

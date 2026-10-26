@@ -1,11 +1,12 @@
-"""Fake HOME for the browser test: ten Claude sessions across three folders, plus an
-empty folder, and two Codex threads for the fake Codex daemon (codex-seed.json)."""
+"""Fake HOME for the browser test: ten interactive Claude sessions, one headless
+run across three folders, an empty folder, and two fake Codex threads."""
 import json, sys, re, uuid, os, time, shutil
 home = sys.argv[1]
 shutil.rmtree(home, ignore_errors=True)
+HEADLESS_TITLE = "Headless fixture probe"
 specs = [("dev/alpha", ["Alpha dashboard tweaks", "Alpha CAN decoder", "Fix alpha login bug", "Alpha telemetry export"]),
          ("dev/beta", ["Beta release notes", "Beta perf profiling", "Refactor beta parser"]),
-         ("scratch", ["Reply with just OK", "Scratch test of tmux", "Quick question about systemd"])]
+         ("scratch", ["Reply with just OK", "Scratch test of tmux", "Quick question about systemd", HEADLESS_TITLE])]
 t = time.time()
 for folder, titles in specs:
     cwd = f"{home}/{folder}"; os.makedirs(cwd, exist_ok=True)
@@ -15,6 +16,9 @@ for folder, titles in specs:
         rec = [{"type": "user", "cwd": cwd, "sessionId": sid, "message": {"role": "user", "content": f"prompt for {title}"}},
                {"type": "assistant", "cwd": cwd, "message": {"content": [{"type": "text", "text": f"reply about {title}"}]}},
                {"type": "ai-title", "aiTitle": title, "sessionId": sid}]
+        if title == HEADLESS_TITLE:
+            for record in rec:
+                record["entrypoint"] = "sdk-cli"
         p = f"{pdir}/{sid}.jsonl"
         open(p, "w").write("".join(json.dumps(r, separators=(",", ":")) + "\n" for r in rec))
         m = t - (len(titles) - i) * 3600 * (3 if folder == "scratch" else 1); os.utime(p, (m, m))

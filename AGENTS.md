@@ -5,15 +5,16 @@ dependencies locked by uv. The Mac host agent, the SSH commands
 (`host-exchange`, `host-authorize`), `search`/`index` and the `settings` CLI
 stay standard-library only and must not import the HTTP stack
 (`tests/test_http_imports.py`). Use the system Python only:
-`UV_PYTHON_PREFERENCE=only-system uv sync --frozen`. The rebuilt page in `web/`
-(Vite, React, TypeScript, Mantine) is served at `/next/` beside the old page
-until Jacob approves the swap. Run `npm ci` in `web/` once, then the whole
+`UV_PYTHON_PREFERENCE=only-system uv sync --frozen`. The picker in `web/`
+(Vite, React, TypeScript, Mantine) is served at `/`; former `/next/` URLs
+permanently redirect to the same root path, preserving the query string.
+Run `npm ci` in `web/` once, then the whole
 suite with `.venv/bin/python -m unittest discover -s tests -f` (Python, required Node
 tests in `tests/js`, the `web/` typecheck, unit tests, react-app checks and
 build, architecture contracts, and the repo-owned backend-layout suite). After
 UI changes, use the existing `browser_clean` MCP driver with isolated fixtures
-from `tests/browser/fixture.py` and the behaviors in `tests/browser/ui-test.mjs`
-(old page) or `tests/browser/next-ui.mjs` (`web/`; browser_clean reads files
+from `tests/browser/fixture.py` and the behaviors in `tests/browser/next-ui.mjs`
+(at `/`; also checks the `/next/` redirect; browser_clean reads files
 only under this checkout). The page's design rules are `docs/design.md`. Use separate fixture homes,
 tmux sockets and loopback ports. For refactor comparisons, keep fixture timestamps
 and path lengths equivalent, compute DOM/style hashes inside the page, and return
@@ -88,7 +89,7 @@ Sharing the socket would let its supervisor close the real windows.
 | `llm_switchboard/search_process.py` | `serve`'s 30 s low-priority indexer child |
 | `llm_switchboard/search_api.py`, `search_cli.py` | Search routes (plus Mac title/folder matches) and the `search` / `index` commands (light imports; `__main__` dispatches them before cli.py) |
 | `llm_switchboard/listen.py` | Where `serve` listens (localhost + Tailscale, bound once Tailscale is up) and which peers it answers |
-| `llm_switchboard/web.py` | FastAPI routes, the old page's static files, `/next/` and the deterministic OpenAPI export; keeps the `App` and `make_app` imports |
+| `llm_switchboard/web.py` | FastAPI routes, the root picker and former preview redirects, and the deterministic OpenAPI export; keeps the `App` and `make_app` imports |
 | `llm_switchboard/web_app.py` | HTTP-independent picker operations and the composition of local, Codex and Mac session sources |
 | `llm_switchboard/http/records.py` | Pydantic projections of the canonical stdlib records; never imported by light paths |
 | `llm_switchboard/http/requests.py`, `http/responses.py` | HTTP request and response schemas; the existing domain validators keep the rules |
@@ -97,8 +98,8 @@ Sharing the socket would let its supervisor close the real windows.
 | `llm_switchboard/http/lifespan.py` | Starts and stops the supervisor and the search-index child; leaves tmux running |
 | `scripts/api_parity/` | Old/new HTTP comparison on isolated fixtures (`python -m scripts.api_parity`) |
 | `pyproject.toml`, `uv.lock` | Locked HTTP and development dependencies under uv; system Python only |
-| `llm_switchboard/page.py` | The rebuilt page (`web/`, built into `web/dist`) at `/next/`: path to file and cache headers |
-| `web/` | The rebuilt page: Vite, React, TypeScript, Mantine; design rules in `docs/design.md`; `npm run build` writes `web/dist` (not tracked), which the service serves at `/next/` |
+| `llm_switchboard/page.py` | The root page (`web/`, built into `web/dist`): guarded file paths, cache headers, SPA fallback outside `/api/`, and `/next/` redirects |
+| `web/` | The picker: Vite, React, TypeScript, Mantine; design rules in `docs/design.md`; `npm run build` writes `web/dist` (not tracked), which the service serves at `/` |
 | `web/src/api/` | The page's JSON calls (`client.ts`) and the types generated from the server's OpenAPI schema (`schema.d.ts` from `web/openapi.json`, `npm run gen:api`) |
 | `web/src/actions/` | Action flows (every POST with its confirms, forms, toasts and undo) behind the `ActionUi` seam in `ui.ts`; no DOM |
 | `web/src/search/`, `sessions/`, `folders/`, `hosts/`, `settings/`, `format/` | Pure helpers ported from `static/`: query syntax, sort, selection, badges, bulk partitioning, folder choices and saved selection, Mac locks, settings fields, text formatting |
@@ -140,6 +141,8 @@ Sharing the socket would let its supervisor close the real windows.
 | `scripts/setup-mac.sh` | Mac operator setup | `llm_switchboard/host_cli.py`, `host_launchd.py` |
 | `scripts/check_layout.py` | Developer checks and unittest bridge | `scripts/backend_layout/cli.py` |
 | `python -m llm_switchboard openapi` | `web/` type generation (`npm run gen:api`) and the stale-types test | `llm_switchboard/cli.py`, `web.py` |
+| `/`, `/index.html`, `/assets/*`, `/theme.js` | Picker browsers; extensionless client routes also use the index | `llm_switchboard/page.py`, `web/dist` |
+| `/next`, `/next/*` | Former preview bookmarks; permanent redirects to the matching root URL | `llm_switchboard/page.py` |
 | `python -m scripts.api_parity` | Developer HTTP parity checks | `scripts/api_parity/__main__.py` |
 
 The package remains shared by Pi and Mac. Public cross-feature boundaries are
@@ -202,8 +205,8 @@ the report instead of leaving it silently stale.
 - Session names are unique per folder (case and spacing ignored); every path
   that sets or moves a name goes through `Names.refuse_duplicate` (names.py).
 - State names are the `State` enum in `supervisor_state.py` (also exported
-  by `supervisor.py`); the page's `STATE`
-  table in `session-cards.js` mirrors them for labels.
+  by `supervisor.py`); the page's `STATE` table in
+  `web/src/sessions/badges.ts` mirrors them for labels.
 - Mac sessions: the Mac pushes; the Pi never connects to it. Rows from a
   host carry metadata only (no prompts, messages or screens; an unnamed
   session's title is its first prompt cut to one line, Jacob's call on
@@ -232,8 +235,10 @@ the report instead of leaving it silently stale.
   (`STATE_DIR/settings.json`, normally `~/.config/llm-switchboard/settings.json`).
   These settings never change the supervisor's `claudepd` launch function. Search
   responses rebuild resume commands from current settings without reindexing.
-- The page polls at `poll_seconds` (4s by default); only rewrite DOM through `setHTML` (skips
-  unchanged markup) so clicks aren't lost to a redraw mid-click.
+- The page polls at `poll_seconds` (4s by default), paused while hidden.
+  `web/src/pages/picker/useSessions.ts` reuses unchanged row objects;
+  `SessionList.tsx` keys rows by session id so React preserves controls and
+  focus across polls rather than replacing the list's HTML.
 - Machine names (the Pi's SSH alias, the Mac's name, Tailscale names and
   addresses, LAN URLs) live only in the gitignored `local.env`, never in
   tracked files, so the repo can be public. Tests use generic names (`pi`, `mac`,

@@ -1,7 +1,7 @@
 // Behavior check for the rebuilt page (web/), run through the browser_clean MCP:
 //   browser_run_code_unsafe with filename = this file, after navigating the page
-//   to a fixture instance's /next/ (tests/browser/fixture.py data: ten Claude
-//   sessions in dev/alpha, dev/beta and scratch, two Codex threads).
+//   to a fixture instance's / (tests/browser/fixture.py data: ten interactive
+//   Claude sessions, one headless run in scratch, two Codex threads).
 // Never point it at the real service: it clicks actions that change sessions.
 // Returns { passed, failed: [...] } instead of throwing, so one run reports all.
 async (page) => {
@@ -26,10 +26,36 @@ async (page) => {
   await page.reload({ waitUntil: 'networkidle' })
   await page.waitForSelector('.session-row')
 
-  await check('lists every session with no sideways scroll at 375', async () => {
+  await check('preview bookmarks redirect to the root and keep the query', async () => {
+    const response = await page.goto(new URL('/next/?bookmark=1', page.url()).href, { waitUntil: 'networkidle' })
+    const redirect = response.request().redirectedFrom()
+    expect(redirect && (await redirect.response()).status() === 308, 'not a permanent redirect')
+    const destination = new URL(page.url())
+    expect(destination.pathname === '/' && destination.search === '?bookmark=1', `destination: ${destination}`)
+    await page.goto(new URL('/', page.url()).href, { waitUntil: 'networkidle' })
+    await page.waitForSelector('.session-row')
+  })
+
+  await check('lists interactive sessions with no sideways scroll at 375', async () => {
     expect((await rows().count()) === 12, `rows: ${await rows().count()}`)
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)
     expect(overflow === 0, `overflow ${overflow}px`)
+  })
+
+  await check('headless runs are hidden by default and Show can include them', async () => {
+    const headless = rows().filter({ hasText: 'Headless fixture probe' })
+    expect((await headless.count()) === 0, 'headless fixture visible by default')
+    await page.locator('.filter-show').click()
+    await page.getByRole('menuitem', { name: 'Headless runs', exact: true }).click()
+    await page.keyboard.press('Escape')
+    await settle()
+    expect((await headless.count()) === 1, 'Show did not reveal the headless fixture')
+    expect((await rows().count()) === 13, `with headless: ${await rows().count()}`)
+    await page.locator('.filter-show').click()
+    await page.getByRole('menuitem', { name: 'Headless runs', exact: true }).click()
+    await page.keyboard.press('Escape')
+    await settle()
+    expect((await headless.count()) === 0 && (await rows().count()) === 12, 'headless toggle did not reset')
   })
 
   await check('search filters, excludes and reports bad terms', async () => {

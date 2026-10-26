@@ -1,4 +1,4 @@
-"""The rebuilt page at /next/: what the resolver sends, and that the server sends it."""
+"""The root picker: resolver guards, cache headers and server delivery."""
 
 import tempfile
 import threading
@@ -20,7 +20,7 @@ from fakes import Clock, FakeConnectivity, FakeIndex, FakeTmux, transcript
 def build(root: Path) -> Path:
     dist = root / "dist"
     (dist / "assets").mkdir(parents=True)
-    (dist / "index.html").write_text("<!doctype html><title>next</title>")
+    (dist / "index.html").write_text("<!doctype html><title>picker</title>")
     (dist / "assets" / "index-Ab12.js").write_text("console.log(1)")
     (dist / "theme.js").write_text("/* first paint */")
     return dist
@@ -35,38 +35,53 @@ class ResolveTest(unittest.TestCase):
     def resolve(self, path):
         return picker_page.resolve(path, self.dist)
 
-    def test_other_paths_are_not_the_new_pages(self):
-        for path in ("/", "/static/app.js", "/api/sessions", "/nextish"):
-            self.assertIsNone(self.resolve(path), path)
+    def test_api_paths_never_get_the_page_even_when_unbuilt(self):
+        for dist in (self.dist, self.dist.parent / "nowhere"):
+            for path in ("/api", "/api/", "/api/sessions", "/api/nope?x=1"):
+                self.assertIsNone(picker_page.resolve(path, dist), path)
 
     def test_index_is_never_cached(self):
-        for path in ("/next/", "/next/index.html", "/next/?q=1"):
+        for path in ("/", "/index.html", "/?q=1"):
             page = self.resolve(path)
             self.assertEqual((page.status, page.content_type, page.cache_control),
                              (200, "text/html; charset=utf-8", "no-store"), path)
 
     def test_hashed_assets_are_cached_for_good_and_the_rest_not(self):
-        asset = self.resolve("/next/assets/index-Ab12.js")
+        asset = self.resolve("/assets/index-Ab12.js?v=1")
         self.assertEqual((asset.status, asset.cache_control), (200, picker_page.IMMUTABLE))
         self.assertEqual(asset.content_type, "text/javascript; charset=utf-8")
-        self.assertEqual(self.resolve("/next/theme.js").cache_control, "no-store")
+        self.assertEqual(self.resolve("/theme.js").cache_control, "no-store")
 
-    def test_without_trailing_slash_redirects(self):
-        page = self.resolve("/next")
-        self.assertEqual((page.status, page.headers), (308, {"Location": "/next/"}))
+    def test_preview_bookmarks_redirect_permanently_with_the_query(self):
+        for source, destination in [("/next", "/"), ("/next/", "/"),
+                                    ("/next?x=1&x=%2F", "/?x=1&x=%2F"),
+                                    ("/next/index.html", "/index.html"),
+                                    ("/next/settings?q=two%20words", "/settings?q=two%20words"),
+                                    ("/next/assets/index-Ab12.js?v=1", "/assets/index-Ab12.js?v=1")]:
+            for dist in (self.dist, self.dist.parent / "nowhere"):
+                page = picker_page.resolve(source, dist)
+                self.assertEqual((page.status, page.headers), (308, {"Location": destination}), source)
+
+    def test_preview_redirect_cannot_point_at_another_origin(self):
+        for path in ("/next//example.test", "/next/\\example.test"):
+            self.assertEqual(self.resolve(path).status, 404, path)
 
     def test_paths_outside_dist_and_missing_files_are_not_found(self):
-        for path in ("/next/../web.py", "/next/assets/../../x.js", "/next/assets/%2e%2e/x.js",
-                     "/next/.hidden.js", "/next/assets/missing.js", "/next/a/b/c.js", "/next/x.exe"):
+        for path in ("/../web.py", "/assets/../../x.js", "/assets/%2e%2e/x.js",
+                     "/.hidden.js", "/assets/missing.js", "/a/b/c.js", "/x.exe",
+                     "/assets%2findex-Ab12.js", "/%2e%2e", "/a/b"):
             self.assertEqual(self.resolve(path).status, 404, path)
 
     def test_a_client_route_gets_the_index(self):
-        self.assertIn(b"<title>next</title>", self.resolve("/next/settings").body)
+        for path in ("/settings", "/settings?q=1", "/nextish"):
+            self.assertIn(b"<title>picker</title>", self.resolve(path).body)
 
     def test_unbuilt_says_how_to_build(self):
-        page = picker_page.resolve("/next/", self.dist.parent / "nowhere")
-        self.assertEqual(page.status, 503)
-        self.assertIn(b"npm run build", page.body)
+        page = picker_page.resolve("/", self.dist.parent / "nowhere")
+        self.assertEqual((page.status, page.content_type, page.cache_control),
+                         (503, "text/plain; charset=utf-8", "no-store"))
+        self.assertIn(b"npm ci && npm run build", page.body)
+        self.assertIn(b"web/", page.body)
 
 
 class ServeTest(unittest.TestCase):
@@ -85,9 +100,9 @@ class ServeTest(unittest.TestCase):
         self.addCleanup(server.shutdown)
         base = f"http://127.0.0.1:{server.server_address[1]}"
         with mock.patch.object(picker_page, "DIST_DIR", dist):
-            with urllib.request.urlopen(base + "/next/assets/index-Ab12.js") as resp:
+            with urllib.request.urlopen(base + "/assets/index-Ab12.js") as resp:
                 self.assertEqual(resp.headers["Cache-Control"], picker_page.IMMUTABLE)
                 self.assertEqual(resp.read(), b"console.log(1)")
             with self.assertRaises(urllib.error.HTTPError) as missing:
-                urllib.request.urlopen(base + "/next/assets/missing.js")
+                urllib.request.urlopen(base + "/assets/missing.js")
             self.assertEqual(missing.exception.code, 404)

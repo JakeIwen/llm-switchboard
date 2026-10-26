@@ -81,16 +81,6 @@ class WebTest(unittest.TestCase):
         self.assertEqual(status, 409)
         self.assertIn("idle", body["error"])
 
-    def test_serves_the_page_and_its_modules(self):
-        with urllib.request.urlopen(self.base + "/") as resp:
-            self.assertIn(b"LLM Switchboard", resp.read())
-        with urllib.request.urlopen(self.base + "/static/app.js") as resp:
-            self.assertEqual(resp.headers["Content-Type"], "text/javascript; charset=utf-8")
-        for path in ("/static/nope.js", "/static/../web.py", "/static/index.html", "/static/%2e%2e/web.py"):
-            with self.assertRaises(urllib.error.HTTPError, msg=path) as ctx:
-                urllib.request.urlopen(self.base + path)
-            self.assertEqual(ctx.exception.code, 404, path)
-
     def test_settings_read_partial_update_and_session_payload(self):
         status, payload = self.call("/api/settings")
         self.assertEqual(status, 200)

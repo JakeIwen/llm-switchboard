@@ -1,8 +1,8 @@
-"""The rebuilt page (web/, built into web/dist) served at /next/ beside the old one.
+"""The picker (web/, built into web/dist) served at the root.
 
-Only maps a request path to what to send, so every HTTP layer serves it the
-same way. Hashed build assets are cached for good; everything else is no-store,
-like the old page, so a phone never keeps a stale index after a deploy.
+Hashed build assets are cached for good; everything else is no-store, so a
+phone never keeps a stale index after a deploy. Former preview URLs redirect
+without involving the API router.
 """
 
 from dataclasses import dataclass, field
@@ -11,7 +11,7 @@ import json
 import re
 
 DIST_DIR = Path(__file__).resolve().parent.parent / "web" / "dist"
-PREFIX = "/next/"
+PREVIEW_PREFIX = "/next/"
 
 # One or two plain path segments (`theme.js`, `assets/index-Ab12.js`): no dot
 # segments, no encoded slashes, nothing outside dist.
@@ -29,7 +29,7 @@ _TYPES = {
 }
 NO_STORE = "no-store"
 IMMUTABLE = "public, max-age=31536000, immutable"
-UNBUILT = "The new page isn't built yet: run `npm ci && npm run build` in web/.\n"
+UNBUILT = "The page isn't built yet: run `npm ci && npm run build` in web/.\n"
 
 
 @dataclass(frozen=True)
@@ -46,17 +46,22 @@ def _not_found() -> PageResponse:
 
 
 def resolve(raw_path: str, dist: Path | None = None) -> PageResponse | None:
-    """What to send for `raw_path`, or None when it isn't the new page's."""
-    path = raw_path.split("?", 1)[0].split("#", 1)[0]
-    if path == PREFIX.rstrip("/"):
-        return PageResponse(308, "text/plain; charset=utf-8", b"", headers={"Location": PREFIX})
-    if not path.startswith(PREFIX):
+    """What to send for `raw_path`, or None for API requests."""
+    path, separator, query = raw_path.split("#", 1)[0].partition("?")
+    if path == "/api" or path.startswith("/api/") or not path.startswith("/"):
         return None
+    if path == PREVIEW_PREFIX.rstrip("/") or path.startswith(PREVIEW_PREFIX):
+        rest = path[len(PREVIEW_PREFIX):]
+        # A doubled separator must not turn Location into an external URL.
+        if rest.startswith(("/", "\\")):
+            return _not_found()
+        location = "/" + rest + separator + query
+        return PageResponse(308, "text/plain; charset=utf-8", b"", headers={"Location": location})
     dist = DIST_DIR if dist is None else dist
     index = dist / "index.html"
     if not index.is_file():
         return PageResponse(503, "text/plain; charset=utf-8", UNBUILT.encode())
-    rest = path[len(PREFIX):]
+    rest = path[1:]
     if rest in ("", "index.html"):
         return PageResponse(200, _TYPES["html"], index.read_bytes())
     if not _FILE_RE.match(rest):

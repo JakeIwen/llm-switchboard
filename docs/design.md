@@ -1,6 +1,6 @@
 # Page design
 
-The design brief for the page in `web/`. It records what the page is for and
+The design brief for the page at `/`, built from `web/`. It records what the page is for and
 the rules every screen follows, with the reason for each, so a later change
 can tell a rule from an accident. Jacob's own words are the source; where he
 didn't say, the rule says it is a judgment call.
@@ -116,11 +116,10 @@ the first screen, the last one may take two taps.
 
 - Blue marks a selection (checkbox, row tint, keyboard cursor); orange marks
   kept-running sessions. The two never share a meaning.
-- The old page's selected-folder chips under the toolbar are gone: the
-  Places button names the one picked place (a home-relative folder or a
-  machine, in its machine's color) or the count, and Reset clears it in one tap.
-- The old footer line explaining how kept sessions run is gone; the keep
-  switch's tooltip says it.
+- Selected places are named on the Places button (a home-relative folder or
+  a machine, in its machine's color) or shown as a count, not as chips under
+  the toolbar; Reset clears them in one tap.
+- The keep switch's tooltip explains how kept sessions run, not a footer.
 
 ## Density and spacing
 
@@ -147,7 +146,7 @@ the first screen, the last one may take two taps.
 
 ## Color and type
 
-- The old page's palette stays (Jacob: keep the color): warm paper
+- Keep the established palette (Jacob: keep the color): warm paper
   background, orange accent, semantic green/blue/amber/red badges, teal for
   this Pi's paths and violet for the Mac's. Light and dark follow the system
   unless Settings' Appearance overrides it on that device.

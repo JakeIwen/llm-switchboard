@@ -10,7 +10,6 @@ from fastapi.routing import APIRoute
 from pydantic import TypeAdapter, ValidationError
 
 from ..host_web import action_route
-from ..page import PREFIX as PREVIEW_PREFIX
 
 from ..codex_client import CodexError, CodexUnavailable
 from ..conflict import Conflict
@@ -124,8 +123,8 @@ class CompatibilityRoute(APIRoute):
 
     def _path_error(self, request):
         path = request.scope.get("raw_path", b"").decode("ascii")
-        if request.method == "GET" and (path == PREVIEW_PREFIX.rstrip("/") or path.startswith(PREVIEW_PREFIX)):
-            return None  # The preview resolver owns its path and query rules.
+        if request.method == "GET" and path != "/api" and not path.startswith("/api/"):
+            return None  # The page resolver owns non-API paths and query strings.
         if path != request.url.path:
             return error_response("not found", 404)
         if request.url.query and not path.startswith("/api/search"):
