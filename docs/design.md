@@ -49,8 +49,8 @@ the first screen, the last one may take two taps.
   the box get room; a scope toggle beside the box took both away. This is the
   "search suggestions" pattern: the second scope is offered where the eye
   already is.*
-- **Filters are one row of fixed-width buttons**: Show (status and tool in
-  one menu), Folders, Sort, and Reset at the end. Each shows its current value
+- **Filters are one row of fixed-width buttons**: Show (status, tool and
+  headless runs in one menu), Folders, Sort, and Reset at the end. Each shows its current value
   and is accent-tinted when not the default; Reset is always there, dimmed
   when everything is at its default, so clearing never needs a menu open and
   nothing moves. *Why: Jacob asked for a clear-all that works without opening
@@ -155,6 +155,10 @@ the first screen, the last one may take two taps.
   folders), name, and a first message for Codex; a toast when it is ready.
 - **Settings**: a sheet with the resume commands, folder listing rules and
   poll interval, saved to the server.
+- **Headless runs** (`claude -p`, `codex exec`: transcripts nobody typed in)
+  are hidden unless Show's "Headless runs" is checked; a kept one always
+  shows. *Why: script and agent probes filled the list with "(untitled)" rows
+  in scratchpad folders.*
 - **Recently deleted**: Restore and Empty Pi trash, at the end of the list.
 - **Empty**: "No session matches" names the active filters and offers Reset.
   First load is one quiet line, no skeleton shimmer.

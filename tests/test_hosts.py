@@ -118,6 +118,29 @@ class HostTests(unittest.TestCase):
         self.assertNotIn("secret", json.dumps(rows))
         self.assertNotIn("first_prompt", rows[0])
 
+    def test_headless_flag_travels_from_the_mac_to_page_rows(self):
+        project = self.root / "projects" / "folder"
+        project.mkdir(parents=True)
+        (project / f"{SID}.jsonl").write_text(json.dumps(
+            {"type": "user", "cwd": "/Users/me/dev/a", "entrypoint": "sdk-cli", "message": {"content": "x"}},
+            separators=(",", ":")) + "\n")
+        codex = Mock(error="offline")
+        codex.threads.return_value = []
+        rows = MacCatalog(TranscriptIndex(project.parent, metadata_only=True), codex, self.root, registry=lambda: []).rows()
+        self.assertTrue(rows[0]["headless"])
+        self.hosts.exchange("mac", {"version": 1, "rows": rows})
+        self.assertTrue(self.hosts.snapshot()["sessions"][0]["headless"])
+        # A Mac agent from before the flag sends none: the row shows as typed in.
+        self.hosts.exchange("mac", {"version": 1, "rows": [sample()]})
+        self.assertFalse(self.hosts.snapshot()["sessions"][0]["headless"])
+
+    def test_codex_exec_rollouts_are_headless(self):
+        sessions = self.root / "sessions"
+        sessions.mkdir()
+        (sessions / "rollout.jsonl").write_text(json.dumps(
+            {"type": "session_meta", "payload": {"id": SID, "cwd": "/Users/me/dev/a", "source": "exec"}}) + "\n")
+        self.assertTrue(codex_disk_rows(self.root)[0]["headless"])
+
     def test_codex_fallback_is_metadata_only(self):
         sessions = self.root / "sessions"
         sessions.mkdir()

@@ -47,6 +47,7 @@ def codex_rows(threads: list[CodexThread], settings: Settings | None = None) -> 
         "status": None,
         # Codex's own thread status (codex_threads.CodexState).
         "codex_state": t.state,
+        "headless": t.headless,
     } for t in threads]
 
 
@@ -73,6 +74,7 @@ def _row(sid: str, t: Transcript | None, entry: Entry | None, live: list[LivePro
         "mtime": t.mtime if t else (entry.updated_at if pending else None),
         "size": t.size if t else None,
         "remote_url": t.remote_url if t else "",
+        "headless": bool(t and t.headless),
         "resume_cmd": resume_command(sid, cwd, settings),
         "new": pending,
         "enabled": bool(entry and entry.enabled),

@@ -24,6 +24,10 @@ _CUSTOM_TITLE = b'"type":"custom-title"'
 _AI_TITLE = b'"type":"ai-title"'
 _SUMMARY = b'"type":"summary"'
 BRIDGE_RECORD = b'"type":"bridge-session"'
+# Each record names the front end that wrote it: "cli" for a terminal, and
+# "sdk-…" for headless runs (`claude -p`, the Agent SDK).
+_ENTRYPOINT = b'"entrypoint":"'
+_HEADLESS_PREFIX = b"sdk-"
 # A Remote Control bridge id "cse_X" is the claude.ai session "session_X".
 _BRIDGE_PREFIX = "cse_"
 REMOTE_URL_BASE = "https://claude.ai/code/session_"
@@ -40,6 +44,8 @@ class Transcript:
     size: int
     # claude.ai link from the last Remote Control connection, if there was one.
     remote_url: str = ""
+    # Every record came from a headless run: nobody ever typed in it.
+    headless: bool = False
 
     @property
     def project(self) -> str:
@@ -58,8 +64,14 @@ def summarize(path: Path, *, metadata_only: bool = False) -> Transcript | None:
     """Read one transcript. Returns None for files with no conversation in them."""
     stat = path.stat()
     cwd = first_prompt = custom_title = ai_title = summary = bridge_id = ""
+    headless_seen = interactive = False
     with open(path, "rb") as f:
         for line in f:
+            if not interactive:
+                entrypoint = _entrypoint(line)
+                if entrypoint is not None:
+                    headless_seen |= entrypoint.startswith(_HEADLESS_PREFIX)
+                    interactive = not entrypoint.startswith(_HEADLESS_PREFIX)
             if not cwd and _CWD in line:
                 cwd = str(_loads(line).get("cwd") or "")
             if _CUSTOM_TITLE in line:
@@ -84,7 +96,18 @@ def summarize(path: Path, *, metadata_only: bool = False) -> Transcript | None:
         mtime=stat.st_mtime,
         size=stat.st_size,
         remote_url=_remote_url(bridge_id),
+        headless=headless_seen and not interactive,
     )
+
+
+def _entrypoint(line: bytes) -> bytes | None:
+    """The record's entrypoint value, found by byte search, or None."""
+    start = line.find(_ENTRYPOINT)
+    if start < 0:
+        return None
+    start += len(_ENTRYPOINT)
+    end = line.find(b'"', start)
+    return line[start:end] if end > start else None
 
 
 def custom_title_record(session_id: str, title: str) -> bytes:

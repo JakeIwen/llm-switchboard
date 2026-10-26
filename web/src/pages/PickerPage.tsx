@@ -130,8 +130,11 @@ export function PickerPage() {
             folderChoices={filters.choices}
             hostLabel={data?.host ?? 'This Pi'}
             showTool={filters.toolApplies}
+            headless={filters.headless}
+            showHeadless={filters.hasHeadless}
             onStatus={filters.setStatus}
             onTool={filters.setTool}
+            onHeadless={filters.setHeadless}
             onSort={filters.setSort}
             onFolders={filters.setFolders}
             onReset={filters.reset}

@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from .codex_client import CodexClient
-from .codex_threads import CodexCatalog, CodexState, is_subagent_meta
+from .codex_threads import CodexCatalog, CodexState, is_exec_source, is_subagent_meta
 from .host_protocol import MAX_ROWS, SessionState, row, session_id
 from .mac_registry import mac_live_processes
 from .paths import CODEX_DIR, CODEX_SOCKET
@@ -20,13 +20,14 @@ class MacCatalog:
     def rows(self) -> list[dict]:
         live = {p.session_id: p.status for p in self.registry()}
         rows = [dict(id=t.session_id, tool="claude", title=t.title, cwd=t.cwd, mtime=t.mtime,
-                     size=t.size, state=live.get(t.session_id, SessionState.CLOSED), mutable=True)
+                     size=t.size, state=live.get(t.session_id, SessionState.CLOSED), mutable=True,
+                     headless=t.headless)
                 for t in self.index.all()]
         threads = self.codex.threads()
         if not self.codex.error and self.codex.client.enabled:
             rows += [dict(id=t.thread_id, tool="codex", title=t.title, cwd=t.cwd, mtime=t.mtime,
                           size=t.size, state=SessionState.BUSY if t.state == CodexState.ACTIVE else SessionState.CLOSED,
-                          mutable=True) for t in threads]
+                          mutable=True, headless=t.headless) for t in threads]
         else:
             rows += codex_disk_rows(self.codex_dir)
         valid = []
@@ -63,7 +64,8 @@ def codex_disk_rows(root: Path) -> list[dict]:
             sid = session_id(meta.get("id"))
             stat = path.stat()
             candidate = dict(id=sid, tool="codex", title=titles.get(sid, "(untitled)"), cwd=meta.get("cwd"),
-                             mtime=stat.st_mtime, size=stat.st_size, state=SessionState.CLOSED, mutable=False)
+                             mtime=stat.st_mtime, size=stat.st_size, state=SessionState.CLOSED, mutable=False,
+                             headless=is_exec_source(meta.get("source")))
             found[sid] = row(candidate)
         except (OSError, ValueError, TypeError, AttributeError):
             continue

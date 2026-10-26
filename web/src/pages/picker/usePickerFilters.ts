@@ -8,8 +8,10 @@ import { sortRows, type SortKey } from '../../sessions/sort'
 import {
   inFolders,
   matchingRows,
+  saveHeadless,
   saveSort,
   saveTool,
+  savedHeadless,
   savedSort,
   savedTool,
   toolFilterApplies,
@@ -37,6 +39,7 @@ export function usePickerFilters(data: SessionsPayload | null) {
   const [ignored, setIgnored] = useState<string[]>([])
   const [status, setStatus] = useState<StatusFilter>('all')
   const [tool, setToolState] = useState<ToolFilter>(savedTool)
+  const [headless, setHeadlessState] = useState<boolean>(savedHeadless)
   const [sort, setSortState] = useState<SortKey>(savedSort)
   const [folders, setFoldersState] = useState<string[]>(() => [...readFolders(storage())])
 
@@ -47,9 +50,9 @@ export function usePickerFilters(data: SessionsPayload | null) {
   const sessionText = mode === 'sessions' ? query : sessionsQuery
 
   const matching = useMemo(
-    () => matchingRows(rows, sessionText, status, effectiveTool, now),
+    () => matchingRows(rows, sessionText, status, effectiveTool, headless, now),
     // `now` moves every poll with the rows; age: terms follow it.
-    [rows, sessionText, status, effectiveTool, now],
+    [rows, sessionText, status, effectiveTool, headless, now],
   )
   const picked = useMemo(() => new Set(folders), [folders])
   const shown = useMemo(() => sortRows(inFolders(matching.rows, picked), sort), [matching, picked, sort])
@@ -70,6 +73,10 @@ export function usePickerFilters(data: SessionsPayload | null) {
   const setTool = useCallback((value: ToolFilter) => {
     setToolState(value)
     saveTool(value)
+  }, [])
+  const setHeadless = useCallback((value: boolean) => {
+    setHeadlessState(value)
+    saveHeadless(value)
   }, [])
   const setSort = useCallback((value: SortKey) => {
     setSortState(value)
@@ -119,8 +126,9 @@ export function usePickerFilters(data: SessionsPayload | null) {
   const reset = useCallback(() => {
     setStatus('all')
     setTool('all')
+    setHeadless(false)
     setFolders([])
-  }, [setTool, setFolders])
+  }, [setTool, setHeadless, setFolders])
 
   return {
     rows,
@@ -137,6 +145,9 @@ export function usePickerFilters(data: SessionsPayload | null) {
     tool: effectiveTool,
     setTool,
     toolApplies,
+    headless,
+    setHeadless,
+    hasHeadless: rows.some((row) => row.headless),
     sort,
     setSort,
     folders,

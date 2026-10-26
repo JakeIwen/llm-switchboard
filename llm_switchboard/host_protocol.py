@@ -33,6 +33,8 @@ class HostRow(TypedDict):
     size: int | None
     state: str
     mutable: bool
+    # Optional on the wire (older Macs omit it): a headless run nobody typed in.
+    headless: bool
 
 
 class Push(TypedDict):
@@ -92,7 +94,7 @@ def row(raw) -> HostRow:
     return HostRow(id=session_id(raw.get("id")), tool=raw["tool"],
                    title=text(raw.get("title"), "title", MAX_TITLE_LEN), cwd=folder(raw.get("cwd")),
                    mtime=number(raw.get("mtime"), "mtime"), size=number(raw.get("size"), "size", integer=True),
-                   state=raw["state"], mutable=raw["mutable"])
+                   state=raw["state"], mutable=raw["mutable"], headless=raw.get("headless") is True)
 
 
 def push(raw) -> Push:

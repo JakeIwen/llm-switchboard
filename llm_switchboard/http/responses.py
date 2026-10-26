@@ -48,6 +48,8 @@ class SessionRow(ResponseRecord):
     size: int | None
     remote_url: str
     resume_cmd: str
+    # A headless run (`claude -p`, `codex exec`): nobody ever typed in it.
+    headless: bool = False
     new: bool
     enabled: bool
     rc_name: str

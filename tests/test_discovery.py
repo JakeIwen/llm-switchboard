@@ -50,6 +50,20 @@ class TranscriptIndexTest(unittest.TestCase):
         ])
         self.assertEqual(self.index.get(SID).title, "my name")
 
+    def test_headless_runs_are_marked_until_someone_types(self):
+        cases = {
+            "sdk-cli": (["sdk-cli", "sdk-cli"], True),
+            "resumed in a terminal": (["sdk-cli", "cli"], False),
+            "resumed headless": (["cli", "sdk-cli"], False),
+            "older Claude Code": ([None], False),
+        }
+        for name, (entrypoints, headless) in cases.items():
+            with self.subTest(name):
+                path = self.root / name / f"{SID}.jsonl"
+                write_jsonl(path, [user("hi", **({"entrypoint": e} if e else {})) for e in entrypoints])
+                self.assertEqual(TranscriptIndex(path.parent.parent).get(SID).headless, headless)
+                path.unlink()
+
     def test_empty_and_non_session_files_are_skipped(self):
         write_jsonl(self.root / "p" / f"{SID}.jsonl", [{"type": "file-history-snapshot"}])
         write_jsonl(self.root / "p" / "notes.jsonl", [user("hi")])

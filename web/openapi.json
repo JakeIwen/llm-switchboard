@@ -1072,6 +1072,11 @@
             "title": "First Prompt",
             "type": "string"
           },
+          "headless": {
+            "default": false,
+            "title": "Headless",
+            "type": "boolean"
+          },
           "host": {
             "title": "Host",
             "type": "string"

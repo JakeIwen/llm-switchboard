@@ -874,6 +874,11 @@ export interface components {
              * @default
              */
             first_prompt?: string;
+            /**
+             * Headless
+             * @default false
+             */
+            headless?: boolean;
             /** Host */
             host: string;
             /** Host Online */

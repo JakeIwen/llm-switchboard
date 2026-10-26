@@ -22,7 +22,7 @@ const base = {
   id, tool: 'claude', host: '', short_id: 'aaaaaaaa', title: 'New', first_prompt: '',
   cwd: '/work/project', project: '/work/project', mtime: 10, size: null,
   remote_url: '', resume_cmd: `cd -- /work/project && claude --resume ${id}`,
-  new: true, enabled: true, rc_name: '', open_elsewhere: [], status: null,
+  new: true, enabled: true, rc_name: '', open_elsewhere: [], status: null, headless: false,
 } satisfies SessionRow
 
 it('types a pending local Claude row, including its nested supervisor and exit records', () => {
@@ -63,7 +63,7 @@ it('types host metadata without prompts or local process pids', () => {
   }))
   expect(rowsFromPython(`
 rows = [page_row(dict(id=sid, tool='claude', title='Remote', cwd='/Users/me/dev/project',
-    mtime=None, size=None, state=state, mutable=True), 'mac', True, 20)
+    mtime=None, size=None, state=state, mutable=True, headless=False), 'mac', True, 20)
     for state in ('closed', 'idle', 'busy')]
 print(json.dumps(rows))`)).toEqual(expected)
 })

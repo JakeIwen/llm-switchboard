@@ -37,6 +37,8 @@ class CodexThread:
     mtime: float | None
     size: int | None
     state: str
+    # Started by `codex exec`: nobody ever typed in it.
+    headless: bool = False
 
     @property
     def project(self) -> str:
@@ -46,6 +48,11 @@ class CodexThread:
 def is_subagent_meta(meta: dict) -> bool:
     """Whether a rollout's session_meta payload belongs to a subagent thread."""
     return isinstance(meta.get("source"), dict) and "subagent" in meta["source"]
+
+
+def is_exec_source(source) -> bool:
+    """Whether a thread's source (thread/list, or a rollout's session_meta) is `codex exec`."""
+    return source == "exec"
 
 
 def codex_short_id(thread_id: str) -> str:
@@ -76,6 +83,7 @@ def thread_from_api(t: dict, *, metadata_only: bool = False) -> CodexThread | No
         mtime=mtime or t.get("recencyAt") or t.get("updatedAt"),
         size=size,
         state=str((t.get("status") or {}).get("type") or CodexState.NOT_LOADED),
+        headless=is_exec_source(t.get("source")),
     )
 
 

@@ -4,7 +4,7 @@ import { compileQuery } from '../../search/sessionQuery'
 import { SORTS, type SortKey } from '../../sessions/sort'
 
 // The page's own filter vocabulary on top of the ported modules: the Show menu
-// (status and tool) and the remembered tool and sort choices.
+// (status, tool and headless runs) and the remembered tool, headless and sort choices.
 export type StatusFilter = 'all' | 'kept' | 'open'
 export type ToolFilter = 'all' | 'claude' | 'codex'
 
@@ -27,11 +27,26 @@ const STATUS_TEST: Record<StatusFilter, (row: SessionRow) => boolean> = {
   open: (row) => row.enabled || row.open_elsewhere.length > 0,
 }
 
-/** Rows passing the query, status and tool, before folders and sort. */
-export function matchingRows(rows: readonly SessionRow[], query: string, status: StatusFilter, tool: ToolFilter, now: number) {
+/** Headless runs (`claude -p`, `codex exec`) stay out unless asked for; a kept
+    one always shows, since the page is the only place to stop keeping it. */
+const headlessShown = (row: SessionRow, headless: boolean) => headless || !row.headless || row.enabled
+
+/** Rows passing the query, status, tool and headless choice, before folders and sort. */
+export function matchingRows(
+  rows: readonly SessionRow[],
+  query: string,
+  status: StatusFilter,
+  tool: ToolFilter,
+  headless: boolean,
+  now: number,
+) {
   const compiled = compileQuery(query)
   const rowsOut = rows.filter(
-    (row) => STATUS_TEST[status](row) && (tool === 'all' || row.tool === tool) && compiled.test(row, now),
+    (row) =>
+      STATUS_TEST[status](row) &&
+      (tool === 'all' || row.tool === tool) &&
+      headlessShown(row, headless) &&
+      compiled.test(row, now),
   )
   return { rows: rowsOut, errors: compiled.errors }
 }
@@ -46,6 +61,7 @@ export const toolFilterApplies = (codexEnabled: boolean, rows: readonly SessionR
 // Remembered per browser, under the old page's keys so choices carry over.
 const TOOL_KEY = 'switchboard.tool'
 const SORT_KEY = 'switchboard.sort'
+const HEADLESS_KEY = 'switchboard.headless'
 
 function read(key: string): string | null {
   try {
@@ -73,5 +89,8 @@ export function savedSort(): SortKey {
   return SORTS.find((s) => s.key === value)?.key ?? SORTS[0].key
 }
 
+export const savedHeadless = (): boolean => read(HEADLESS_KEY) === '1'
+
 export const saveTool = (tool: ToolFilter) => write(TOOL_KEY, tool)
+export const saveHeadless = (headless: boolean) => write(HEADLESS_KEY, headless ? '1' : '0')
 export const saveSort = (sort: SortKey) => write(SORT_KEY, sort)

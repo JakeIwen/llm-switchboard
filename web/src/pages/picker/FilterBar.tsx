@@ -15,8 +15,11 @@ interface Props {
   folderChoices: FolderChoice[]
   hostLabel: string
   showTool: boolean
+  headless: boolean
+  showHeadless: boolean
   onStatus: (v: StatusFilter) => void
   onTool: (v: ToolFilter) => void
+  onHeadless: (v: boolean) => void
   onSort: (v: SortKey) => void
   onFolders: (keys: string[]) => void
   onReset: () => void
@@ -24,8 +27,8 @@ interface Props {
 
 const parts = { label: 'filter-button-inner', section: 'filter-button-section' }
 
-function showLabel(status: StatusFilter, tool: ToolFilter): string {
-  if (tool === 'all') return STATUS_LABELS[status]
+function showLabel(status: StatusFilter, tool: ToolFilter, headless: boolean): string {
+  if (tool === 'all') return status === 'all' && headless ? 'All + headless' : STATUS_LABELS[status]
   return status === 'all' ? `${TOOL_LABELS[tool]} only` : `${status === 'kept' ? 'Kept' : 'Open'} · ${TOOL_LABELS[tool]}`
 }
 
@@ -51,7 +54,7 @@ function MenuChoices<K extends string>({ title, labels, value, onChange }: {
     value and is tinted when it isn't the default; Reset is always there. */
 export function FilterBar(p: Props) {
   const [foldersOpen, setFoldersOpen] = useState(false)
-  const showActive = p.status !== 'all' || p.tool !== 'all'
+  const showActive = p.status !== 'all' || p.tool !== 'all' || p.headless
   const anyActive = showActive || p.folders.length > 0
   const host = pickedHost(p.folders, p.folderChoices)
   const folderTrigger = (
@@ -78,7 +81,7 @@ export function FilterBar(p: Props) {
             rightSection={<IconChevronDown size={12} />}
             classNames={parts}
           >
-            <span className="filter-button-label">{showLabel(p.status, p.tool)}</span>
+            <span className="filter-button-label">{showLabel(p.status, p.tool, p.headless)}</span>
           </Button>
         </Menu.Target>
         <Menu.Dropdown>
@@ -87,6 +90,25 @@ export function FilterBar(p: Props) {
             <>
               <Menu.Divider />
               <MenuChoices title="Tool" labels={TOOL_LABELS} value={p.tool} onChange={p.onTool} />
+            </>
+          )}
+          {(p.showHeadless || p.headless) && (
+            <>
+              <Menu.Divider />
+              <Tooltip
+                label="Runs started by a script or agent (claude -p, codex exec), which nobody typed in"
+                position="left"
+                multiline
+                w={220}
+              >
+                <Menu.Item
+                  closeMenuOnClick={false}
+                  onClick={() => p.onHeadless(!p.headless)}
+                  rightSection={p.headless ? <IconCheck size={14} /> : null}
+                >
+                  Headless runs
+                </Menu.Item>
+              </Tooltip>
             </>
           )}
         </Menu.Dropdown>
@@ -116,7 +138,7 @@ export function FilterBar(p: Props) {
           <MenuChoices title="Sort" labels={SORT_LABELS} value={p.sort} onChange={p.onSort} />
         </Menu.Dropdown>
       </Menu>
-      <Tooltip label="Show everything again: all sessions, tools and folders">
+      <Tooltip label="Back to the defaults: all sessions, tools and folders, headless runs hidden">
         <Button className="filter-button filter-reset" variant="subtle" disabled={!anyActive} onClick={p.onReset}>
           Reset
         </Button>
