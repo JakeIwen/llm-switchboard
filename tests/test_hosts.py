@@ -9,13 +9,13 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from llm_switchboard.host_agent import HostAgent
 from llm_switchboard.mac_action_runner import MacActionRunner
 from llm_switchboard.host_authorize import authorize
 from llm_switchboard.host_exchange import exchange
-from llm_switchboard.host_launchd import LABEL, SEARCH_LABEL, install, job
+from llm_switchboard.host_launchd import HOST_SEARCH_LABEL, LABEL, SEARCH_LABEL, install, job
 from llm_switchboard.host_protocol import MAX_METADATA_BYTES, MAX_ROWS
 from llm_switchboard.hosts import Hosts, host_display_path
 from llm_switchboard.codex_threads import thread_from_api
@@ -234,8 +234,8 @@ class HostTests(unittest.TestCase):
         self.assertNotIn("serve", config["ProgramArguments"])
         self.assertTrue(config["KeepAlive"])
 
-    @unittest.skipUnless(sys.platform == "darwin", "host-install refuses to run off the Mac")
-    def test_host_install_loads_and_unloads_the_publisher_and_search_indexer(self):
+    @patch("llm_switchboard.host_launchd.sys.platform", "darwin")
+    def test_host_install_loads_and_unloads_all_three_mac_jobs(self):
         calls, bootstrap_failures = [], [1]
 
         def launchctl(args, **kw):
@@ -248,10 +248,11 @@ class HostTests(unittest.TestCase):
         key.write_text("fixture key")
         install("pi", "mac", key, home=self.root, run=launchctl)
         agents = self.root / "Library" / "LaunchAgents"
-        for label in (LABEL, SEARCH_LABEL):
+        for label in (LABEL, SEARCH_LABEL, HOST_SEARCH_LABEL):
             self.assertEqual(plistlib.loads((agents / f"{label}.plist").read_bytes())["Label"], label)
             self.assertIn(["launchctl", "bootstrap", f"gui/{os.getuid()}", str(agents / f"{label}.plist")], calls)
         calls.clear()
         install("pi", "mac", key, unload=True, home=self.root, run=launchctl)
         self.assertEqual([args[-1] for args in calls],
-                         [f"gui/{os.getuid()}/{SEARCH_LABEL}", f"gui/{os.getuid()}/{LABEL}"])
+                         [f"gui/{os.getuid()}/{HOST_SEARCH_LABEL}", f"gui/{os.getuid()}/{SEARCH_LABEL}",
+                          f"gui/{os.getuid()}/{LABEL}"])

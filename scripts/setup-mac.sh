@@ -25,3 +25,4 @@ ln -sf "$repo/bin/llm-switchboard" "$HOME/.local/bin/llm-switchboard"
 "$python" -m llm_switchboard host-install
 launchctl print "gui/$(id -u)/dev.llm-switchboard.host-agent"
 launchctl print "gui/$(id -u)/dev.llm-switchboard.search-index"
+launchctl print "gui/$(id -u)/dev.llm-switchboard.host-search"

@@ -627,6 +627,8 @@ export interface components {
             last_seen: number;
             /** Online */
             online: boolean;
+            /** Search Url */
+            search_url: string;
         };
         /** Message */
         Message: {

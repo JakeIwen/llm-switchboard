@@ -4,7 +4,7 @@ from pathlib import Path
 import json
 import time
 
-from .host_protocol import MAC_HOME, MAX_METADATA_BYTES, OFFLINE_AFTER, VERSION, SessionState, host_name, push
+from .host_protocol import MAC_HOME, MAX_METADATA_BYTES, OFFLINE_AFTER, SEARCH_URL, VERSION, SessionState, host_name, push
 from .host_actions_protocol import MAX_EXCHANGE_BYTES, ActionKind, ActionState, results, trash_items
 from . import host_queue
 from .json_file import JsonFile
@@ -87,7 +87,7 @@ class Hosts:
                     file.write(data)
             last_seen = data.get("last_seen", 0)
             online = self.clock() - last_seen < OFFLINE_AFTER
-            hosts.append({"host": host, "online": online, "last_seen": last_seen})
+            hosts.append({"host": host, "online": online, "last_seen": last_seen, "search_url": SEARCH_URL})
             rows.extend(page_row(r, host, online, last_seen, settings) for r in data.get("rows", []))
             trash.extend(page_row(r, host, online, last_seen, settings) for r in data.get("trash", []))
             actions.extend({**a, "host": host} for a in data.get("actions", []))

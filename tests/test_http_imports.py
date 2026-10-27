@@ -3,6 +3,7 @@
 import base64
 import os
 from pathlib import Path
+import socket
 import struct
 import subprocess
 import sys
@@ -33,11 +34,17 @@ class LightImportsTest(unittest.TestCase):
             env = {**os.environ, "HOME": str(root), "XDG_CONFIG_HOME": "", "XDG_DATA_HOME": "",
                    "LLM_SWITCHBOARD_CODEX_SOCKET": "", "LLM_SWITCHBOARD_NOTIFY": "",
                    "PATH": str(tools) + os.pathsep + os.environ["PATH"]}
+            listener = socket.socket()
+            self.addCleanup(listener.close)
+            listener.bind(("127.0.0.1", 0))
+            listener.listen()
+            port = listener.getsockname()[1]
             cases = [
                 (["host-exchange", "mac"], '{"version":1,"rows":[]}', 0, "host_exchange"),
                 (["host-authorize", "mac"], pubkey, 0, "host_authorize"),
                 (["host-agent", "--once", "--identity", str(key)], "", 0, "host_agent"),
                 (["host-install", "--identity", str(key)], "", 0 if sys.platform == "darwin" else 1, "host_launchd"),
+                (["host-search", "--host-name", "mac", "--port", str(port)], "", 1, "mac_search_server"),
                 (["search", "--json", "amber"], "", 3, "search_cli"),
                 (["index"], "", 0, "search_indexer"),
                 (["settings"], "", 0, "settings_cli"),

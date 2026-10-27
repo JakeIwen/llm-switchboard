@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from llm_switchboard.host_launchd import LABEL, SEARCH_LABEL, job, search_job
+from llm_switchboard.host_launchd import HOST_SEARCH_LABEL, LABEL, SEARCH_LABEL, host_search_job, job, search_job
 
 
 PACKAGE = Path(__file__).resolve().parents[1] / "llm_switchboard"
@@ -49,7 +49,7 @@ class DependencyBoundaryTest(unittest.TestCase):
     def test_mac_and_pi_host_runtimes_do_not_import_each_other(self):
         mac_modules = {
             "host_agent", "host_launchd", "host_transport", "mac_action_runner",
-            "mac_actions", "mac_catalog", "mac_registry", "mac_uploads",
+            "mac_actions", "mac_catalog", "mac_registry", "mac_uploads", "mac_search_server",
         }
         pi_modules = {
             "host_authorize", "host_exchange", "host_import", "host_queue",
@@ -92,6 +92,19 @@ class LaunchContractTest(unittest.TestCase):
         self.assertEqual(spec["WorkingDirectory"], str(repo))
         self.assertEqual(spec["ProgramArguments"][:4], ["/python3", "-m", "llm_switchboard", "host-agent"])
         self.assertEqual(spec["EnvironmentVariables"]["HOME"], str(home))
+
+    def test_host_search_job_runs_the_loopback_search_server(self):
+        repo = Path("/checkout/llm-switchboard")
+        home = Path("/Users/example")
+        spec = host_search_job("mac", home, "/python3", repo)
+        self.assertEqual(spec["Label"], HOST_SEARCH_LABEL)
+        self.assertEqual(spec["WorkingDirectory"], str(repo))
+        self.assertEqual(spec["ProgramArguments"],
+                         ["/python3", "-m", "llm_switchboard", "host-search", "--host-name", "mac"])
+        self.assertEqual(spec["EnvironmentVariables"], job("pi", "mac", home, home, "/python3", repo)["EnvironmentVariables"])
+        self.assertEqual((spec["RunAtLoad"], spec["KeepAlive"], spec["ThrottleInterval"]), (True, True, 10))
+        for field in ("StandardOutPath", "StandardErrorPath"):
+            self.assertTrue(spec[field].startswith(f"{home}/Library/Logs/llm-switchboard/"))
 
     def test_search_index_job_runs_the_indexer_at_background_priority(self):
         repo = Path("/checkout/llm-switchboard")

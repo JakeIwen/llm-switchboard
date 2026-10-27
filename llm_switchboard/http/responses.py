@@ -71,6 +71,8 @@ class HostStatus(ResponseRecord):
     host: str
     online: bool
     last_seen: float
+    # Where a browser on that host can search its own transcripts.
+    search_url: str
 
 
 class QueuedAction(ResponseRecord):

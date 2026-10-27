@@ -14,7 +14,7 @@ describe('host availability', () => {
   })
   it('summarizes hosts in their provided order and permits an empty list', () => {
     expect(hostStatus({ online: true, last_seen: 0 })).toBe('online')
-    const hosts = [{ host: 'mac', online: true, last_seen: 100 }, { host: 'other', online: false, last_seen: 100 }]
+    const hosts = [{ host: 'mac', online: true, last_seen: 100, search_url: '' }, { host: 'other', online: false, last_seen: 100, search_url: '' }]
     expect(hostSummary(hosts)).toBe(`mac: online · other: ${hostStatus(hosts[1])}`)
     expect(hostSummary()).toBe('')
   })

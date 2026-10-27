@@ -5,7 +5,7 @@ import sys
 # and serve's 30 s indexer child would otherwise pay every time.
 _LIGHT_COMMANDS = {
     "host-exchange": "host_cli", "host-authorize": "host_cli",
-    "host-agent": "host_cli", "host-install": "host_cli",
+    "host-agent": "host_cli", "host-install": "host_cli", "host-search": "host_cli",
     "search": "search_cli", "index": "search_cli", "settings": "settings_cli",
 }
 

@@ -122,10 +122,11 @@ no way into the Mac. The header shows `mac: online`, or `offline, last seen
 HH:MM` after 35 s without a push, and the Mac's rows grey out.
 
 - Rows carry only ids, titles, folder, times, size and open/busy status.
-  Prompts, replies and terminal screens never leave the Mac, so Mac rows have
-  no Recent messages, Terminal screen, keep-running switch or Restart, and
-  match the search box by title and folder only. Untitled sessions show as
-  `(untitled)` rather than their first prompt.
+  Prompts, replies and terminal screens never go to the Pi, so Mac rows have
+  no Recent messages, Terminal screen, keep-running switch or Restart. On the
+  Mac's own browser, the HTTPS picker can search conversation text directly
+  through the Mac's loopback endpoint; elsewhere, Mac results match title and
+  folder only.
 - **Rename**, **Move**, **Fork on the Mac…**, **Delete** (to the Mac's own
   trash, restorable from Recently deleted) are queued for the Mac, which runs
   them on its next push after checking them itself. Nothing that starts a
@@ -149,8 +150,14 @@ the key `~/.ssh/llm-switchboard-<mac>`, installs it with
 `ssh <pi> …/llm-switchboard host-authorize <mac> < key.pub`
 over the normal SSH login, creates `.venv` and links `bin/llm-switchboard`
 into `~/.local/bin`, does one push and the first index build, and loads the
-launchd jobs `dev.llm-switchboard.host-agent` and
-`dev.llm-switchboard.search-index` (logs in `~/Library/Logs/llm-switchboard/`).
+launchd jobs `dev.llm-switchboard.host-agent`,
+`dev.llm-switchboard.search-index` and `dev.llm-switchboard.host-search`
+(logs in `~/Library/Logs/llm-switchboard/`). The last job serves read-only search
+at `http://127.0.0.1:8778`; it binds only loopback and refuses other Host names.
+Set `LLM_SWITCHBOARD_PAGE_ORIGINS` in the Mac's `local.env` to the HTTPS picker's
+full origin (comma-separated if more than one, no trailing slash), then rerun
+`llm-switchboard host-install`. An empty or missing setting permits no
+cross-origin reads. The browser may ask permission to access apps on the device.
 The Pi keeps what the Mac pushed, and the action queue, in
 `~/.local/share/llm-switchboard/hosts/<mac>.json`.
 
@@ -180,8 +187,9 @@ the choice is remembered per browser.
 Claude Code and Codex replied on the Pi, newest match first. Press Enter to search;
 Esc or clearing the box goes back to the session list. Each result shows the
 match count and the latest matching excerpt; **Open matches** shows each
-match with the records around it and the resume command. Mac sessions match
-on title and folder only, since their text never leaves the Mac.
+match with the records around it and the resume command. On the Mac's own
+browser over HTTPS, the page also searches the Mac's loopback endpoint directly;
+Mac text never reaches the Pi. Other browsers match Mac title and folder only.
 
 All words must appear in one record; `"two words"` is a phrase; `-word`
 excludes sessions containing it. Words match whole (`pcan` finds
@@ -196,8 +204,8 @@ what was appended; the first build reads every transcript and takes a while
 (the line under the search box says so). The Mac keeps its own index of its
 own transcripts, updated every 30 s by the `dev.llm-switchboard.search-index`
 launchd job that `host-install` loads; search it there with
-`llm-switchboard search` or `llmsearch`. Neither the index nor its results
-leave the Mac. Thinking, tool calls, tool output,
+`llm-switchboard search` or `llmsearch`, or through `host-search` in the Mac's
+own browser. Neither the index nor its results go to the Pi. Thinking, tool calls, tool output,
 injected instructions and Codex subagents are left out: they are nearly all
 of the bytes. `llmsearch` (in Jacob's scripts repo) searches this index
 through `search --json`; `llmsearch --grep` greps the transcripts instead,
@@ -222,9 +230,11 @@ loginctl enable-linger "$USER"   # once, so user services start at boot
 Machine names stay out of git, in the checkout's `local.env` (gitignored; copy
 `local.env.example`). `LLM_SWITCHBOARD_PI_SSH` is the SSH alias the Mac uses for
 the Pi (default `pi`) and `LLM_SWITCHBOARD_MAC_NAME` the Mac's name on the page
-(default `mac`); they are the defaults for `host-agent`/`host-install` and
-`scripts/setup-mac.sh`. An environment variable of the same name overrides the
-file. The other entries (picker and guide URLs) are notes only.
+(default `mac`); they are the defaults for `host-agent`/`host-install`,
+`host-search` (host name only) and `scripts/setup-mac.sh`. An environment variable
+of the same name overrides the file. `LLM_SWITCHBOARD_PAGE_ORIGINS` configures the
+Mac search endpoint's exact page-origin allow-list. The other entries (picker
+and guide URLs) are notes only.
 
 Picker: `http://<pi>.<tailnet>.ts.net:8777` (or the Pi's `100.x` address; this
 install's are in `local.env`) over Tailscale, or `http://127.0.0.1:8777` on the Pi. Not from the van LAN: `serve`
@@ -254,7 +264,8 @@ llm-switchboard host-authorize mac < key.pub   # install a Mac's restricted key 
 llm-switchboard host-exchange mac  # the restricted key's forced command (JSON on stdin)
 # On the Mac (python3 -m llm_switchboard …):
 #   host-agent [--once] [--pi PI] [--host-name MAC] [--identity ~/.ssh/llm-switchboard-MAC]
-#   host-install [--unload]           # write and load (or unload) the publisher and search-index jobs
+#   host-search [--host-name MAC]    # read-only transcript search on loopback for the Mac's browser
+#   host-install [--unload]           # write/load (or unload) publisher, indexer and loopback search jobs
 journalctl --user -u llm-switchboard -f
 ```
 

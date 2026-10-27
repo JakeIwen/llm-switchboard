@@ -42,7 +42,7 @@ Sharing the socket would let its supervisor close the real windows.
 | --- | --- |
 | `llm_switchboard/paths.py` | Shared locations, names, the managed-process env marker, default port |
 | `llm_switchboard/settings.py`, `settings_cli.py` | Canonical install settings, validation and locked `settings.json` persistence; the lightweight `settings` / `settings set` CLI |
-| `llm_switchboard/local_config.py` | This install's machine names from the untracked `local.env` (`local.env.example` lists them) |
+| `llm_switchboard/local_config.py` | This install's machine names and Mac search page-origin allow-list from the untracked `local.env` (`local.env.example` lists them) |
 | `llm_switchboard/session_id.py` | Session id validation and short ids |
 | `llm_switchboard/store.py` | The enabled-session list (locked, atomic JSON) |
 | `llm_switchboard/transcripts.py` | Finding and summarizing `~/.claude/projects/*/*.jsonl` (cached); the record markers and the custom-title line |
@@ -75,9 +75,10 @@ Sharing the socket would let its supervisor close the real windows.
 | `llm_switchboard/host_exchange.py`, `host_authorize.py` | The SSH forced command, and installing a host's restricted key in `~/.ssh/authorized_keys` |
 | `llm_switchboard/host_import.py` | Fork onto the Pi: folder mapping, checks, writing the uploaded transcript as a new not-running session |
 | `llm_switchboard/host_web.py` | The `/api/hosts/<host>/sessions/<id>/<action>` route |
-| `llm_switchboard/host_cli.py` | `host-exchange`, `host-authorize`, `host-agent`, `host-install` (light imports; `__main__` dispatches them before cli.py) |
+| `llm_switchboard/host_cli.py` | `host-exchange`, `host-authorize`, `host-agent`, `host-install`, `host-search` (light imports; `__main__` dispatches them before cli.py) |
 | `llm_switchboard/host_agent.py`, `host_transport.py` | Mac side: the 10 s push loop, and bounded `ssh` I/O |
-| `llm_switchboard/host_launchd.py` | Mac side: the launchd jobs, the publisher (`dev.llm-switchboard.host-agent`) and the 30 s background transcript indexer (`dev.llm-switchboard.search-index`) |
+| `llm_switchboard/host_launchd.py` | Mac side: the launchd jobs, the publisher (`dev.llm-switchboard.host-agent`), the 30 s background transcript indexer (`dev.llm-switchboard.search-index`), and loopback search (`dev.llm-switchboard.host-search`) |
+| `llm_switchboard/mac_search_server.py` | Mac-only stdlib read-only HTTP search on `127.0.0.1:SEARCH_PORT`, Host guard and CORS allow-list; reuses `search_api` over the Mac's own index, never sends text to the Pi |
 | `llm_switchboard/mac_catalog.py`, `mac_registry.py` | Mac side: metadata-only rows (titles, no prompt fields), macOS live-process check |
 | `llm_switchboard/mac_actions.py`, `mac_action_runner.py` | Mac side: running allowed actions with its own checks; the durable ledger that never repeats one |
 | `llm_switchboard/mac_uploads.py` | Mac side: the one transcript export path (notification, log, 10/hour quota) |
@@ -118,7 +119,7 @@ Sharing the socket would let its supervisor close the real windows.
 | Path | Caller | Owner |
 | --- | --- | --- |
 | `bin/llm-switchboard` | Pi systemd, installed CLI link, SSH forced command (runs `.venv/bin/python` when present) | `llm_switchboard/__main__.py` |
-| `python3 -m llm_switchboard` | Mac launchd (host agent, search index), Mac setup, search index child, shell callers | `llm_switchboard/__main__.py` (light host/search dispatch), `cli.py` |
+| `python3 -m llm_switchboard` | Mac launchd (host agent, search index, loopback search), Mac setup, search index child, shell callers | `llm_switchboard/__main__.py` (light host/search dispatch), `cli.py` |
 | `systemd/llm-switchboard.service` | `install.sh` template input | `install.sh` |
 | `install.sh` | Pi operator installation | `systemd/llm-switchboard.service` and `bin/llm-switchboard` |
 | `scripts/setup-mac.sh` | Mac operator setup | `llm_switchboard/host_cli.py`, `host_launchd.py` |
@@ -195,8 +196,11 @@ the report instead of leaving it silently stale.
   session's title is its first prompt cut to one line, Jacob's call on
   2026-10-26), and only the
   actions in `ActionKind` can be queued; the Mac re-checks every one. Nothing
-  queued may start a process or send a prompt there. A transcript leaves the
-  Mac only through `fork-pi` (mac_uploads.py).
+  queued may start a process or send a prompt there. A transcript is uploaded to
+  the Pi only through `fork-pi` (mac_uploads.py). Search text may reach the Mac's
+  own browser through `host-search` on loopback, never the Pi: the HTTPS picker
+  fetches it directly with CORS restricted by `LLM_SWITCHBOARD_PAGE_ORIGINS` in
+  the Mac's `local.env` (comma-separated full origins; empty allows none).
 - Transcript search indexes only your prompts and the visible replies:
   Claude's through `prompt_text`/`reply_text` (transcripts.py), Codex's from
   its event stream (`user_message`/`agent_message`, or `item_completed`
@@ -217,8 +221,9 @@ the report instead of leaving it silently stale.
   stop the indexer (the service; on the Mac, `launchctl bootout` the job, and
   `host-install` loads it again) and delete `transcript-search.sqlite3*`. Each machine indexes and searches only
   its own transcripts: the Mac's index, its text and its search results never
-  go to the Pi, whose page matches Mac sessions by title and folder only
-  (`remote_title_matches` in search_api.py).
+  go to the Pi. The Pi matches Mac sessions by title and folder only
+  (`remote_title_matches` in search_api.py); the HTTPS page on the Mac can also
+  read its local `host-search` endpoint directly for full-text results.
 - Manual resume commands use `claude_command` / `codex_command` from install settings
   (`STATE_DIR/settings.json`, normally `~/.config/llm-switchboard/settings.json`).
   These settings never change the supervisor's `claudepd` launch function. Search

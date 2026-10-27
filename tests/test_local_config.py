@@ -17,6 +17,25 @@ class LocalConfigTest(unittest.TestCase):
     def test_missing_file_gives_generic_names(self):
         self.assertEqual(load(self.path, {}), local_config.DEFAULTS)
 
+    def test_page_origins_come_from_file_or_environment(self):
+        self.path.write_text(f'{local_config.PAGE_ORIGINS}="https://pi.example,https://other.example:443"\n')
+        values = load(self.path, {})
+        self.assertEqual(local_config.page_origins(values), {"https://pi.example", "https://other.example:443"})
+        values = load(self.path, {local_config.PAGE_ORIGINS: "https://override.example"})
+        self.assertEqual(local_config.page_origins(values), {"https://override.example"})
+        values = load(self.path, {local_config.PAGE_ORIGINS: ""})
+        self.assertEqual(local_config.page_origins(values), frozenset())
+        self.assertEqual(local_config.page_origins({}), frozenset())
+        self.assertEqual(local_config.page_origins({local_config.PAGE_ORIGINS: " , "}), frozenset())
+
+    def test_page_origins_reject_non_origins(self):
+        for origin in ["*", "null", "https://*.example", "https://pi.example/", "https://pi.example/path",
+                       "https://user@pi.example", "https://pi.example?q=1", "https://pi.example#fragment",
+                       "ftp://pi.example", "https://pi.example:bad", "https://pi.example:99999",
+                       "https://pi.example\nX-Header: value"]:
+            with self.subTest(origin=origin), self.assertRaises(ValueError):
+                local_config.page_origins({local_config.PAGE_ORIGINS: origin})
+
     def test_file_lines_then_environment(self):
         self.path.write_text('# names\nLLM_SWITCHBOARD_PI_SSH=box\n\nLLM_SWITCHBOARD_MAC_NAME="laptop"\n#LLM_SWITCHBOARD_PI_SSH=old\n')
         self.assertEqual((load(self.path, {})[PI_SSH], load(self.path, {})[MAC_NAME]), ("box", "laptop"))

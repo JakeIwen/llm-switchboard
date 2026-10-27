@@ -13,6 +13,10 @@ PUSH_INTERVAL = 10
 OFFLINE_AFTER = 35
 MAX_ROWS = 5000
 MAX_METADATA_BYTES = 4 * 1024 * 1024
+# The Mac's loopback search endpoint (mac_search_server.py). Transcript text
+# never crosses to the Pi: the page, open in the Mac's browser, asks it directly.
+SEARCH_PORT = 8778
+SEARCH_URL = f"http://127.0.0.1:{SEARCH_PORT}"
 HOST_PATTERN = r"[a-z][a-z0-9-]{0,31}"
 # A Mac home folder; /Users/Shared is nobody's.
 MAC_HOME = re.compile(r"^/Users/(?!Shared(?:/|$))[^/]+(?=/|$)")

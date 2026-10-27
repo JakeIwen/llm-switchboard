@@ -6,7 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 
-from .host_protocol import host_name
+from .host_protocol import SEARCH_PORT, host_name
 from . import local_config
 
 
@@ -17,6 +17,10 @@ def add_parsers(sub) -> None:
         parser.set_defaults(func=dispatch, host_command=name)
     local = local_config.load()
     pi, mac = local[local_config.PI_SSH], local[local_config.MAC_NAME]
+    parser = sub.add_parser("host-search", help="serve Mac transcript search on loopback for its browser")
+    parser.add_argument("--host-name", default=mac, type=host_name, help=f"default {mac}, from local.env")
+    parser.add_argument("--port", type=int, default=SEARCH_PORT, help=f"loopback port (default {SEARCH_PORT})")
+    parser.set_defaults(func=dispatch, host_command="host-search")
     for name in ("host-agent", "host-install"):
         parser = sub.add_parser(name, help="publish Mac sessions outward" if name == "host-agent" else "install the Mac launchd publisher")
         parser.add_argument("--pi", default=pi, help=f"existing SSH host alias (default {pi}, from local.env)")
@@ -46,6 +50,9 @@ def dispatch(args) -> int:
         elif args.host_command == "host-authorize":
             from .host_authorize import authorize
             print(authorize(args.host, sys.stdin.buffer.read(16385)))
+        elif args.host_command == "host-search":
+            from .mac_search_server import serve
+            serve(args.host_name, port=args.port, origins=local_config.page_origins(local_config.load()))
         elif args.host_command == "host-install":
             from .host_launchd import install
             print(install(args.pi, args.host_name, args.identity.expanduser().resolve(), unload=args.unload))

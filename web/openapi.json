@@ -398,12 +398,17 @@
           "online": {
             "title": "Online",
             "type": "boolean"
+          },
+          "search_url": {
+            "title": "Search Url",
+            "type": "string"
           }
         },
         "required": [
           "host",
           "online",
-          "last_seen"
+          "last_seen",
+          "search_url"
         ],
         "title": "HostStatus",
         "type": "object"
