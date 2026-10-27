@@ -16,6 +16,12 @@ if [ ! -f "$key" ]; then
 fi
 ssh "$pi" /home/pi/dev/llm-switchboard/bin/llm-switchboard host-authorize "$mac" < "$key.pub"
 cd "$repo"
+# bin/llm-switchboard prefers .venv's Python; without it, bare python3 may be macOS's 3.9.
+UV_PYTHON_PREFERENCE=only-system uv sync --frozen --python "$python"
+mkdir -p "$HOME/.local/bin"
+ln -sf "$repo/bin/llm-switchboard" "$HOME/.local/bin/llm-switchboard"
 "$python" -m llm_switchboard host-agent --once
+"$python" -m llm_switchboard index
 "$python" -m llm_switchboard host-install
 launchctl print "gui/$(id -u)/dev.llm-switchboard.host-agent"
+launchctl print "gui/$(id -u)/dev.llm-switchboard.search-index"

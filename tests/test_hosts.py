@@ -2,6 +2,7 @@ import base64
 import io
 import json
 import os
+import plistlib
 from pathlib import Path
 import struct
 import subprocess
@@ -14,7 +15,7 @@ from llm_switchboard.host_agent import HostAgent
 from llm_switchboard.mac_action_runner import MacActionRunner
 from llm_switchboard.host_authorize import authorize
 from llm_switchboard.host_exchange import exchange
-from llm_switchboard.host_launchd import job
+from llm_switchboard.host_launchd import LABEL, SEARCH_LABEL, install, job
 from llm_switchboard.host_protocol import MAX_METADATA_BYTES, MAX_ROWS
 from llm_switchboard.hosts import Hosts, host_display_path
 from llm_switchboard.codex_threads import thread_from_api
@@ -232,3 +233,25 @@ class HostTests(unittest.TestCase):
         self.assertIn("host-agent", config["ProgramArguments"])
         self.assertNotIn("serve", config["ProgramArguments"])
         self.assertTrue(config["KeepAlive"])
+
+    @unittest.skipUnless(sys.platform == "darwin", "host-install refuses to run off the Mac")
+    def test_host_install_loads_and_unloads_the_publisher_and_search_indexer(self):
+        calls, bootstrap_failures = [], [1]
+
+        def launchctl(args, **kw):
+            calls.append(args)
+            # launchd refuses one bootstrap while the job it just booted out is still going away.
+            failed = args[1] == "bootstrap" and bootstrap_failures and bootstrap_failures.pop()
+            return subprocess.CompletedProcess(args, 5 if failed else 0, b"", b"")
+
+        key = self.root / "key"
+        key.write_text("fixture key")
+        install("pi", "mac", key, home=self.root, run=launchctl)
+        agents = self.root / "Library" / "LaunchAgents"
+        for label in (LABEL, SEARCH_LABEL):
+            self.assertEqual(plistlib.loads((agents / f"{label}.plist").read_bytes())["Label"], label)
+            self.assertIn(["launchctl", "bootstrap", f"gui/{os.getuid()}", str(agents / f"{label}.plist")], calls)
+        calls.clear()
+        install("pi", "mac", key, unload=True, home=self.root, run=launchctl)
+        self.assertEqual([args[-1] for args in calls],
+                         [f"gui/{os.getuid()}/{SEARCH_LABEL}", f"gui/{os.getuid()}/{LABEL}"])

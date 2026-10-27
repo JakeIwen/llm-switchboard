@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from llm_switchboard.host_launchd import LABEL, job
+from llm_switchboard.host_launchd import LABEL, SEARCH_LABEL, job, search_job
 
 
 PACKAGE = Path(__file__).resolve().parents[1] / "llm_switchboard"
@@ -92,6 +92,18 @@ class LaunchContractTest(unittest.TestCase):
         self.assertEqual(spec["WorkingDirectory"], str(repo))
         self.assertEqual(spec["ProgramArguments"][:4], ["/python3", "-m", "llm_switchboard", "host-agent"])
         self.assertEqual(spec["EnvironmentVariables"]["HOME"], str(home))
+
+    def test_search_index_job_runs_the_indexer_at_background_priority(self):
+        repo = Path("/checkout/llm-switchboard")
+        home = Path("/Users/example")
+        spec = search_job(home, "/python3", repo)
+        self.assertEqual(spec["Label"], SEARCH_LABEL)
+        self.assertEqual(spec["WorkingDirectory"], str(repo))
+        self.assertEqual(spec["ProgramArguments"], ["/python3", "-m", "llm_switchboard", "index", "--quiet"])
+        self.assertEqual(spec["EnvironmentVariables"], job("pi", "mac", home, home, "/python3", repo)["EnvironmentVariables"])
+        self.assertEqual((spec["Nice"], spec["LowPriorityIO"], spec["ProcessType"]), (19, True, "Background"))
+        self.assertLessEqual(spec["StartInterval"], 60)
+        self.assertTrue(spec["StandardErrorPath"].startswith(f"{home}/Library/Logs/llm-switchboard/"))
 
 
 if __name__ == "__main__":

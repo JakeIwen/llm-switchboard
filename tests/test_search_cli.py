@@ -80,6 +80,16 @@ class SearchCliTest(unittest.TestCase):
         self.assertEqual((code, output), (3, ""))
         self.assertIn("isn't built yet", self.errors)
 
+    def test_quiet_index_prints_only_when_a_transcript_changed(self):
+        # The Mac's launchd job runs `index --quiet` every 30 s into a log file.
+        with patch("llm_switchboard.search_cli.PROJECTS_DIR", self.root / "claude" / "projects"), \
+                patch("llm_switchboard.search_cli.CODEX_DIR", self.root / "codex"):
+            self.assertEqual(self.run_cli("index", "--quiet"), (0, ""))
+            append_jsonl(claude_path(self.root), claude_records())
+            code, output = self.run_cli("index", "--quiet")
+        self.assertEqual(code, 0)
+        self.assertIn("1 changed", output)
+
     def test_the_command_line_search_does_not_import_the_web_app(self):
         # llmsearch.sh and serve's 30 s indexer start this command each time.
         with tempfile.TemporaryDirectory() as home:

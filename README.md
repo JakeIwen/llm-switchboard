@@ -144,11 +144,13 @@ HH:MM` after 35 s without a push, and the Mac's rows grey out.
 - **Empty Pi trash now** leaves the Mac's trash alone.
 
 Setting up the Mac: clone this repo there and run `scripts/setup-mac.sh`
-(Homebrew Python 3.11+). It reads the machine names from `local.env`, makes
+(Homebrew Python 3.11+ and uv). It reads the machine names from `local.env`, makes
 the key `~/.ssh/llm-switchboard-<mac>`, installs it with
 `ssh <pi> …/llm-switchboard host-authorize <mac> < key.pub`
-over the normal SSH login, does one push, and loads the launchd job
-`dev.llm-switchboard.host-agent` (logs in `~/Library/Logs/llm-switchboard/`).
+over the normal SSH login, creates `.venv` and links `bin/llm-switchboard`
+into `~/.local/bin`, does one push and the first index build, and loads the
+launchd jobs `dev.llm-switchboard.host-agent` and
+`dev.llm-switchboard.search-index` (logs in `~/Library/Logs/llm-switchboard/`).
 The Pi keeps what the Mac pushed, and the action queue, in
 `~/.local/share/llm-switchboard/hosts/<mac>.json`.
 
@@ -191,7 +193,11 @@ over 5 s is stopped; add a more specific word.
 The index is `~/.local/share/llm-switchboard/transcript-search.sqlite3`.
 `serve` updates it every 30 s in a low-priority child process that reads only
 what was appended; the first build reads every transcript and takes a while
-(the line under the search box says so). Thinking, tool calls, tool output,
+(the line under the search box says so). The Mac keeps its own index of its
+own transcripts, updated every 30 s by the `dev.llm-switchboard.search-index`
+launchd job that `host-install` loads; search it there with
+`llm-switchboard search` or `llmsearch`. Neither the index nor its results
+leave the Mac. Thinking, tool calls, tool output,
 injected instructions and Codex subagents are left out: they are nearly all
 of the bytes. `llmsearch` (in Jacob's scripts repo) searches this index
 through `search --json`; `llmsearch --grep` greps the transcripts instead,
@@ -241,14 +247,14 @@ llm-switchboard new ~/dev/obd-things "what it's for"
 llm-switchboard new ~/dev/obd-things "logger" --codex "add a logger"   # a Codex session
 llm-switchboard fork c96934f7 "try another approach" [--folder ~/dev] [--keep]
 llm-switchboard search '"some phrase" by:me tool:codex' [--limit 20] [--session codex:019f] [--json]
-llm-switchboard index                # update the transcript index now
+llm-switchboard index [--quiet]      # update the transcript index now (--quiet: print only if something changed)
 llm-switchboard stop-all             # kill the tmux server
 llm-switchboard openapi              # the HTTP API's schema as JSON; starts nothing
 llm-switchboard host-authorize mac < key.pub   # install a Mac's restricted key (run over SSH)
 llm-switchboard host-exchange mac  # the restricted key's forced command (JSON on stdin)
 # On the Mac (python3 -m llm_switchboard …):
 #   host-agent [--once] [--pi PI] [--host-name MAC] [--identity ~/.ssh/llm-switchboard-MAC]
-#   host-install [--unload]           # write and load (or unload) the launchd job
+#   host-install [--unload]           # write and load (or unload) the publisher and search-index jobs
 journalctl --user -u llm-switchboard -f
 ```
 

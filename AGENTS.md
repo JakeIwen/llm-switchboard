@@ -77,7 +77,7 @@ Sharing the socket would let its supervisor close the real windows.
 | `llm_switchboard/host_web.py` | The `/api/hosts/<host>/sessions/<id>/<action>` route |
 | `llm_switchboard/host_cli.py` | `host-exchange`, `host-authorize`, `host-agent`, `host-install` (light imports; `__main__` dispatches them before cli.py) |
 | `llm_switchboard/host_agent.py`, `host_transport.py` | Mac side: the 10 s push loop, and bounded `ssh` I/O |
-| `llm_switchboard/host_launchd.py` | Mac side: the launchd job (`dev.llm-switchboard.host-agent`) |
+| `llm_switchboard/host_launchd.py` | Mac side: the launchd jobs, the publisher (`dev.llm-switchboard.host-agent`) and the 30 s background transcript indexer (`dev.llm-switchboard.search-index`) |
 | `llm_switchboard/mac_catalog.py`, `mac_registry.py` | Mac side: metadata-only rows (titles, no prompt fields), macOS live-process check |
 | `llm_switchboard/mac_actions.py`, `mac_action_runner.py` | Mac side: running allowed actions with its own checks; the durable ledger that never repeats one |
 | `llm_switchboard/mac_uploads.py` | Mac side: the one transcript export path (notification, log, 10/hour quota) |
@@ -108,7 +108,7 @@ Sharing the socket would let its supervisor close the real windows.
 | `llm_switchboard/cli.py` | argparse entry point |
 | `tests/fake_codex.py` | In-memory Codex daemon for the unit and browser tests |
 | `systemd/`, `install.sh` | User unit template and installer |
-| `scripts/setup-mac.sh` | Mac setup: key, `host-authorize` over SSH, one push, launchd job |
+| `scripts/setup-mac.sh` | Mac setup: key, `host-authorize` over SSH, one push, `.venv`, the `llm-switchboard` link, launchd jobs |
 | `scripts/check_layout.py`, `scripts/backend_layout/` | Repo-owned read-only layout checker; `.codeshape/config.json` declares its scope |
 | `tests/test_settings.py`, `web/src/settings/settingsFields.test.ts` | Settings persistence, CLI, manual-launch isolation, and page field/polling contracts |
 | `tests/test_architecture.py` | Enforced pure-owner imports, Mac/Pi separation, rendered systemd and launchd targets, checkout wrapper |
@@ -118,7 +118,7 @@ Sharing the socket would let its supervisor close the real windows.
 | Path | Caller | Owner |
 | --- | --- | --- |
 | `bin/llm-switchboard` | Pi systemd, installed CLI link, SSH forced command (runs `.venv/bin/python` when present) | `llm_switchboard/__main__.py` |
-| `python3 -m llm_switchboard` | Mac launchd, Mac setup, search index child, shell callers | `llm_switchboard/__main__.py` (light host/search dispatch), `cli.py` |
+| `python3 -m llm_switchboard` | Mac launchd (host agent, search index), Mac setup, search index child, shell callers | `llm_switchboard/__main__.py` (light host/search dispatch), `cli.py` |
 | `systemd/llm-switchboard.service` | `install.sh` template input | `install.sh` |
 | `install.sh` | Pi operator installation | `systemd/llm-switchboard.service` and `bin/llm-switchboard` |
 | `scripts/setup-mac.sh` | Mac operator setup | `llm_switchboard/host_cli.py`, `host_launchd.py` |
@@ -211,9 +211,14 @@ the report instead of leaving it silently stale.
   its exit 3 (no index built yet), so keep both stable. A Codex rollout is
   named by its first `session_meta` (forks copy their ancestors' after it),
   a Claude transcript by its file name. Indexing runs only in `serve`'s niced child
-  (`search_process.py`), never in the supervisor or a request thread; after
-  changing what is extracted, rebuild: stop the service and delete
-  `transcript-search.sqlite3*`.
+  (`search_process.py`) on the Pi and in the `dev.llm-switchboard.search-index`
+  launchd job (`index --quiet`, background priority) on the Mac, never in the
+  supervisor or a request thread; after changing what is extracted, rebuild:
+  stop the indexer (the service; on the Mac, `launchctl bootout` the job, and
+  `host-install` loads it again) and delete `transcript-search.sqlite3*`. Each machine indexes and searches only
+  its own transcripts: the Mac's index, its text and its search results never
+  go to the Pi, whose page matches Mac sessions by title and folder only
+  (`remote_title_matches` in search_api.py).
 - Manual resume commands use `claude_command` / `codex_command` from install settings
   (`STATE_DIR/settings.json`, normally `~/.config/llm-switchboard/settings.json`).
   These settings never change the supervisor's `claudepd` launch function. Search

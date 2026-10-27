@@ -30,6 +30,8 @@ def add_parsers(sub) -> None:
     s.set_defaults(func=_search)
 
     s = sub.add_parser("index", help="update the transcript search index now")
+    s.add_argument("--quiet", action="store_true",
+                   help="print nothing unless a transcript changed (the Mac's launchd job)")
     s.set_defaults(func=_index)
 
 
@@ -38,7 +40,7 @@ def _search(args) -> int:
 
 
 def _index(args) -> int:
-    return run_index_command(SEARCH_INDEX_FILE, PROJECTS_DIR, CODEX_DIR)
+    return run_index_command(SEARCH_INDEX_FILE, PROJECTS_DIR, CODEX_DIR, quiet=args.quiet)
 
 
 def run_search(args, index_file: Path, format_age) -> int:
@@ -88,8 +90,10 @@ def run_search(args, index_file: Path, format_age) -> int:
     return 0
 
 
-def run_index_command(index_file: Path, projects_dir: Path, codex_dir: Path) -> int:
+def run_index_command(index_file: Path, projects_dir: Path, codex_dir: Path, *, quiet=False) -> int:
     stats = run_index(index_file, projects_dir, codex_dir)
+    if quiet and not (stats.changed or stats.removed):
+        return 0
     if stats.already_running:
         print("Transcript indexing is already running.")
     else:
