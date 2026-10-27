@@ -56,7 +56,9 @@ def _run_locked(index_file: Path, claude_projects: Path, codex_dir: Path,
             did_change, read = _index_file(conn, tool, path)
             changed += int(did_change)
             bytes_read += read
-            if pause_s:
+            # Yield only after reading: unchanged files cost a stat and one query, and
+            # macOS's background throttling stretches each short sleep several-fold.
+            if pause_s and did_change:
                 time.sleep(pause_s)
         for stale in known - seen:
             conn.execute("DELETE FROM files WHERE path=?", (stale,))
