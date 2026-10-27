@@ -201,6 +201,11 @@ the report instead of leaving it silently stale.
   own browser through `host-search` on loopback, never the Pi: the HTTPS picker
   fetches it directly with CORS restricted by `LLM_SWITCHBOARD_PAGE_ORIGINS` in
   the Mac's `local.env` (comma-separated full origins; empty allows none).
+  The HTTPS picker is Tailscale Serve on the Pi (`sudo tailscale serve --bg
+  8777`, persisted by tailscaled; `tailscale serve status`), proxying to
+  127.0.0.1:8777. Chrome blocks loopback fetches from plain-http pages, so the
+  `http://…:8777` address keeps working but never shows Mac text. The Pi doesn't
+  use Tailscale DNS, so test it with `curl --resolve <name>:443:<tailscale ip>`.
 - Transcript search indexes only your prompts and the visible replies:
   Claude's through `prompt_text`/`reply_text` (transcripts.py), Codex's from
   its event stream (`user_message`/`agent_message`, or `item_completed`
