@@ -3,6 +3,10 @@ import { Button, Text } from '@mantine/core'
 import { IconArrowLeft } from '@tabler/icons-react'
 import { getJson } from '../../api/client'
 import type { SessionRow as Row } from '../../api/sessionRow'
+import type { HostStatus } from '../../api/sessionsPayload'
+import type { TranscriptHit } from '../../search/transcriptResults'
+import { getMacMatchContexts, type MatchContexts } from './macSearch'
+import { useTranscriptSearch } from './useTranscriptSearch'
 import { age, plural } from '../../format/format'
 import { transcriptIndexStatus, type TranscriptIndexStatus } from '../../search/sessionQuery'
 import { SessionRow } from './SessionRow'
@@ -11,33 +15,12 @@ import type { RowHandlers } from './SessionList'
 import type { RowNotice } from './useHostActions'
 import './TranscriptResults.css'
 
-export interface TranscriptResult {
-  tool: string
-  id: string
-  short_id: string
-  title: string
-  cwd: string
-  project: string
-  mtime: number
-  count: number
-  matched_at: number
-  excerpt: string
-  resume_cmd: string
-  host: string
-  title_only?: boolean
-}
-
-interface ContextLine {
-  role: string
-  text: string
-  match: boolean
-}
-
 interface Props extends RowHandlers {
   /** The submitted query; editing the box doesn't search until Enter. */
   query: string
   ignored: readonly string[]
   rows: readonly Row[]
+  hosts: readonly HostStatus[]
   expanded: ReadonlySet<string>
   selected: ReadonlySet<string>
   now: number
@@ -50,14 +33,19 @@ interface Props extends RowHandlers {
   onCopied: (ok: boolean) => void
 }
 
-type Results = { results: TranscriptResult[] } | { error: string } | null
-
-function Context({ hit, query }: { hit: TranscriptResult; query: string }) {
-  const [state, setState] = useState<{ contexts: { lines: ContextLine[] }[] } | { error: string } | null>(null)
+function Context({ hit, query }: { hit: TranscriptHit; query: string }) {
+  const [state, setState] = useState<MatchContexts | { error: string } | null>(null)
   useEffect(() => {
-    getJson<{ detail: { contexts: { lines: ContextLine[] }[] } }>(`/api/search/${hit.tool}/${hit.id}?q=${encodeURIComponent(query)}`)
-      .then((d) => setState({ contexts: d.detail.contexts }))
-      .catch((e: Error) => setState({ error: `Couldn't load matching context: ${e.message}` }))
+    const abort = new AbortController()
+    setState(null)
+    const request = hit.mac
+      ? getMacMatchContexts(hit.mac.searchUrl, hit.tool, hit.mac.sessionId, query, abort.signal)
+      : getJson<{ detail: MatchContexts }>(`/api/search/${hit.tool}/${hit.id}?q=${encodeURIComponent(query)}`, abort.signal)
+    request.then((data) => { if (!abort.signal.aborted) setState({ contexts: data.detail.contexts }) })
+      .catch((error: Error) => {
+        if (!abort.signal.aborted) setState({ error: `Couldn't load matching context: ${error.message}` })
+      })
+    return () => abort.abort()
   }, [hit, query])
   if (state === null) return <Text size="xs" c="dimmed">Loading matches…</Text>
   if ('error' in state) return <p className="transcript-error">{state.error}</p>
@@ -78,7 +66,7 @@ function Context({ hit, query }: { hit: TranscriptResult; query: string }) {
   )
 }
 
-function Hit({ hit, now, query }: { hit: TranscriptResult; now: number; query: string }) {
+function Hit({ hit, now, query }: { hit: TranscriptHit; now: number; query: string }) {
   const [open, setOpen] = useState(false)
   return (
     <div className="transcript-hit">
@@ -101,19 +89,8 @@ function Hit({ hit, now, query }: { hit: TranscriptResult; now: number; query: s
 /** Transcripts mode: a scope line in place of the filters, and each matching
     session as an ordinary row with its match count and excerpt. */
 export function TranscriptResults(p: Props) {
-  const [results, setResults] = useState<Results>(null)
+  const { results, macFailed } = useTranscriptSearch(p.query, p.hosts)
   const [index, setIndex] = useState<TranscriptIndexStatus | null>(null)
-  useEffect(() => {
-    if (!p.query) return setResults(null)
-    const abort = new AbortController()
-    setResults(null)
-    getJson<{ results: TranscriptResult[] }>(`/api/search?q=${encodeURIComponent(p.query)}`, abort.signal)
-      .then((d) => setResults({ results: d.results }))
-      .catch((e: Error) => {
-        if (!abort.signal.aborted) setResults({ error: `Transcript search failed: ${e.message}` })
-      })
-    return () => abort.abort()
-  }, [p.query])
   useEffect(() => {
     getJson<{ index: TranscriptIndexStatus }>('/api/search/status')
       .then((d) => setIndex(d.index))
@@ -137,6 +114,11 @@ export function TranscriptResults(p: Props) {
             {' · '}
             {index?.state === 'ready' ? `index updated ${age(index.last_updated, p.now) || 'just now'}` : indexText}
           </span>
+          {macFailed && (
+            <span title="The Mac search endpoint didn't answer. Mac sessions are matched by title or folder only.">
+              {' · Mac: titles only'}
+            </span>
+          )}
         </Text>
       </div>
       {p.ignored.length > 0 && <p className="transcript-ignored">Ignored inside transcripts: {p.ignored.join(' · ')}</p>}

@@ -150,6 +150,7 @@ export function PickerPage() {
           query={filters.submitted}
           ignored={filters.ignored}
           rows={filters.rows}
+          hosts={data.hosts}
           pollKey={data.now}
           onBack={filters.backToSessions}
           onCopied={act.copied}
