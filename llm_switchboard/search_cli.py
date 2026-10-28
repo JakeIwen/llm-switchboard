@@ -25,6 +25,10 @@ def add_parsers(sub) -> None:
     s.add_argument("query", nargs="+", help="words, phrases and filters to search for")
     s.add_argument("--session", metavar="TOOL:ID", help="show matching excerpts in one result")
     s.add_argument("--limit", type=int, default=20, help="maximum sessions to show (default 20)")
+    s.add_argument("-B", "--before", type=_nonnegative_int, metavar="N",
+                   help="include N lines before matches within the matching entry")
+    s.add_argument("-A", "--after", type=_nonnegative_int, metavar="N",
+                   help="include N lines after matches within the matching entry")
     s.add_argument("--json", action="store_true",
                    help="one JSON object per result, for scripts; exits 3 until the index is built")
     s.set_defaults(func=_search)
@@ -33,6 +37,16 @@ def add_parsers(sub) -> None:
     s.add_argument("--quiet", action="store_true",
                    help="print nothing unless a transcript changed (the Mac's launchd job)")
     s.set_defaults(func=_index)
+
+
+def _nonnegative_int(value: str) -> int:
+    try:
+        number = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("expected a non-negative integer") from None
+    if number < 0:
+        raise argparse.ArgumentTypeError("expected a non-negative integer")
+    return number
 
 
 def _search(args) -> int:
@@ -47,7 +61,9 @@ def run_search(args, index_file: Path, format_age) -> int:
     raw = " ".join(args.query)
     handlers = SearchHandlers(index_file)
     try:
-        payload = handlers.results(raw, limit=max(200 if args.session else 1, args.limit))
+        payload = handlers.results(raw, limit=max(200 if args.session else 1, args.limit),
+                                   before=None if args.session else getattr(args, "before", None),
+                                   after=None if args.session else getattr(args, "after", None))
     except QueryError as exc:
         print(f"search: {exc}", file=sys.stderr)
         return 2
@@ -85,7 +101,8 @@ def run_search(args, index_file: Path, format_age) -> int:
         stamp = format_age(result["matched_at"])
         print(f"{result['tool']:<6} {result['short_id']}  {stamp:>4}  {result['count']:>3}  "
               f"{result['project']}  {result['title']}")
-        print(f"       {result['excerpt']}")
+        for line in result.get("context", result["excerpt"]).split("\n"):
+            print(f"       {line}")
         print(f"       {result['resume_cmd']}")
     return 0
 

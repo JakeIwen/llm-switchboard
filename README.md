@@ -257,6 +257,7 @@ llm-switchboard new ~/dev/obd-things "what it's for"
 llm-switchboard new ~/dev/obd-things "logger" --codex "add a logger"   # a Codex session
 llm-switchboard fork c96934f7 "try another approach" [--folder ~/dev] [--keep]
 llm-switchboard search '"some phrase" by:me tool:codex' [--limit 20] [--session codex:019f] [--json]
+llm-switchboard search --json --before 2 --after 3 -- 'retry'   # line context in the latest matching entry
 llm-switchboard index [--quiet]      # update the transcript index now (--quiet: print only if something changed)
 llm-switchboard stop-all             # kill the tmux server
 llm-switchboard openapi              # the HTTP API's schema as JSON; starts nothing
@@ -270,6 +271,17 @@ journalctl --user -u llm-switchboard -f
 ```
 
 Ids can be any unique prefix; Codex sessions also go by the short id `list` shows.
+
+For `search`, `-B N` / `--before N` and `-A N` / `--after N` include that many
+lines before and after each matching line within the latest matching prompt or
+reply, not neighboring messages. Counts must be non-negative; an omitted side is
+zero. Overlapping or adjacent windows merge; separate groups have a `--` line.
+Lines longer than 300 characters show a 300-character window with `…` where cut,
+keeping a matching term visible. When line matching cannot locate a term (for
+example, an accent-insensitive index match), the normal excerpt is used instead.
+With either flag, `--json` adds a `context` string to each result; plain output
+prints those lines in place of the excerpt. With neither flag, output and JSON
+keys stay unchanged. `--session` ignores these flags.
 
 ## States
 

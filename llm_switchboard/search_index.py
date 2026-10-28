@@ -7,7 +7,8 @@ import time
 from .codex_threads import codex_short_id
 from .launcher import codex_resume_command, resume_command
 from .search_query import SearchQuery, fts_literal
-from .search_records import IndexState, SearchContext, SearchDetail, SearchResult, SearchStatus, SearchTool
+from .search_records import (IndexState, SearchContext, SearchDetail, SearchResultWithContext,
+                             SearchStatus, SearchTool)
 from .session_id import short_id
 from .transcripts import display_path
 
@@ -16,6 +17,8 @@ _QUERY_TIMEOUT_S = 5.0
 # The indexer's last close checkpoints the WAL under an exclusive lock, which
 # a loaded SD card can hold for a moment; readers wait rather than fail.
 _READ_LOCK_WAIT_S = 2.0
+_CONTEXT_LINE_LENGTH = 300
+_CONTEXT_MATCH_LEAD = 100
 
 
 class SearchTimeout(RuntimeError):
@@ -154,7 +157,8 @@ class TranscriptSearch:
             "error": meta.get("error", ""),
         }
 
-    def search(self, query: SearchQuery, limit: int = 50) -> list[SearchResult]:
+    def search(self, query: SearchQuery, limit: int = 50, *, before: int | None = None,
+               after: int | None = None) -> list[SearchResultWithContext]:
         if not self.path.is_file():
             return []
         try:
@@ -164,7 +168,7 @@ class TranscriptSearch:
             if "interrupted" in str(exc).lower():
                 raise SearchTimeout("query took too long; add a more specific word or phrase") from exc
             return []
-        return [_result(row, query.positive_terms) for row in rows]
+        return [_result(row, query.positive_terms, before=before, after=after) for row in rows]
 
     def detail(self, query: SearchQuery, tool: str, session_id: str) -> SearchDetail | None:
         if tool not in {item.value for item in SearchTool} or not self.path.is_file():
@@ -290,12 +294,13 @@ def _term_sessions(query: SearchQuery, term) -> tuple[str, list]:
     return sql, params
 
 
-def _result(row: sqlite3.Row, terms=()) -> SearchResult:
+def _result(row: sqlite3.Row, terms=(), *, before: int | None = None,
+            after: int | None = None) -> SearchResultWithContext:
     tool = row["tool"]
     session_id = row["session_id"]
     cwd = row["cwd"] or ""
     command = codex_resume_command(session_id, cwd) if tool == SearchTool.CODEX.value else resume_command(session_id, cwd)
-    return {
+    result: SearchResultWithContext = {
         "tool": tool,
         "id": session_id,
         "short_id": codex_short_id(session_id) if tool == SearchTool.CODEX.value else short_id(session_id),
@@ -310,6 +315,9 @@ def _result(row: sqlite3.Row, terms=()) -> SearchResult:
         "host": "",
         "title_only": False,
     }
+    if before is not None or after is not None:
+        result["context"] = line_context(row["text"], terms, before=before or 0, after=after or 0)
+    return result
 
 
 def excerpt(text: str, terms=(), radius: int = 90) -> str:
@@ -320,6 +328,48 @@ def excerpt(text: str, terms=(), radius: int = 90) -> str:
     at = min(positions) if positions else 0
     start, end = max(0, at - radius), min(len(flat), at + radius + 90)
     return ("…" if start else "") + flat[start:end] + ("…" if end < len(flat) else "")
+
+
+def line_context(text: str, terms=(), *, before: int = 0, after: int = 0) -> str:
+    """Grep-style line windows within the matching entry, not adjacent messages."""
+    lines = text.split("\n")
+    folded_terms = [(term.text if hasattr(term, "text") else str(term)).casefold() for term in terms]
+    positions: list[int | None] = []
+    windows: list[tuple[int, int]] = []
+    for index, line in enumerate(lines):
+        lines[index] = line = line.rstrip("\r")
+        folded = line.casefold()
+        hits = [folded.find(term) for term in folded_terms]
+        at = min((hit for hit in hits if hit >= 0), default=None)
+        positions.append(at)
+        if at is None:
+            continue
+        start, end = max(0, index - before), min(len(lines), index + after + 1)
+        if windows and start <= windows[-1][1]:
+            windows[-1] = (windows[-1][0], end)
+        else:
+            windows.append((start, end))
+    if not windows:
+        return excerpt(text, terms)
+    return "\n--\n".join(
+        "\n".join(_context_line(lines[index], positions[index]) for index in range(start, end))
+        for start, end in windows
+    )
+
+
+def _context_line(line: str, folded_at: int | None) -> str:
+    if len(line) <= _CONTEXT_LINE_LENGTH:
+        return line
+    at = 0
+    if folded_at is not None:
+        # Casefold can expand characters (ß → ss); its offsets are not text offsets.
+        for at, char in enumerate(line):
+            folded_at -= len(char.casefold())
+            if folded_at < 0:
+                break
+    start = min(max(0, at - _CONTEXT_MATCH_LEAD), len(line) - _CONTEXT_LINE_LENGTH)
+    end = start + _CONTEXT_LINE_LENGTH
+    return ("…" if start else "") + line[start:end] + ("…" if end < len(line) else "")
 
 
 def _context(conn: sqlite3.Connection, match: sqlite3.Row, terms=()) -> SearchContext:

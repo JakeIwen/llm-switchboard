@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import TypedDict
+from typing import NotRequired, TypedDict
 
 
 class SearchTool(str, Enum):
@@ -62,6 +62,12 @@ class SearchResult(TypedDict):
     resume_cmd: str
     host: str
     title_only: bool
+
+
+class SearchResultWithContext(SearchResult):
+    """CLI-only extension; HTTP projections keep the original SearchResult schema."""
+
+    context: NotRequired[str]
 
 
 class ContextLine(TypedDict):

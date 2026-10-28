@@ -24,10 +24,11 @@ class SearchHandlers:
     def status(self) -> dict:
         return {"index": self.index.status()}
 
-    def results(self, raw_query: str, session_rows=(), limit: int = 50) -> dict:
+    def results(self, raw_query: str, session_rows=(), limit: int = 50, *,
+                before: int | None = None, after: int | None = None) -> dict:
         query = parse_query(raw_query)
         try:
-            local = self.index.search(query, limit=limit)
+            local = self.index.search(query, limit=limit, before=before, after=after)
         except SearchTimeout as exc:
             raise QueryError(str(exc)) from exc
         current = self.settings_provider()
