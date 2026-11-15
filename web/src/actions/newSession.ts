@@ -22,19 +22,33 @@ function requestBody(values: FieldValues, codexOn: boolean): object {
     cwd: String(values.cwd), name: String(values.name), ...(codexOn ? { prompt: String(values.prompt || '') } : {}) }
 }
 
+/**
+ * A short note on the folders Claude Code can't use: each reason once, with its
+ * folder count, and the paths behind a details popover. (The server leaves out
+ * folders that no longer exist.)
+ */
+function blockedNote(folders: NewSessionFolder[], codexOn: boolean): Pick<FormField, 'description' | 'details'> {
+  const blocked = folders.filter((folder) => folder.blocked)
+  if (!blocked.length) return {}
+  const byReason = new Map<string, NewSessionFolder[]>()
+  for (const folder of blocked) byReason.set(folder.blocked, [...(byReason.get(folder.blocked) ?? []), folder])
+  const groups = [...byReason].map(([reason, group]) =>
+    `${group.length === 1 ? group[0].project : plural(group.length, 'folder')} (${reason})`)
+  return {
+    description: `${codexOn ? 'Not offered to Claude Code' : 'Not offered'}: ${groups.join('; ')}`,
+    details: blocked.length > 1 ? { label: 'Which folders?', lines: blocked.map((folder) => folder.project) } : undefined,
+  }
+}
+
 function creationForm(ctx: ActionContext, folders: NewSessionFolder[], codexOn: boolean, options: NewSessionOptions): FormOptions {
   const usable = folders.filter((folder) => !folder.blocked || (codexOn && !folder.codex_blocked))
-  const blocked = folders.filter((folder) => folder.blocked)
   // One line of explanation; the rest sits with the field it explains.
   const ready = ctx.payload()?.notifications ? " You'll get a notification when it's ready." : ''
   const body = [codexOn
     ? `Claude Code starts with Remote Control on and is kept running.${ready} Codex starts working on its first message at once, without asking for approvals.`
     : `Starts with Remote Control on and is kept running.${ready}`]
-  const notOffered = blocked.length
-    ? `${codexOn ? 'Not offered to Claude Code' : 'Not offered'}: ${blocked.map((folder) => `${folder.project} (${folder.blocked})`).join('; ')}`
-    : undefined
   const fields: FormField[] = [
-    { kind: 'select', key: 'cwd', label: 'Folder', description: notOffered,
+    { kind: 'select', key: 'cwd', label: 'Folder', ...blockedNote(folders, codexOn),
       value: usable.find((folder) => folder.project === options.preferredFolder || folder.cwd === options.preferredFolder)?.cwd || usable[0]?.cwd,
       options: usable.map((folder) => ({ value: folder.cwd, label: `${folder.project}  (${plural(folder.sessions, 'session')})` })) },
     { kind: 'text', key: 'name', label: 'Name', required: true, autofocus: true, maxLength: MAX_NAME_LENGTH, placeholder: 'What is this session for?' },

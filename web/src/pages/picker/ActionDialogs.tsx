@@ -1,5 +1,5 @@
-import { useCallback, useMemo, useRef, useState, type FormEvent } from 'react'
-import { Autocomplete, Button, Checkbox, Group, Modal, Select, Text, Textarea, TextInput } from '@mantine/core'
+import { useCallback, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
+import { Anchor, Autocomplete, Button, Checkbox, Group, Modal, Popover, Select, Text, Textarea, TextInput } from '@mantine/core'
 import type {
   ActionUi,
   ConfirmOptions,
@@ -35,8 +35,39 @@ const incomplete = (options: FormOptions, values: FieldValues) =>
     (f) => f.kind !== 'checkbox' && f.kind !== 'select' && f.required && visible(f, values) && !String(values[f.key] ?? '').trim(),
   )
 
+/** A link that opens details in a popover on tap or click (no hover-only content). */
+function DetailsLink({ details }: { details: NonNullable<FormField['details']> }) {
+  const [opened, setOpened] = useState(false)
+  // Escape closes only the popover. The Modal listens on window in the capture
+  // phase and would discard the form; it skips events whose target carries
+  // data-mantine-stop-propagation, so both ends of the popover carry it while open.
+  const closeOnEscape = (event: KeyboardEvent) => {
+    if (opened && event.key === 'Escape') setOpened(false)
+  }
+  const keepModal = { 'data-mantine-stop-propagation': opened || undefined, onKeyDown: closeOnEscape }
+  return (
+    <Popover opened={opened} onChange={setOpened} closeOnEscape={false} position="bottom-start" withinPortal shadow="md">
+      <Popover.Target>
+        <Anchor component="button" type="button" size="xs" onClick={() => setOpened((o) => !o)} {...keepModal}>
+          {details.label}
+        </Anchor>
+      </Popover.Target>
+      <Popover.Dropdown className="dialog-details" {...keepModal}>
+        <ul className="dialog-items">
+          {details.lines.map((line) => <li key={line}>{line}</li>)}
+        </ul>
+      </Popover.Dropdown>
+    </Popover>
+  )
+}
+
+function Description({ field }: { field: FormField }) {
+  if (!field.details) return field.description
+  return <>{field.description} <DetailsLink details={field.details} /></>
+}
+
 function Field({ field, value, onChange }: { field: FormField; value: string | boolean; onChange: (v: string | boolean) => void }) {
-  const common = { label: field.label, description: field.description }
+  const common = { label: field.label, description: field.description ? <Description field={field} /> : undefined }
   if (field.kind === 'checkbox') {
     return <Checkbox {...common} checked={Boolean(value)} onChange={(e) => onChange(e.currentTarget.checked)} />
   }

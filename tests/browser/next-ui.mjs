@@ -233,6 +233,33 @@ async (page) => {
     await dialog().waitFor({ state: 'detached', timeout: 3000 })
   })
 
+  await check('folder hint: Which folders? opens on tap; Escape closes only it and keeps the draft', async () => {
+    // Two more untrusted folders for this check alone; the fixture's row counts stay put.
+    const reason = 'Not trusted yet; open Claude Code there once in a terminal to accept the trust prompt.'
+    const extra = ['/x/untrusted-a', '/x/untrusted-b'].map((cwd) => ({ cwd, project: cwd, sessions: 1, blocked: reason, codex_blocked: '' }))
+    const stub = async (route) => {
+      const response = await route.fetch()
+      const body = await response.json()
+      await route.fulfill({ response, json: { folders: [...body.folders, ...extra] } })
+    }
+    await page.route('**/api/folders', stub)
+    try {
+      await page.getByRole('button', { name: 'New' }).click()
+      const name = dialog().getByRole('textbox', { name: 'Name' })
+      await name.fill('Draft kept')
+      await page.getByRole('button', { name: 'Which folders?' }).click()
+      const listed = page.getByText('/x/untrusted-b', { exact: true })
+      await listed.waitFor({ timeout: 3000 })
+      await page.keyboard.press('Escape')
+      await listed.waitFor({ state: 'hidden', timeout: 3000 })
+      expect((await name.inputValue()) === 'Draft kept', 'Escape discarded the form')
+      await dialog().getByRole('button', { name: 'Cancel' }).click()
+      await dialog().waitFor({ state: 'detached', timeout: 3000 })
+    } finally {
+      await page.unroute('**/api/folders', stub)
+    }
+  })
+
   await check('new session form starts one in a listed folder; delete removes it', async () => {
     const before = await rows().count()
     await page.getByRole('button', { name: 'New' }).click()

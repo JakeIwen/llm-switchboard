@@ -6,6 +6,7 @@ another web page can't flip sessions on through a visitor's browser.
 """
 
 from pathlib import Path
+import os
 import socket
 import time
 
@@ -84,6 +85,10 @@ class App:
             {"cwd": f.cwd, "project": f.project, "sessions": f.sessions, "blocked": f.blocked,
              "codex_blocked": f.codex_blocked if self.codex else "Codex support is off."}
             for f in new_session_folders(self.index.all(), codex=self.codex_threads())
+            # A deleted folder can't be offered and nothing fixes it, so listing
+            # it only buries the reasons that can be acted on. Creating in one is
+            # still refused with its reason (session_actions checks separately).
+            if os.path.isdir(f.cwd)
         ]}
 
     def list_trash(self) -> dict:

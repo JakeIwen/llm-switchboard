@@ -92,6 +92,10 @@ class CatalogTest(Fixture):
         self.assertEqual(folders[str(self.work)]["sessions"], 3)
         self.assertEqual(folders[str(self.work)]["codex_blocked"], "")
 
+    def test_folders_leave_out_deleted_folders(self):
+        self.work.rename(self.root / "moved")
+        self.assertNotIn(str(self.work), [f["cwd"] for f in self.app.list_folders()["folders"]])
+
 
 class ActionsTest(Fixture):
     def test_rename_and_unique_names_across_tools(self):

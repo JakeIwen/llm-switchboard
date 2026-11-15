@@ -9,6 +9,8 @@ interface FieldBase {
   label: string
   /** A short hint under the label. */
   description?: string
+  /** Lines too long for the hint, shown in a popover from a link after it (tap or click). */
+  details?: { label: string; lines: readonly string[] }
   /** Hide the field (and skip its required check) unless this holds. */
   showWhen?: (values: FieldValues) => boolean
 }

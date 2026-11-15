@@ -20,7 +20,7 @@ it('new Claude loads allowed folders, honours a preferred local folder, and star
     { key: 'name', label: 'Name', required: true, autofocus: true, maxLength: 120, placeholder: 'What is this session for?' },
   ] })
   expect(state.forms[0].body).toEqual(["Starts with Remote Control on and is kept running. You'll get a notification when it's ready."])
-  expect(state.forms[0].fields[0].description).toContain('~/gone (The folder no longer exists.)')
+  expect(state.forms[0].fields[0].description).toBe(`Not offered: ~/gone (${missing.blocked})`)
   expect(state.requests).toEqual([['/api/sessions/new', { tool: 'claude', cwd: '/other', name: 'New' }]])
   expect([...ctx.watching]).toEqual([['made', 'New']])
   expect(state.toasts).toEqual([{ message: 'Starting “New”…', durationMs: 30000 }])
@@ -47,6 +47,19 @@ it('healthy Codex offers tool-specific folders and a conditional required first 
   expect(state.requests).toEqual([['/api/sessions/new', { tool: 'codex', cwd: untrusted.cwd, name: 'New Codex', prompt: 'Do the work' }]])
   expect(state.toasts).toEqual([{ message: "Started “New Codex” in Codex; it's working on your first message.", durationMs: 15000 }])
   expect(ctx.watching.size).toBe(0)
+})
+
+it('the folder note gives each reason once with its folder count, and lists the folders in details', async () => {
+  const { ctx, state } = actionHarness()
+  const home = { ...folder, cwd: '/home/me', project: '~', blocked: 'Claude Code asks for folder trust in ~ every time.' }
+  const others = ['/tmp/a', '/tmp/b'].map((cwd) => ({ ...untrusted, cwd, project: cwd }))
+  state.getResults.push({ folders: [folder, home, untrusted, ...others] })
+  state.answers.push(null)
+  await newSession(ctx)
+  expect(state.forms[0].fields[0]).toMatchObject({
+    description: `Not offered: ~ (${home.blocked}); 3 folders (${untrusted.blocked})`,
+    details: { label: 'Which folders?', lines: ['~', '~/untrusted', '/tmp/a', '/tmp/b'] },
+  })
 })
 
 it('Codex first-message validation measures the complete serialized UTF-8 body, including JSON escaping', async () => {
