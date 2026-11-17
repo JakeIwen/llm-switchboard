@@ -1253,6 +1253,10 @@
       "SessionStatus": {
         "additionalProperties": false,
         "properties": {
+          "auto_restarts": {
+            "title": "Auto Restarts",
+            "type": "integer"
+          },
           "busy": {
             "title": "Busy",
             "type": "boolean"
@@ -1286,6 +1290,17 @@
           "next_attempt": {
             "title": "Next Attempt",
             "type": "number"
+          },
+          "no_rc_since": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "No Rc Since"
           },
           "pid": {
             "anyOf": [
@@ -1362,7 +1377,9 @@
           "failures",
           "launches",
           "last_exit",
-          "rc_name"
+          "rc_name",
+          "no_rc_since",
+          "auto_restarts"
         ],
         "title": "SessionStatus",
         "type": "object"

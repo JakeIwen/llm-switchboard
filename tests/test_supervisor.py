@@ -1,3 +1,4 @@
+from dataclasses import replace
 import shlex
 import tempfile
 import unittest
@@ -7,6 +8,7 @@ from llm_switchboard.live_registry import LiveProcess
 from llm_switchboard.paths import MANAGED_ENV_VAR
 from llm_switchboard.store import Store
 from llm_switchboard.supervisor import RC_GRACE_S, State, Supervisor
+from llm_switchboard.supervisor_state import NO_RC_RESTART_S
 
 from fakes import SID, SID2, Clock, FakeConnectivity, FakeIndex, FakeTmux, transcript
 
@@ -65,6 +67,89 @@ class SupervisorTest(unittest.TestCase):
         self.tmux.screens[self.tmux.window_for(SID).window_id] = "Yes, I trust this folder\nEnter to confirm"
         self.sup.reconcile()
         self.assertIn("trust", self.sup.snapshot()[SID].detail)
+
+    def idle(self, status="idle"):
+        self.live = [LiveProcess(pid=7, session_id=SID, cwd="", status=status, managed_for=SID, rss_kb=1)]
+
+    def lose_rc(self):
+        """Launch SID, idle, and let it run past the grace period with no Remote Control."""
+        self.store.set_enabled(SID, True)
+        self.sup.reconcile()
+        self.tmux.screens[self.tmux.window_for(SID).window_id] = "❯ \n  ~/dev · Opus"
+        self.idle()
+        self.clock.t += RC_GRACE_S + 1
+        self.sup.reconcile()
+        self.assertEqual(self.state(), State.ATTENTION)
+
+    def set_screen(self, text):
+        self.tmux.screens[self.tmux.window_for(SID).window_id] = text
+
+    def test_idle_session_without_rc_is_restarted_then_less_often(self):
+        self.lose_rc()
+        self.assertIn("automatically in 10 min", self.sup.snapshot()[SID].detail)
+        self.clock.t += NO_RC_RESTART_S - 1
+        self.sup.reconcile()
+        self.assertEqual(len(self.tmux.started), 1)
+        self.clock.t += 1
+        self.sup.reconcile()
+        self.assertEqual(len(self.tmux.started), 2)
+        self.assertEqual(self.state(), State.STARTING)
+        # Still no Remote Control after the restart: the next one waits twice as long.
+        self.set_screen("❯ ")
+        self.clock.t += RC_GRACE_S + 1
+        self.sup.reconcile()
+        self.clock.t += NO_RC_RESTART_S
+        self.sup.reconcile()
+        self.assertEqual(len(self.tmux.started), 2)
+        self.clock.t += NO_RC_RESTART_S
+        self.sup.reconcile()
+        self.assertEqual(len(self.tmux.started), 3)
+        # Once Remote Control comes back, the delay starts over.
+        self.set_screen("… /rc active")
+        self.sup.reconcile()
+        self.assertEqual(self.sup.snapshot()[SID].auto_restarts, 0)
+
+    def test_no_automatic_restart_while_busy_unknown_or_watched(self):
+        self.lose_rc()
+        self.clock.t += NO_RC_RESTART_S
+        for status in ("busy", ""):
+            self.idle(status)
+            self.sup.reconcile()
+        self.live = []
+        self.sup.reconcile()
+        self.idle()
+        window = self.tmux.window_for(SID)
+        self.tmux.wins[window.window_id] = replace(window, viewers=1)
+        self.sup.reconcile()
+        self.assertEqual(len(self.tmux.started), 1)
+        self.tmux.wins[window.window_id] = replace(window, viewers=0)
+        self.sup.reconcile()
+        self.assertEqual(len(self.tmux.started), 2)
+
+    def test_restart_rechecks_the_window_after_the_pass_snapshot(self):
+        self.lose_rc()
+        self.clock.t += NO_RC_RESTART_S
+        window = self.tmux.window_for(SID)
+        windows = self.tmux.windows
+        reads = []
+
+        def attach_after_first_read():
+            reads.append(1)
+            listed = windows()
+            # Someone attaches while the pass is under way.
+            self.tmux.wins[window.window_id] = replace(window, viewers=1)
+            return listed
+        self.tmux.windows = attach_after_first_read
+        self.sup.reconcile()
+        self.assertEqual(len(reads), 2)
+        self.assertEqual(len(self.tmux.started), 1)
+
+    def test_blank_capture_is_not_lost_rc(self):
+        self.lose_rc()
+        self.set_screen("")
+        self.clock.t += NO_RC_RESTART_S * 2
+        self.sup.reconcile()
+        self.assertEqual(len(self.tmux.started), 1)
 
     def test_quick_exit_backs_off_then_relaunches(self):
         self.store.set_enabled(SID, True)

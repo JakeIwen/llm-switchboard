@@ -7,7 +7,7 @@ const base: BadgeRow = { host: '', enabled: false, status: null, new: false, too
 const status = (fields: Partial<SessionStatus>): SessionStatus => ({
   session_id: 'a', state: 'running', detail: '', window_id: null, pid: null, rss_kb: null,
   rc_active: false, busy: false, duplicate: false, started_at: null, next_attempt: 0,
-  failures: 0, launches: 0, last_exit: null, rc_name: '', ...fields,
+  failures: 0, launches: 0, last_exit: null, rc_name: '', no_rc_since: null, auto_restarts: 0, ...fields,
 })
 
 describe('session badges', () => {

@@ -22,7 +22,7 @@ from .store import Entry, Store
 # Permanent public compatibility imports; state records and rules belong to supervisor_state.
 from .supervisor_state import (
     BACKOFF_BASE_S, BACKOFF_MAX_S, RC_GRACE_S, SCREEN_TAIL_LINES, STABLE_RUN_S,
-    Exit, ScreenInput, State, Status, backoff_s, observe_screen,
+    Exit, ScreenInput, State, Status, backoff_s, no_rc_restart_delay_s, observe_screen,
 )
 from .tmux import Tmux, TmuxError
 from .transcripts import TranscriptIndex, display_path
@@ -155,8 +155,13 @@ class Supervisor:
             window = None
 
         if window:
-            self._observe(status, window, ours, others, now)
-            return
+            if not self._observe(status, window, ours, others, now) or not self._still_idle(sid, window.window_id):
+                return
+            log.info("restarting %s: no Remote Control for %ds", short_id(sid), now - status.no_rc_since)
+            self.tmux.kill(window.window_id)
+            status.auto_restarts += 1
+            status.no_rc_since = None
+            window = None
 
         status.window_id = status.pid = status.rss_kb = None
         status.rc_active = status.busy = status.duplicate = False
@@ -191,7 +196,8 @@ class Supervisor:
         status.launches += 1
         status.state, status.detail = State.STARTING, "Launched; waiting for Remote Control."
 
-    def _observe(self, status: Status, window, ours: LiveProcess | None, others: list[LiveProcess], now: float) -> None:
+    def _observe(self, status: Status, window, ours: LiveProcess | None, others: list[LiveProcess], now: float) -> bool:
+        """Read the pane into status; True when it is due an automatic restart."""
         status.window_id = window.window_id
         if status.started_at is None:
             # Already running when this supervisor started (service restart).
@@ -206,6 +212,35 @@ class Supervisor:
         ))
         status.rc_active = observation.rc_active
         status.state, status.detail = observation.state, observation.detail
+        if observation.rc_active:
+            status.auto_restarts = 0
+        if not observation.rc_lost:
+            status.no_rc_since = None
+            return False
+        if status.no_rc_since is None:
+            status.no_rc_since = now
+        due = status.no_rc_since + no_rc_restart_delay_s(status.auto_restarts)
+        # Never cut off a turn in progress, someone looking at the window, or
+        # another process that has the session open; a process whose state
+        # can't be read counts as working.
+        if not (ours and ours.status == "idle") or window.viewers or others:
+            return False
+        if now >= due:
+            return True
+        status.detail += f" Restarting it automatically in {_minutes(due - now)} if it stays idle."
+        return False
+
+    def _still_idle(self, sid: str, window_id: str) -> bool:
+        """Re-read the process and the window just before an automatic restart.
+
+        The pass's snapshots were taken before the other sessions' captures
+        and launches, long enough for someone to attach or start a turn.
+        """
+        live = self.registry()
+        ours = next((p for p in live if p.managed_for == sid), None)
+        others = [p for p in live if p.session_id == sid and p.managed_for != sid]
+        window = next((w for w in self.tmux.windows() if w.window_id == window_id), None)
+        return bool(ours and ours.status == "idle" and not others and window and not window.viewers)
 
     def _record_exit(self, status: Status, window, now: float) -> None:
         screen = self.tmux.capture(window.window_id, history=SCREEN_TAIL_LINES)
@@ -222,6 +257,11 @@ class Supervisor:
             short_id(status.session_id), window.exit_status, ran_s, status.next_attempt - now,
         )
         self.tmux.kill(window.window_id)
+
+
+def _minutes(seconds: float) -> str:
+    minutes = max(1, round(seconds / 60))
+    return f"{minutes} min"
 
 
 def _window_label(project: str, session_id: str) -> str:

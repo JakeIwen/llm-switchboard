@@ -9,7 +9,7 @@ export function session(id = 'a', changes: Partial<SessionRow> = {}): SessionRow
 }
 export function status(changes: Partial<SessionStatus> = {}): SessionStatus {
   return { session_id: 'a', state: 'running', detail: '', window_id: null, pid: null, rss_kb: null, rc_active: false,
-    busy: false, duplicate: false, started_at: null, next_attempt: 0, failures: 0, launches: 0, last_exit: null, rc_name: '', ...changes }
+    busy: false, duplicate: false, started_at: null, next_attempt: 0, failures: 0, launches: 0, last_exit: null, rc_name: '', no_rc_since: null, auto_restarts: 0, ...changes }
 }
 export function mac(id = 'a', changes: Partial<SessionRow> = {}): SessionRow {
   return session(`mac:${id}`, { host: 'mac', session_id: id, host_online: true, mutable: true, state: 'closed', ...changes })

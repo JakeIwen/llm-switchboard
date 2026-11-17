@@ -11,6 +11,11 @@ STABLE_RUN_S = 300
 BACKOFF_BASE_S = 10
 BACKOFF_MAX_S = 600
 SCREEN_TAIL_LINES = 40
+# A session that sits idle without Remote Control is restarted on its own after
+# this long, then after twice as long each time Remote Control still doesn't
+# come back, up to the cap. A restart is cheap and is the usual fix.
+NO_RC_RESTART_S = 600
+NO_RC_RESTART_MAX_S = 3600
 
 
 class State(str, Enum):
@@ -50,6 +55,10 @@ class Status:
     launches: int = 0
     last_exit: Exit | None = None
     rc_name: str = ""
+    # When Remote Control was last seen missing with nothing on screen to
+    # answer, and how many automatic restarts haven't brought it back.
+    no_rc_since: float | None = None
+    auto_restarts: int = 0
 
 
 @dataclass(frozen=True)
@@ -64,6 +73,8 @@ class ScreenObservation:
     state: State
     detail: str
     rc_active: bool
+    # Remote Control is off and a restart, not an answer on screen, is the fix.
+    rc_lost: bool = False
 
 
 def backoff_s(failures: int) -> float:
@@ -72,23 +83,32 @@ def backoff_s(failures: int) -> float:
     return min(BACKOFF_BASE_S * 2 ** (failures - 1), BACKOFF_MAX_S)
 
 
+def no_rc_restart_delay_s(auto_restarts: int) -> float:
+    return min(NO_RC_RESTART_S * 2 ** auto_restarts, NO_RC_RESTART_MAX_S)
+
+
 def observe_screen(observation: ScreenInput) -> ScreenObservation:
     """Describe a running pane from captured text and elapsed run time."""
     rc = rc_indicator(observation.screen)
     prompt = blocking_prompt(observation.screen)
+    lost = False
     if prompt:
         state, detail = State.ATTENTION, prompt
     elif rc == Rc.ACTIVE:
         state, detail = State.RUNNING, "Remote Control active."
     elif rc == Rc.FAILED:
         state, detail = State.ATTENTION, "Remote Control failed to connect; try Restart."
+        lost = True
     elif rc in (Rc.CONNECTING, Rc.RECONNECTING):
         state, detail = State.STARTING, f"Remote Control {rc.value}."
     elif observation.running_s < RC_GRACE_S:
         state, detail = State.STARTING, "Launched; waiting for Remote Control."
     else:
         state = State.ATTENTION
-        detail = "Running, but no Remote Control indicator on its status line. Check the screen."
+        detail = ("Running, but Remote Control is off (no indicator on its status line). "
+                  "Restart usually brings it back; also quit any copy of this session opened without claudepd.")
+        # A blank capture (tmux failed to read the pane) proves nothing.
+        lost = bool(observation.screen.strip())
     if observation.duplicate_pid is not None:
         detail += f" Also open in another claude process (pid {observation.duplicate_pid})."
-    return ScreenObservation(state, detail, rc == Rc.ACTIVE)
+    return ScreenObservation(state, detail, rc == Rc.ACTIVE, lost)

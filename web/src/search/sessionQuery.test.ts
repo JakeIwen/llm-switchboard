@@ -11,7 +11,7 @@ const S = (o: Partial<Omit<SessionRow, 'status'>> & { status?: Partial<SessionSt
   remote_url: "", resume_cmd: "", new: false, ...o,
   status: o.status ? { session_id: "", state: "starting", detail: "", window_id: null, pid: null,
     rss_kb: null, rc_active: false, busy: false, duplicate: false, started_at: null,
-    next_attempt: 0, failures: 0, launches: 0, last_exit: null, rc_name: "", ...o.status } : null,
+    next_attempt: 0, failures: 0, launches: 0, last_exit: null, rc_name: "", no_rc_since: null, auto_restarts: 0, ...o.status } : null,
 });
 const sessions = [
   S({ id: "c96934f7-aaaa", title: "Telemetrics app changes", project: "~/dev/obd-things", cwd: "/home/pi/dev/obd-things",

@@ -13,7 +13,8 @@ import time
 
 from .paths import TMUX_CONF, TMUX_SESSION, TMUX_SOCKET
 
-_FIELDS = ["window_id", "@car_session", "window_name", "pane_pid", "pane_dead", "pane_dead_status"]
+_FIELDS = ["window_id", "@car_session", "window_name", "pane_pid", "pane_dead", "pane_dead_status",
+           "window_active_clients"]
 
 
 @dataclass(frozen=True)
@@ -24,6 +25,8 @@ class Window:
     pane_pid: int | None
     dead: bool
     exit_status: int | None
+    # Terminals attached and showing this window right now.
+    viewers: int = 0
 
 
 class TmuxError(RuntimeError):
@@ -50,7 +53,7 @@ class Tmux:
             parts = line.split("\t")
             if len(parts) != len(_FIELDS) or not parts[1]:
                 continue
-            window_id, session_id, label, pane_pid, dead, status = parts
+            window_id, session_id, label, pane_pid, dead, status, viewers = parts
             found.append(
                 Window(
                     window_id=window_id,
@@ -59,6 +62,7 @@ class Tmux:
                     pane_pid=int(pane_pid) if pane_pid.isdigit() else None,
                     dead=dead == "1",
                     exit_status=int(status) if status.lstrip("-").isdigit() else None,
+                    viewers=int(viewers) if viewers.isdigit() else 0,
                 )
             )
         return found

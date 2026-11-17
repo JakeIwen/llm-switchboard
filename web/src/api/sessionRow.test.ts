@@ -29,7 +29,7 @@ it('types a pending local Claude row, including its nested supervisor and exit r
   const status: SessionStatus = {
     session_id: id, state: 'running', detail: '', window_id: null, pid: null, rss_kb: null,
     rc_active: false, busy: false, duplicate: false, started_at: null, next_attempt: 0,
-    failures: 0, launches: 0, last_exit: { status: null, at: 12, ran_s: 3 }, rc_name: '',
+    failures: 0, launches: 0, last_exit: { status: null, at: 12, ran_s: 3 }, rc_name: '', no_rc_since: null, auto_restarts: 0,
   }
   const expected: SessionRow = { ...base, status, open_elsewhere: [{ pid: 42, status: 'idle' }] }
   expect(rowsFromPython(`

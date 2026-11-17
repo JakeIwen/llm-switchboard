@@ -928,6 +928,8 @@ export interface components {
         SessionState: "closed" | "idle" | "busy";
         /** SessionStatus */
         SessionStatus: {
+            /** Auto Restarts */
+            auto_restarts: number;
             /** Busy */
             busy: boolean;
             /** Detail */
@@ -941,6 +943,8 @@ export interface components {
             launches: number;
             /** Next Attempt */
             next_attempt: number;
+            /** No Rc Since */
+            no_rc_since: number | null;
             /** Pid */
             pid: number | null;
             /** Rc Active */
