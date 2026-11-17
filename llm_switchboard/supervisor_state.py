@@ -66,6 +66,10 @@ class ScreenInput:
     screen: str
     running_s: float
     duplicate_pid: int | None = None
+    # The process's registry entry says Remote Control is on. Claude Code
+    # 2.1.325 stopped putting the indicator on the status line, so the
+    # screen alone no longer shows a connected session.
+    rc_registered: bool = False
 
 
 @dataclass(frozen=True)
@@ -101,6 +105,8 @@ def observe_screen(observation: ScreenInput) -> ScreenObservation:
         lost = True
     elif rc in (Rc.CONNECTING, Rc.RECONNECTING):
         state, detail = State.STARTING, f"Remote Control {rc.value}."
+    elif observation.rc_registered:
+        state, detail = State.RUNNING, "Remote Control active."
     elif observation.running_s < RC_GRACE_S:
         state, detail = State.STARTING, "Launched; waiting for Remote Control."
     else:
@@ -111,4 +117,5 @@ def observe_screen(observation: ScreenInput) -> ScreenObservation:
         lost = bool(observation.screen.strip())
     if observation.duplicate_pid is not None:
         detail += f" Also open in another claude process (pid {observation.duplicate_pid})."
-    return ScreenObservation(state, detail, rc == Rc.ACTIVE, lost)
+    active = rc == Rc.ACTIVE or (rc is None and observation.rc_registered)
+    return ScreenObservation(state, detail, active, lost)

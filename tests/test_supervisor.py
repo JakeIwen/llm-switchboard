@@ -126,6 +126,15 @@ class SupervisorTest(unittest.TestCase):
         self.sup.reconcile()
         self.assertEqual(len(self.tmux.started), 2)
 
+    def test_registry_bridge_keeps_a_session_running_without_the_indicator(self):
+        self.lose_rc()
+        self.live = [LiveProcess(pid=7, session_id=SID, cwd="", status="idle", managed_for=SID, rss_kb=1,
+                                 remote_control=True)]
+        self.clock.t += NO_RC_RESTART_S * 2
+        self.sup.reconcile()
+        self.assertEqual(self.state(), State.RUNNING)
+        self.assertEqual(len(self.tmux.started), 1)
+
     def test_restart_rechecks_the_window_after_the_pass_snapshot(self):
         self.lose_rc()
         self.clock.t += NO_RC_RESTART_S

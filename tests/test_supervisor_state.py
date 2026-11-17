@@ -48,6 +48,16 @@ class SupervisorStateTest(unittest.TestCase):
         self.assertEqual([no_rc_restart_delay_s(n) for n in range(4)], [600, 1200, 2400, 3600])
         self.assertEqual(no_rc_restart_delay_s(50), NO_RC_RESTART_MAX_S)
 
+    def test_registry_bridge_counts_as_connected_unless_the_screen_says_otherwise(self):
+        cases = {"❯ ": State.RUNNING, "/rc failed": State.ATTENTION,
+                 "/rc reconnecting…": State.STARTING, "Enter to confirm": State.ATTENTION}
+        for screen, state in cases.items():
+            with self.subTest(screen=screen):
+                observed = observe_screen(ScreenInput(screen, RC_GRACE_S, rc_registered=True))
+                self.assertEqual(observed.state, state)
+                self.assertEqual(observed.rc_lost, screen == "/rc failed")
+                self.assertEqual(observed.rc_active, screen in ("❯ ", "Enter to confirm"))
+
     def test_duplicate_process_is_appended_to_any_screen_detail(self):
         observed = observe_screen(ScreenInput("/rc active", 0, duplicate_pid=42))
         self.assertEqual(observed.detail,

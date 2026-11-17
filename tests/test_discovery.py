@@ -102,9 +102,9 @@ class LiveRegistryTest(unittest.TestCase):
         self.proc = Path(tmp.name) / "proc"
         self.registry.mkdir()
 
-    def add(self, pid, sid, start, environ=b"", actual_start=None):
+    def add(self, pid, sid, start, environ=b"", actual_start=None, **extra):
         (self.registry / f"{pid}.json").write_text(json.dumps(
-            {"pid": pid, "sessionId": sid, "cwd": "/w", "status": "idle", "procStart": str(start)}))
+            {"pid": pid, "sessionId": sid, "cwd": "/w", "status": "idle", "procStart": str(start), **extra}))
         d = self.proc / str(pid)
         d.mkdir(parents=True)
         fields = ["S"] + ["0"] * 18 + [str(actual_start or start)]
@@ -114,8 +114,9 @@ class LiveRegistryTest(unittest.TestCase):
 
     def test_reads_live_entries_and_marks_ours(self):
         self.add(10, SID, 555, environ=f"A=1\0{MANAGED_ENV_VAR}={SID}\0".encode())
-        self.add(11, SID2, 777)
+        self.add(11, SID2, 777, bridgeSessionId="session_01abc")
         procs = {p.pid: p for p in live_processes(self.registry, self.proc)}
+        self.assertEqual((procs[10].remote_control, procs[11].remote_control), (False, True))
         self.assertEqual(procs[10].managed_for, SID)
         self.assertIsNone(procs[11].managed_for)
         self.assertEqual(procs[10].rss_kb, 204800)

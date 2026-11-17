@@ -22,6 +22,8 @@ class LiveProcess:
     # The session id we launched this process for, or None if we didn't.
     managed_for: str | None
     rss_kb: int | None
+    # Claude Code records a bridge session id while Remote Control is on.
+    remote_control: bool = False
 
 
 def live_processes(registry_dir: Path = LIVE_REGISTRY_DIR, proc_dir: Path = Path("/proc")) -> list[LiveProcess]:
@@ -43,6 +45,7 @@ def live_processes(registry_dir: Path = LIVE_REGISTRY_DIR, proc_dir: Path = Path
                 status=str(entry.get("status", "")),
                 managed_for=_managed_for(proc),
                 rss_kb=_rss_kb(proc),
+                remote_control=bool(entry.get("bridgeSessionId")),
             )
         )
     return found

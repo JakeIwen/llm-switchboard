@@ -209,6 +209,7 @@ class Supervisor:
         screen = self.tmux.capture(window.window_id)
         observation = observe_screen(ScreenInput(
             screen, now - status.started_at, others[0].pid if others else None,
+            rc_registered=bool(ours and ours.remote_control),
         ))
         status.rc_active = observation.rc_active
         status.state, status.detail = observation.state, observation.detail
@@ -233,6 +234,8 @@ class Supervisor:
     def _still_idle(self, sid: str, window_id: str) -> bool:
         """Re-read the process and the window just before an automatic restart.
 
+        Skip it if Remote Control came back in the meantime.
+
         The pass's snapshots were taken before the other sessions' captures
         and launches, long enough for someone to attach or start a turn.
         """
@@ -240,7 +243,8 @@ class Supervisor:
         ours = next((p for p in live if p.managed_for == sid), None)
         others = [p for p in live if p.session_id == sid and p.managed_for != sid]
         window = next((w for w in self.tmux.windows() if w.window_id == window_id), None)
-        return bool(ours and ours.status == "idle" and not others and window and not window.viewers)
+        return bool(ours and ours.status == "idle" and not ours.remote_control
+                    and not others and window and not window.viewers)
 
     def _record_exit(self, status: Status, window, now: float) -> None:
         screen = self.tmux.capture(window.window_id, history=SCREEN_TAIL_LINES)
