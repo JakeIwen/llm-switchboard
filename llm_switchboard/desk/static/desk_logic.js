@@ -72,6 +72,16 @@
       target.session_id === frozen.session_id && target.lock.lock_id === frozen.lock_id;
   }
 
+  // Whether the "handed off, waiting" banner for requestId is over. A request
+  // missing from history counts only in a snapshot at least as new as the one
+  // fetched right after the send acknowledgment (ackVersion): an older
+  // snapshot never knew the request, a newer one means it aged out.
+  function waitingOver(requestId, snapshot, ackVersion) {
+    var rq = snapshot.requests.filter(function (x) { return x.request_id === requestId; })[0];
+    if (rq) return rq.state !== "handed_off";
+    return typeof ackVersion === "number" && snapshot.version >= ackVersion;
+  }
+
   // Keeps only ids still present in the current request history.
   function pruneIds(idSet, requests) {
     var live = {};
@@ -81,7 +91,7 @@
 
   var api = {
     classifySend: classifySend, describeRequestState: describeRequestState,
-    freezeClear: freezeClear, clearStillValid: clearStillValid, pruneIds: pruneIds
+    freezeClear: freezeClear, waitingOver: waitingOver, clearStillValid: clearStillValid, pruneIds: pruneIds
   };
   root.DeskLogic = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;

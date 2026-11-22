@@ -18,6 +18,7 @@ process.stdout.write(JSON.stringify({
   valid: input.valid.map(([f, t]) => L.clearStillValid(f, t)),
   describe: L.describeRequestState(input.state),
   ids: Array.from(ids).sort(),
+  over: (input.over || []).map(([id, snap, v]) => L.waitingOver(id, snap, v)),
 }));
 """
 
@@ -30,7 +31,7 @@ class DeskLogicJsTests(unittest.TestCase):
     def run_node(self, **kw):
         node = shutil.which("node")
         self.assertIsNotNone(node, "node is required by the suite")
-        payload = {"sends": [], "target": None, "valid": [], "state": "pending", "ids": [], "requests": []}
+        payload = {"sends": [], "target": None, "valid": [], "state": "pending", "ids": [], "requests": [], "over": []}
         payload.update(kw)
         proc = subprocess.run([node, "-e", SCRIPT, str(LOGIC)], input=json.dumps(payload),
                               capture_output=True, text=True, timeout=60, check=False)
@@ -84,6 +85,20 @@ class DeskLogicJsTests(unittest.TestCase):
     def test_spoken_ids_pruned_to_current_history(self):
         out = self.run_node(ids=["a", "b", "c"], requests=[{"request_id": "b"}])
         self.assertEqual(out["ids"], ["b"])
+
+    def test_waiting_banner_settles_on_state_or_eviction_only_after_the_ack_snapshot(self):
+        def snap(version, *requests):
+            return {"version": version, "requests": [{"request_id": r, "state": s} for r, s in requests]}
+        out = self.run_node(over=[
+            ["r", snap(5, ("r", "handed_off")), 5],   # still waiting
+            ["r", snap(6, ("r", "answered")), None],  # answered
+            ["r", snap(6, ("r", "unknown")), None],   # left handed_off
+            ["r", snap(4), None],                     # absent, no ack snapshot yet: keep waiting
+            ["r", snap(4), 5],                        # absent in a snapshot older than the ack
+            ["r", snap(5), 5],                        # absent in the ack snapshot: evicted
+            ["r", snap(9), 5],                        # absent later: evicted
+        ])
+        self.assertEqual(out["over"], [False, True, True, False, False, True, True])
 
 
 if __name__ == "__main__":

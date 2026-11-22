@@ -21,7 +21,7 @@
   var recognition = null;
   var clearFrozen = null; // {session_id, lock_id, request_id} while the confirmation is open
   var sentRequestId = null; // request whose "waiting" result is on screen
-  var sentSeen = false; // a snapshot has listed that request, so its absence now means it aged out
+  var sentAckVersion = null; // version of the fresh snapshot fetched after the send ack
   var compose = freshCompose();
 
   function $(id) { return document.getElementById(id); }
@@ -236,11 +236,9 @@
   // "Delivered, waiting" must not outlive the wait.
   function expireWaitingResult(next) {
     if (!sentRequestId) return;
-    var rq = next.requests.filter(function (x) { return x.request_id === sentRequestId; })[0];
-    if (rq) sentSeen = true;
     // Gone from history (aged out before this tab saw the end) is as final as answered.
-    if ((rq && rq.state !== "handed_off") || (!rq && sentSeen)) {
-      sentSeen = false;
+    if (Logic.waitingOver(sentRequestId, next, sentAckVersion)) {
+      sentAckVersion = null;
       sentRequestId = null;
       if (compose.phase === "done") compose = freshCompose();
       hideResult();
@@ -489,10 +487,21 @@
     });
   }
 
+  // A fresh snapshot (no `after`) so a request evicted before this tab's next
+  // poll still settles the banner.
+  function refreshAfterSend(requestId) {
+    var mySession = session;
+    api("GET", "/desk/api/state", undefined, {}).then(function (r) {
+      if (mySession !== session || sentRequestId !== requestId || r.status !== 200 || !r.data) return;
+      sentAckVersion = r.data.version;
+      expireWaitingResult(r.data);
+    }, function () { /* the poll loop's next snapshot decides; absence alone stays "waiting" */ });
+  }
+
   // Shows exactly what the hub said. Unknown is never retried.
   function settleSend(result) {
     stopRecognition();
-    if (result.outcome === "handed_off") { sentRequestId = result.request_id; sentSeen = false; }
+    if (result.outcome === "handed_off") { sentRequestId = result.request_id; sentAckVersion = null; refreshAfterSend(result.request_id); }
     if (result.outcome === "handed_off" || result.outcome === "answered") $("draft").value = "";
     if (result.outcome === "unknown") {
       compose = freshCompose();
