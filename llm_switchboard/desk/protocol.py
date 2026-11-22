@@ -11,6 +11,9 @@ Conversation, in order:
   hub -> channel  welcome    {epoch, generation}   or refused {reason}, then close
   hub -> channel  event      {request_id, content} (content already has DELIVERY_SUFFIX)
   channel -> hub  delivered  {request_id}          (written to Claude's stdin pipe; not a Claude ack)
+  channel -> hub  undeliverable {request_id, reason} (the channel's own last check before writing
+                                                   failed, e.g. /clear changed its parent's session;
+                                                   nothing was written; the hub keeps the lock as unknown)
   channel -> hub  reply      {request_id, text, spoken}  (the reply tool was called)
   hub -> channel  reply_result {request_id, ok, reason}
   either way      ping / pong                      (heartbeat; never reaches Claude)
@@ -36,6 +39,7 @@ class MessageType(str, Enum):
     REFUSED = "refused"
     EVENT = "event"
     DELIVERED = "delivered"
+    UNDELIVERABLE = "undeliverable"
     REPLY = "reply"
     REPLY_RESULT = "reply_result"
     PING = "ping"
