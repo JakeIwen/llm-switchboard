@@ -73,6 +73,23 @@ class LaunchContractTest(unittest.TestCase):
         self.assertTrue((REPO / "bin" / "llm-switchboard").is_file())
         self.assertTrue(os.access(REPO / "bin" / "llm-switchboard", os.X_OK))
 
+    def test_desk_units_render_to_executable_checkout_targets(self):
+        cases = {
+            "llm-switchboard-desk.service": ("bin/llm-switchboard", "desk serve"),
+            "llm-switchboard-desk-adb.service": ("bin/desk-adb-link", "${DESK_ADB_SERIAL} 8796"),
+        }
+        for unit, (target, args) in cases.items():
+            with self.subTest(unit=unit):
+                rendered = (REPO / "systemd" / unit).read_text(encoding="utf-8").replace("@REPO@", str(REPO))
+                self.assertNotIn("@REPO@", rendered)
+                [exec_start] = [line.removeprefix("ExecStart=") for line in rendered.splitlines()
+                                if line.startswith("ExecStart=")]
+                self.assertEqual(exec_start, f"{REPO}/{target} {args}")
+                self.assertTrue(os.access(REPO / target, os.X_OK))
+        adb_unit = (REPO / "systemd" / "llm-switchboard-desk-adb.service").read_text(encoding="utf-8")
+        self.assertIn("EnvironmentFile=@REPO@/local.env", adb_unit)
+        self.assertIn("RestartPreventExitStatus=3 4 5", adb_unit)
+
     def test_checkout_wrapper_runs_from_an_unrelated_directory(self):
         with tempfile.TemporaryDirectory() as tmp:
             env = dict(os.environ, HOME=tmp, LLM_SWITCHBOARD_CODEX_SOCKET="")

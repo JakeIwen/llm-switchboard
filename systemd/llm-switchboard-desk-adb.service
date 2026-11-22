@@ -1,0 +1,21 @@
+# Template: install.sh replaces @REPO@ and installs this as a user unit.
+[Unit]
+Description=LLM Switchboard voice desk USB link (adb reverse for the tablet)
+
+[Service]
+Type=simple
+# local.env is KEY=value with # comment lines, which systemd reads as is.
+# install.sh enables this unit only when DESK_ADB_SERIAL is set there.
+EnvironmentFile=@REPO@/local.env
+ExecStart=@REPO@/bin/desk-adb-link ${DESK_ADB_SERIAL} 8796
+# Exit 3 (unauthorized), 4 (port taken) and 5 (reverse failed) need a person;
+# retrying would only repeat them. Plain failures (adb server hiccups) retry.
+Restart=on-failure
+RestartSec=5
+RestartPreventExitStatus=3 4 5
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=default.target

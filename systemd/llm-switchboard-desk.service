@@ -1,0 +1,20 @@
+# Template: install.sh replaces @REPO@ and installs this as a user unit.
+[Unit]
+Description=LLM Switchboard voice desk hub (HTTPS on localhost for the tablet)
+
+[Service]
+Type=simple
+ExecStart=@REPO@/bin/llm-switchboard desk serve
+Restart=always
+RestartSec=5
+Environment=LANG=C.UTF-8
+# Prompts and tokens may pass through here; files it writes stay owner-only.
+UMask=0077
+# Safe for a user manager (no extra privileges needed). Deliberately no
+# ProtectHome/ProtectSystem: the hub reads ~/.claude/sessions, /proc and the
+# repo, and writes under ~/.config and ~/.local/state.
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=default.target

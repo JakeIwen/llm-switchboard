@@ -1,0 +1,67 @@
+#!/bin/bash
+# Keeps the voice desk's USB reverse forward (tablet tcp:PORT -> Pi tcp:PORT)
+# in place for one adb device. Run under systemd: llm-switchboard-desk-adb.service.
+# Only wait-for-*, get-state and reverse (--list, --no-rebind) are ever used:
+# no server restarts, no shell, no removal of mappings, and only the named
+# serial is touched.
+# Exit codes: 2 bad arguments, 3 device unauthorized/offline, 4 port mapped
+# elsewhere, 5 reverse failed. The unit doesn't restart on 3, 4 or 5.
+set -euo pipefail
+
+log() { echo "desk-adb-link: $*" >&2; }
+
+if [ "$#" -ne 2 ]; then
+  echo "usage: desk-adb-link <serial> <port>" >&2
+  exit 2
+fi
+serial=$1
+port=$2
+if ! [[ $serial =~ ^[A-Za-z0-9._:-]+$ ]]; then
+  log "invalid serial"
+  exit 2
+fi
+if ! [[ $port =~ ^[0-9]{1,5}$ ]] || [ "$port" -lt 1024 ] || [ "$port" -gt 65535 ]; then
+  log "invalid port (need 1024..65535)"
+  exit 2
+fi
+mapping="tcp:$port"
+
+while true; do
+  log "waiting for device"
+  adb -s "$serial" wait-for-device
+  state=$(adb -s "$serial" get-state 2>/dev/null || true)
+  if [ "$state" != "device" ]; then
+    log "device state is '${state:-unknown}', not 'device'; authorize it on the tablet and restart the unit"
+    exit 3
+  fi
+
+  # The first column is the serial or "(reverse)" depending on the adb version,
+  # so read the last two fields: remote then local.
+  action=create
+  while read -r -a fields; do
+    [ "${#fields[@]}" -ge 2 ] || continue
+    remote=${fields[${#fields[@]}-2]}
+    local_end=${fields[${#fields[@]}-1]}
+    if [ "$remote" = "$mapping" ]; then
+      if [ "$local_end" = "$mapping" ]; then
+        action=adopt
+      else
+        log "$mapping is already forwarded to $local_end; refusing to change it"
+        exit 4
+      fi
+    fi
+  done < <(adb -s "$serial" reverse --list 2>/dev/null || true)
+
+  if [ "$action" = adopt ]; then
+    log "adopted existing $mapping mapping"
+  else
+    if ! adb -s "$serial" reverse --no-rebind "$mapping" "$mapping" >/dev/null; then
+      log "reverse $mapping failed"
+      exit 5
+    fi
+    log "created $mapping mapping"
+  fi
+
+  adb -s "$serial" wait-for-disconnect || true
+  log "device disconnected"
+done
