@@ -2,8 +2,10 @@
 
 The fake answers `adb devices` from a queue of states (absent, device,
 unauthorized, offline), one per call, repeating the last one once the queue is
-spent and touching an `exhausted` marker so the test can stop the otherwise
-endless loop. get-state and wait-for-device exit 99: the script must not use them.
+spent. The script loops forever, so each test stops it on a condition of the
+script's own progress (a log line or an adb call appearing), never on a queue
+running dry or on wall time; the only clock is a generous bound that fails the
+test. get-state and wait-for-device exit 99: the script must not use them.
 """
 
 import os
@@ -26,7 +28,6 @@ pop() {  # pop <queue file> <default>
     tail -n +2 "$file" > "$file.tmp"; mv "$file.tmp" "$file"
     echo "$value" > "$file.last"
   else
-    touch "$FAKE_DIR/exhausted"
     value=$(cat "$file.last" 2>/dev/null || echo "$2")
   fi
   echo "$value"
@@ -71,25 +72,37 @@ class DeskAdbLinkTest(unittest.TestCase):
         (self.dir / "states").write_text("".join(f"{s}\n" for s in states))
         (self.dir / "reverse_rcs").write_text("".join(f"{rc}\n" for rc in reverse_rcs))
 
-    def run_link(self, serial="TAB123", port="8796"):
-        """Runs until the script exits or the fake's queues run dry, then stops it.
+    def run_link(self, serial="TAB123", port="8796", until=None):
+        """Runs the script until `until(stderr_text, calls)` is true (or, with no
+        condition, until it exits), then stops it. Fails after a generous bound.
 
         Returns (returncode or None if it was still looping, stderr)."""
-        proc = subprocess.Popen([str(SCRIPT), serial, port], env=self.env,
-                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                                start_new_session=True)  # one group, so nothing outlives the temp dir
-        deadline = time.monotonic() + 20
-        while proc.poll() is None and time.monotonic() < deadline:
-            if (self.dir / "exhausted").exists():
-                time.sleep(0.15)  # let it complete a pass on the repeated last state
-                break
-            time.sleep(0.02)
-        code = proc.poll()
-        if code is None:
-            os.killpg(proc.pid, signal.SIGTERM)
-        _, stderr = proc.communicate(timeout=10)
-        self.assertLess(time.monotonic(), deadline, "link loop never settled")
+        err_path = self.dir / "stderr"
+        with open(err_path, "w") as err_file:
+            proc = subprocess.Popen([str(SCRIPT), serial, port], env=self.env,
+                                    stdout=subprocess.DEVNULL, stderr=err_file,
+                                    start_new_session=True)  # one group, so nothing outlives the temp dir
+            deadline = time.monotonic() + 60
+            reached = False
+            while time.monotonic() < deadline:
+                if proc.poll() is not None:
+                    reached = True
+                    break
+                if until is not None and until(err_path.read_text(), self.calls()):
+                    reached = True
+                    break
+                time.sleep(0.02)
+            code = proc.poll()
+            if code is None:
+                os.killpg(proc.pid, signal.SIGTERM)
+            proc.wait(timeout=10)
+        stderr = err_path.read_text()
+        self.assertTrue(reached, f"condition never reached; stderr: {stderr}")
         return code, stderr
+
+    def polls(self, n):
+        """Condition: the script has polled `adb devices` at least n times."""
+        return lambda err, calls: calls.count("devices") >= n
 
     def calls(self):
         log = self.dir / "log"
@@ -105,7 +118,7 @@ class DeskAdbLinkTest(unittest.TestCase):
         # absent -> unauthorized -> offline -> device -> (gone) absent -> device
         self.script_states("absent", "absent", "unauthorized", "unauthorized", "offline",
                            "device", "absent", "device")
-        code, err = self.run_link()
+        code, err = self.run_link(until=lambda e, c: e.count("created tcp:8796 mapping") >= 2)
         self.assertIsNone(code, err)
         self.assertEqual(err.count("waiting for device"), 2, err)
         self.assertEqual(err.count("unauthorized"), 1, err)  # logged once per transition
@@ -116,7 +129,7 @@ class DeskAdbLinkTest(unittest.TestCase):
 
     def test_unauthorized_device_never_exits_and_never_reverses(self):
         self.script_states("unauthorized", "unauthorized", "unauthorized")
-        code, err = self.run_link()
+        code, err = self.run_link(until=self.polls(6))
         self.assertIsNone(code, err)
         self.assertEqual(err.count("unauthorized"), 1, err)
         self.assertEqual([c for c in self.calls() if "reverse" in c], [])
@@ -124,14 +137,14 @@ class DeskAdbLinkTest(unittest.TestCase):
 
     def test_offline_device_waits_without_exit(self):
         self.script_states("offline", "offline")
-        code, err = self.run_link()
+        code, err = self.run_link(until=self.polls(5))
         self.assertIsNone(code, err)
         self.assertEqual([c for c in self.calls() if "reverse" in c], [])
 
     def test_unplug_between_check_and_reverse_is_a_disconnect_not_a_failure(self):
         # state device, reverse fails, device now absent, then it returns and links.
         self.script_states("device", "absent", "device", reverse_rcs=(1, 0))
-        code, err = self.run_link()
+        code, err = self.run_link(until=lambda e, c: "created tcp:8796 mapping" in e)
         self.assertIsNone(code, err)
         self.assertIn("disconnected during setup", err)
         self.assertGreaterEqual(self.calls().count(CREATE), 2)
@@ -140,7 +153,7 @@ class DeskAdbLinkTest(unittest.TestCase):
 
     def test_reverse_failure_with_device_present_is_retried_not_fatal(self):
         self.script_states("device", "device", "device", reverse_rcs=(1, 0))
-        code, err = self.run_link()
+        code, err = self.run_link(until=lambda e, c: "created tcp:8796 mapping" in e)
         self.assertIsNone(code, err)
         self.assertIn("retrying", err)
         self.assertIn("created tcp:8796 mapping", err)
@@ -148,7 +161,7 @@ class DeskAdbLinkTest(unittest.TestCase):
     def test_identical_mapping_is_adopted_without_reverse_call(self):
         self.script_states("device")
         (self.dir / "reverse_list").write_text("UsbFfs tcp:8796 tcp:8796\n")
-        code, err = self.run_link()
+        code, err = self.run_link(until=lambda e, c: "adopted" in e and "-s TAB123 wait-for-disconnect" in c)
         self.assertIsNone(code, err)
         self.assertIn("adopted", err)
         self.assertEqual([c for c in self.calls() if "--no-rebind" in c], [])
@@ -158,7 +171,7 @@ class DeskAdbLinkTest(unittest.TestCase):
     def test_reverse_marker_format_is_parsed(self):
         self.script_states("device")
         (self.dir / "reverse_list").write_text("(reverse) tcp:8796 tcp:8796\n")
-        code, err = self.run_link()
+        code, err = self.run_link(until=lambda e, c: "adopted" in e and "-s TAB123 wait-for-disconnect" in c)
         self.assertIn("adopted", err)
         self.assertEqual([c for c in self.calls() if "--no-rebind" in c], [])
 
@@ -173,14 +186,14 @@ class DeskAdbLinkTest(unittest.TestCase):
     def test_other_ports_mappings_are_ignored_and_left_alone(self):
         self.script_states("device")
         (self.dir / "reverse_list").write_text("TAB123 tcp:9000 tcp:9999\n")
-        code, err = self.run_link()
+        code, err = self.run_link(until=lambda e, c: CREATE in c)
         self.assertIsNone(code, err)
         self.assertIn(CREATE, self.calls())
         self.assert_no_forbidden_calls()
 
     def test_fresh_mapping_is_rechecked_after_reconnect(self):
         self.script_states("device", "absent", "device")
-        code, err = self.run_link()
+        code, err = self.run_link(until=lambda e, c: c.count(CREATE) >= 2 and c.count("-s TAB123 wait-for-disconnect") >= 2)
         self.assertIsNone(code, err)
         calls = self.calls()
         self.assertGreaterEqual(calls.count(CREATE), 2)
@@ -191,7 +204,7 @@ class DeskAdbLinkTest(unittest.TestCase):
 
     def test_only_the_named_serial_is_considered(self):
         self.script_states("absent", "absent")  # fake lists OTHER999 as a device always
-        code, err = self.run_link()
+        code, err = self.run_link(until=self.polls(5))
         self.assertIsNone(code, err)
         self.assertEqual([c for c in self.calls() if c != "devices"], [])
 
