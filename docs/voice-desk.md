@@ -24,14 +24,17 @@ round trip passes.
 | `desk/enrollment.py` | adapter | `enrolled.json` (JsonFile) and `desk-settings.json` (`sends_enabled`) |
 | `desk/labels.py` | adapter | Target labels from a bounded, cached read of each transcript's head and tail |
 | `desk/peer.py` | rules + adapter | Channel identity: peer PID from the socket, `/proc` walk, session-file check and recheck |
+| `desk/startup_identity.py` | rules | Launch identity for the startup acknowledgement: `StartupRefusal` (reasons and statuses), argv, foreground and session-file rules, the view digest |
+| `desk/startup_ack.py` | adapter | The startup acknowledgement: reads the supervisor's tmux panes and `/proc`, lists blocked sessions, sends the one Enter; rate limits |
 | `desk/channel.py` | runtime | The channel server: MCP over stdio plus the hub socket client |
 | `desk/hub.py` | runtime | Wires the state, the channel socket, the operator socket and HTTPS |
 | `desk/http_server.py` | adapter | HTTPS (stdlib `ssl` + `ThreadingHTTPServer`), Host/Origin/token guards, long-poll |
-| `desk/operator.py` | adapter | The 0600 operator socket and its client (`pair`, `revoke`, `sends`, `status`, `clear`) |
-| `desk/cli.py` | entry | `llm-switchboard desk serve|pair|revoke|status|enroll|unenroll|sends|flags|install-config` |
+| `desk/operator.py` | adapter | The 0600 operator socket and its client (`pair`, `revoke`, `sends`, `status`, `clear`, `enroll`, `unenroll`, `startup_view`, `startup_ack`) |
+| `desk/cli.py` | entry | `llm-switchboard desk serve|pair|revoke|status|enroll|unenroll|sends|ack|flags|install-config` |
 | `launcher.py`, `supervisor.py` | runtime | Start a kept Pi session through `claudepd`, adding desk flags only if enrolled at launch |
-| `screen.py`, `supervisor_state.py` | rules | Identify the complete development-channel dialog and report `startup_blocked` without restarting the session |
-| `desk/static/` | page | The tablet page: plain HTML/CSS/JS, no build step, Chrome 119 |
+| `screen.py`, `supervisor_state.py` | rules | Identify the complete development-channel dialog and its selected option, and report `startup_blocked` without restarting the session |
+| `tmux.py` | adapter | `Tmux.panes()` (pane id, pid, copy mode, by `@car_session`) and `send_enter(pane_id)`, used by the acknowledgement |
+| `desk/static/` | page | The tablet page: plain HTML/CSS/JS, no build step, Chrome 119; `startup.js` is the startup-blocked view |
 | `bin/desk-channel` | entry | Pinned channel server entry (`.venv/bin/python -I -B bin/desk-channel`) |
 | `bin/desk-adb-link` | entry | The USB reverse-forward loop for one tablet serial |
 | `systemd/llm-switchboard-desk.service`, `systemd/llm-switchboard-desk-adb.service` | unit | Hub and adb link user units (templated by `install.sh`) |
@@ -102,7 +105,9 @@ retention.
   waits for it (a hub starting meanwhile rereads under the same locks).
   Lock order, everywhere: `enrolled.json`'s lock, then
   `desk-settings.json`'s, then the hub's policy lock, then the state's
-  lock; within the hub the file locks re-enter. Any failure before handoff,
+  lock; within the hub the file locks re-enter. The startup
+  acknowledgement takes its own non-waiting lock before all of these and
+  then only `enrolled.json`'s (see "Startup acknowledgement"). Any failure before handoff,
   expected or not, expires the pending request. One outstanding request per target: a target is **busy**
   while it has a lock. Answered, expired and unknown requests, with their
   reply text, are dropped 24 h after they finished (and beyond the last 20);
@@ -203,9 +208,10 @@ https://localhost:<port>` exactly (`null` is refused). Errors are
 `{"error": "<reason>"}` with 400 (bad input), 401 (no or bad token), 403
 (refused: sends off, wrong origin), 404, 409 (state conflict: busy, stale
 ticket or generation, not enrolled, delivery in progress, the session's
-channel still running), 413, 429 (rate
-limit) or 503 (lock store error, enrollment file unreadable, the session's
-channel can't be checked).
+channel still running, a startup acknowledgement whose checks fail), 413,
+429 (rate limit, or another startup acknowledgement in progress) or 503
+(lock store error, enrollment file unreadable, the session's channel or
+process can't be checked, tmux didn't answer).
 
 Unauthenticated:
 - `GET /desk`, `/desk/app.js`, `/desk/app.css`, `/desk/text_rule.js`,
@@ -239,6 +245,18 @@ while its request was in flight changes nothing):
 - `POST /desk/api/send {ticket, text}` -> `{request_id, state}`.
 - `POST /desk/api/clear {session_id, lock_id}` -> `{cleared: true}`.
 - `POST /desk/api/enroll {session_id}`, `POST /desk/api/unenroll {session_id}`.
+- `GET /desk/api/startup` -> `{sessions: [Blocked]}`: the enrolled sessions
+  whose supervisor pane shows the development-channel warning. `Blocked =
+  {session_id, capture, digest, refusal}`: `capture` is the pane's text
+  (only text the exact warning matcher accepted, so at most 16 KiB and no
+  control characters; the page shows it through `textContent`), `digest`
+  is the value to acknowledge it with, or `null` with `refusal` naming
+  the failed check. At most 60 views a minute across all callers (429).
+- `POST /desk/api/startup/ack {session_id, digest}` -> `{session_id, sent:
+  true}`: presses Enter once in that session's pane (see "Startup
+  acknowledgement"). At most 6 a minute, one at a time (429). It sends no
+  prompt, so it does not depend on `sends on`, and works while sends are
+  off.
 
 ## Operator socket and CLI
 
@@ -256,8 +274,13 @@ start. Once connected, a missing, reset, timed-out or garbled answer (or
 one without a boolean `ok`) means
 the hub may have applied the change: the command writes nothing, prints
 ``result unknown; run `llm-switchboard desk status` ``, and exits 4 (3: no
-hub for the other commands, 1: refused). `flags` (prints the launch flags) and `install-config` (writes
-`mcp.json`) never need the hub.
+hub for the other commands, 1: refused). `ack <session id>` prints the warning screen and its digest
+from `startup_view`, asks `Press Enter once in this session to accept the
+warning? [y/N]` when stdin is a terminal, and otherwise prints the command
+to send it; `ack <session id> --digest <hex>` sends at once with a digest
+it printed. Both go only through the hub (exit 3 without one), with the
+same checks as the page. `flags` (prints the launch flags) and
+`install-config` (writes `mcp.json`) never need the hub.
 `serve` runs the hub. A request line is at most 4 KiB; at most 4 connections
 are served at once, and another gets `{"ok": false, "error": "busy"}` at once.
 
@@ -309,17 +332,90 @@ switch (`desk sends on|off`) does not control enrollment or launching.
 
 Claude waits at **Loading development channels** before Remote Control starts.
 The picker shows **Startup blocked**; expand the row for its attach command
-(`llm-switchboard attach <session id>`). Read the warning in the terminal and
-acknowledge it there if intended. The supervisor neither sends Enter nor
-restarts the pane while this dialog is on screen. A resize may reflow the
+(`llm-switchboard attach <session id>`). The supervisor neither sends Enter
+nor restarts the pane while this dialog is on screen. A resize may reflow the
 text; a changed or unrecognized dialog is not identified by a substring.
+Acknowledge it on the desk page, with `llm-switchboard desk ack <session
+id>`, or in the attached terminal.
 
-There is no tablet or CLI startup acknowledgement in this version. On Claude
-Code 2.1.330 the foreground process has its launch arguments at the warning,
-but its `sessions/<pid>.json` does not yet exist, for both `--session-id`
-and `--resume`. Launch arguments identify the *requested* session, not one
-Claude has opened. A screen digest alone cannot establish that identity or
-make checking a terminal screen and delivering a subsequent key atomic.
+## Startup acknowledgement
+
+Decided by Jacob (2026-11-22): every launch of an enrolled kept session waits
+at the warning until he acknowledges it. The desk shows the captured warning
+with an **Acknowledge startup warning** button; tapping it (or confirming
+`desk ack`) has the hub press Enter once, only if the screen still matches at
+that moment. It is operator-initiated: nothing presses Enter on its own.
+
+**Launch identity, not channel identity.** On Claude Code 2.1.330 the warning
+appears before `~/.claude/sessions/<pid>.json` is written (for `--resume` and
+`--session-id` alike), so the channel check ("the session file names the
+session") can't apply: nothing yet proves which conversation the process
+holds. Jacob approved (2026-11-22) this weaker identity for the one Enter,
+and accepted its risk: a resume of a bogus or missing id reaches the same
+warning, and the Enter then opens that empty or failed session. Rechecked
+immediately before the key, every one must hold (`desk/startup_identity.py`,
+`desk/startup_ack.py`):
+
+- The window is the supervisor's for this session on the dedicated tmux
+  server: the one window whose `@car_session` option (set by `Tmux.start`,
+  which the supervisor matches its windows by) names it, holding exactly one
+  live pane that is not in copy mode. No window title is consulted; two
+  tagged windows are refused.
+- The pane's foreground process (the terminal's foreground group leader,
+  from the pane process's `/proc` stat) is the pane program's only `claude`
+  child (`argv[0]` named `claude`), and its environment carries the
+  supervisor's `LLM_SWITCHBOARD_SESSION=<session id>` from `tmux new-window
+  -e`.
+- Its argv carries `--mcp-config <DeskConfig.mcp_config>` and
+  `--dangerously-load-development-channels server:desk` as adjacent pairs,
+  and exactly one session-choosing option (`--resume`, `--session-id`, `-r`,
+  `-c`, `--continue`, `--fork-session`, `--from-pr`, or `--resume=`/
+  `--session-id=`), which is `--resume` or `--session-id` followed by exactly
+  this id (never a substring).
+- `sessions/<pid>.json`, if it exists, is readable and names this session; a
+  missing file is expected at this stage. Nothing writes or fakes one.
+- The session is enrolled (read fresh, under `enrolled.json`'s lock); the
+  screen passes the exact warning matcher with option 1 (**I am using this
+  for local development**) selected, never **Exit**; and the digest equals
+  the one the page or CLI was shown. The digest is SHA-256 over the capture
+  together with the window id, pane id, pane pid and start time, and claude's
+  pid and start time, so a pane respawned with an identical screen needs a
+  fresh view. The supervisor's `startup_blocked` is this same matcher over
+  its own capture; the hub doesn't read the supervisor's memory.
+
+The acknowledgement inspects the session twice (the first says why a stale
+view fails; the second, a capture followed by the pane and the process read
+again, is the recheck), requires the same identity and digest both times,
+checks the tablet token once more, and then runs `tmux send-keys -t <pane id>
+Enter`: one key, never text. Any mismatch, ambiguity or race is a 409 with
+its reason; a process tree or tmux it can't read is a 503. A `send-keys`
+that fails or times out answers 503 `tmux did not confirm the Enter; check
+the session`, since a timed-out key may still have been delivered.
+
+**Who sends, and the lock order.** The hub sends, over the dedicated tmux
+socket (the supervisor's, `LLM_SWITCHBOARD_TMUX_SOCKET` or
+`llm-switchboard`). The supervisor runs in the picker's process with no
+authenticated path from the hub, and keys typed into a supervisor window
+from outside its loop already have a precedent (the picker types
+`/rename`); only the supervisor starts or kills windows. That is also why
+the hub unit has no `PrivateTmp`: it reaches the socket under
+`/tmp/tmux-<uid>/`. An acknowledgement takes its own lock without waiting
+(429 while another runs), then `enrolled.json`'s lock, which it holds across
+its tmux calls and `/proc` reads so an unenroll that has returned is never
+overtaken by an Enter that read the enrollment before it. It never takes the
+policy lock, and takes the state's mutex only inside the token check, never
+across a tmux call or a lock wait. Each tmux call times out after 3 s, which
+bounds how long the 5 s recheck and a send's handoff wait on that file lock.
+Having the supervisor send while the hub held its state mutex across the
+supervisor's enrollment-lock wait would deadlock with housekeeping (which
+takes the file lock first); this order has no cycle.
+
+**What stays non-atomic.** tmux has no "send only if the screen still reads
+this", so between the last check and `send-keys` Claude could redraw, or the
+process could exit and the supervisor respawn the pane. The window is
+milliseconds; Claude is waiting for this key, and a respawned pane belongs to
+the same session. The hub logs session ids and refusal reasons only, never
+screen content.
 
 Hand-started sessions still use `claudepd $(llm-switchboard desk flags)
 --resume <session id>` (default Pi paths); they are not adopted into a

@@ -3,7 +3,7 @@
 from pathlib import Path
 import unittest
 
-from llm_switchboard.screen import desk_startup_warning
+from llm_switchboard.screen import desk_startup_selection, desk_startup_warning
 from llm_switchboard.supervisor_state import ScreenInput, State, observe_screen
 
 # Captured from the visible Pi pane at 120 columns; contains no session data.
@@ -36,3 +36,9 @@ class StartupBlockedTest(unittest.TestCase):
             with self.subTest(screen=screen[:64]):
                 self.assertFalse(desk_startup_warning(screen))
                 self.assertIsNot(observe_screen(ScreenInput(screen, 50)).state, State.STARTUP_BLOCKED)
+
+    def test_the_selected_option_is_read_only_from_the_exact_warning(self):
+        exit_selected = WARNING.replace("❯ 1.", "  1.").replace("  2. Exit", "❯ 2. Exit")
+        self.assertEqual(desk_startup_selection(WARNING), 1)
+        self.assertEqual(desk_startup_selection(exit_selected), 2)
+        self.assertIsNone(desk_startup_selection("Here is the warning you asked for:\n" + WARNING))

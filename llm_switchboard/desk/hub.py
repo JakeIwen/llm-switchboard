@@ -12,6 +12,11 @@ one from an earlier hub run) is cleared only once the channel process it
 records is gone (`channel_process`, from `config.proc_dir`). Peer verification is injected
 (`peer=`) so tests run without /proc; production imports `desk.peer` at start.
 
+The startup acknowledgement (`startup_ack.py`) reads the dedicated tmux
+server (`tmux=`, the supervisor's socket by default) and sends its one
+Enter there; it takes only the enrollment file's lock and never the state's
+across a tmux call.
+
 Logs carry ids and reasons only: a request id from the channel is logged
 only when it has the hub-issued shape, never as sent.
 """
@@ -30,6 +35,7 @@ import time
 from typing import Callable
 
 from ..session_id import is_session_id
+from ..tmux import Tmux
 from .config import DeskConfig
 from .enrollment import DeskSettings, Enrollment, ensure_private_dir
 from .hub_state import HubState
@@ -37,13 +43,14 @@ from .http_server import DeskHttpServer, make_tls_context
 from .labels import SessionLabels, encodable
 from .locks import LockStore
 from .model import (
-    CHANNEL_START_PATTERN, HELLO_TIMEOUT_SECONDS, MAX_PENDING_CHANNEL_CONNECTIONS, RECHECK_SECONDS, ChannelProcess,
-    DeskError, is_request_id,
+    CHANNEL_START_PATTERN, HELLO_TIMEOUT_SECONDS, MAX_PENDING_CHANNEL_CONNECTIONS, RECHECK_SECONDS,
+    STARTUP_TMUX_TIMEOUT_SECONDS, ChannelProcess, DeskError, is_request_id,
 )
 from .operator import OperatorOp, OperatorServer, bind_private_socket
 from .protocol import (
     HEARTBEAT_SECONDS, IDLE_TIMEOUT_SECONDS, FrameError, MessageType, decode, encode, read_line,
 )
+from .startup_ack import StartupAck
 
 log = logging.getLogger("llm_switchboard.desk")
 
@@ -117,7 +124,8 @@ class Hub:
     def __init__(self, config: DeskConfig, *, peer=None, now: Callable[[], float] = time.time,
                  token_bytes: Callable[[int], bytes] = secrets.token_bytes, lock_store=None,
                  recheck_seconds: float = RECHECK_SECONDS, heartbeat_seconds: float = HEARTBEAT_SECONDS,
-                 idle_timeout_seconds: float = IDLE_TIMEOUT_SECONDS, long_poll_seconds: float | None = None):
+                 idle_timeout_seconds: float = IDLE_TIMEOUT_SECONDS, long_poll_seconds: float | None = None,
+                 tmux: Tmux | None = None):
         self.config = config
         self._peer = peer
         self._now = now
@@ -130,6 +138,7 @@ class Hub:
         self._policy_lock = threading.RLock()
         self.state = HubState(lock_store or LockStore(config.lock_file), now=now, token_bytes=token_bytes)
         self.labels = SessionLabels(config)
+        self.startup = StartupAck(config, self.enrollment, tmux or Tmux(timeout=STARTUP_TMUX_TIMEOUT_SECONDS), now=now)
         self.recheck_seconds = recheck_seconds
         self.heartbeat_seconds = heartbeat_seconds
         self.idle_timeout_seconds = idle_timeout_seconds
@@ -147,7 +156,8 @@ class Hub:
             OperatorOp.PAIR: self._op_pair, OperatorOp.REVOKE: self._op_revoke,
             OperatorOp.STATUS: self._op_status, OperatorOp.CLEAR: self._op_clear,
             OperatorOp.SENDS: self._op_sends, OperatorOp.ENROLL: self._op_enroll,
-            OperatorOp.UNENROLL: self._op_unenroll,
+            OperatorOp.UNENROLL: self._op_unenroll, OperatorOp.STARTUP_VIEW: self._op_startup_view,
+            OperatorOp.STARTUP_ACK: self._op_startup_ack,
         }
 
     @property
@@ -506,6 +516,18 @@ class Hub:
         self._drop_unenrolled(session_id)
         return {"session_id": session_id, "enrolled": False}
 
+    def startup_view(self, token: str) -> dict:
+        """Enrolled sessions waiting at the startup warning (a protected read)."""
+        return {"sessions": self.startup.blocked()}
+
+    def startup_ack(self, body: dict, token: str) -> dict:
+        """One Enter at the warning. It sends no prompt, so it doesn't depend
+        on `sends`; the token is checked again just before the key."""
+        def authorize() -> None:
+            if not self.state.authenticate(token):
+                raise DeskError(401, "unauthorized")
+        return self.startup.acknowledge(body.get("session_id"), body.get("digest"), authorize)
+
     # Enrollment edits, from the page or the operator socket, run under the
     # file locks and the policy lock: a send's handoff rereads the file under
     # them too, so an unenroll that has returned is never overtaken by a
@@ -567,6 +589,13 @@ class Hub:
         removed = self._unenroll(session_id)
         self._drop_unenrolled(session_id)
         return {"session_id": session_id, "enrolled": False, "changed": removed}
+
+    def _op_startup_view(self, message: dict) -> dict:
+        return self.startup.view(message.get("session_id"))
+
+    def _op_startup_ack(self, message: dict) -> dict:
+        # The operator socket is 0600 and local: Jacob at the Pi's shell.
+        return self.startup.acknowledge(message.get("session_id"), message.get("digest"), lambda: None)
 
     def _op_sends(self, message: dict) -> dict:
         enabled = message.get("enabled")

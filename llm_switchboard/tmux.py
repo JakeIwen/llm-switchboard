@@ -15,6 +15,7 @@ from .paths import TMUX_CONF, TMUX_SESSION, TMUX_SOCKET
 
 _FIELDS = ["window_id", "@car_session", "window_name", "pane_pid", "pane_dead", "pane_dead_status",
            "window_active_clients"]
+_PANE_FIELDS = ["window_id", "@car_session", "pane_id", "pane_pid", "pane_dead", "pane_in_mode"]
 
 
 @dataclass(frozen=True)
@@ -29,15 +30,30 @@ class Window:
     viewers: int = 0
 
 
+@dataclass(frozen=True)
+class Pane:
+    """One pane, keyed by the window's @car_session tag that `start` sets."""
+    window_id: str
+    session_id: str
+    pane_id: str
+    pane_pid: int | None
+    dead: bool
+    # Copy or view mode: keys go to tmux, not to the program.
+    in_mode: bool
+
+
 class TmuxError(RuntimeError):
     pass
 
 
 class Tmux:
-    def __init__(self, socket: str = TMUX_SOCKET, session: str = TMUX_SESSION, conf: Path = TMUX_CONF):
+    def __init__(self, socket: str = TMUX_SOCKET, session: str = TMUX_SESSION, conf: Path = TMUX_CONF,
+                 timeout: float = 20):
         self.socket = socket
         self.session = session
         self.conf = Path(conf)
+        # Per tmux call; the desk hub uses a short one while it holds a file lock.
+        self.timeout = timeout
 
     def base_argv(self) -> list[str]:
         return ["tmux", "-L", self.socket, "-f", str(self.conf)]
@@ -65,6 +81,23 @@ class Tmux:
                     viewers=int(viewers) if viewers.isdigit() else 0,
                 )
             )
+        return found
+
+    def panes(self) -> list[Pane]:
+        """Every pane of a tagged window; none when there is no server."""
+        fmt = "\t".join("#{%s}" % f for f in _PANE_FIELDS)
+        result = self._run(["list-panes", "-a", "-F", fmt], check=False)
+        if result.returncode != 0:
+            return []
+        found = []
+        for line in result.stdout.splitlines():
+            parts = line.split("\t")
+            if len(parts) != len(_PANE_FIELDS) or not parts[1]:
+                continue
+            window_id, session_id, pane_id, pane_pid, dead, in_mode = parts
+            found.append(Pane(window_id=window_id, session_id=session_id, pane_id=pane_id,
+                              pane_pid=int(pane_pid) if pane_pid.isdigit() else None,
+                              dead=dead == "1", in_mode=in_mode != "0"))
         return found
 
     def start(self, session_id: str, label: str, command: str, env: dict[str, str]) -> str:
@@ -95,6 +128,10 @@ class Tmux:
         self._run(["send-keys", "-t", window_id, "-l", text])
         self._run(["send-keys", "-t", window_id, "Enter"])
 
+    def send_enter(self, pane_id: str) -> None:
+        """Press Enter once in one pane (a `%<n>` pane id), typing nothing else."""
+        self._run(["send-keys", "-t", pane_id, "Enter"])
+
     def kill_server(self) -> None:
         self._run(["kill-server"], check=False)
 
@@ -105,7 +142,7 @@ class Tmux:
         argv = self.base_argv() + args
         if new_server:
             argv = _own_scope() + argv
-        result = subprocess.run(argv, capture_output=True, text=True, timeout=20)
+        result = subprocess.run(argv, capture_output=True, text=True, timeout=self.timeout)
         if check and result.returncode != 0:
             raise TmuxError(f"{' '.join(args[:1])} failed: {result.stderr.strip()}")
         return result

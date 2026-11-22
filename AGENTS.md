@@ -91,7 +91,8 @@ Sharing the socket would let its supervisor close the real windows.
 | `llm_switchboard/search_api.py`, `search_cli.py` | Search routes (plus Mac title/folder matches) and the `search` / `index` commands (light imports; `__main__` dispatches them before cli.py) |
 | `llm_switchboard/desk/` | The voice desk (tablet page -> enrolled Claude sessions through per-session MCP channels); standard library only, never imports the HTTP stack; module map, files, API and state rules in `docs/voice-desk.md` |
 | `llm_switchboard/desk/hub.py`, `desk/hub_state.py`, `desk/model.py` | `desk serve`: wiring of the channel socket, operator socket, HTTPS and the 5 s recheck; the pure state machine (tickets, requests, locks, pairing, tokens) and its records and limits |
-| `llm_switchboard/desk/cli.py` | `llm-switchboard desk <command>`: serve, pair, revoke, status, clear, sends, enroll, unenroll, flags, install-config (a light command in `__main__`) |
+| `llm_switchboard/desk/startup_identity.py`, `desk/startup_ack.py` | The startup acknowledgement: launch-identity rules and refusal vocabulary; the tmux and `/proc` adapter that shows the development-channel warning and presses Enter once |
+| `llm_switchboard/desk/cli.py` | `llm-switchboard desk <command>`: serve, pair, revoke, status, clear, sends, enroll, unenroll, ack, flags, install-config (a light command in `__main__`) |
 | `llm_switchboard/listen.py` | Where `serve` listens (localhost + Tailscale, bound once Tailscale is up) and which peers it answers |
 | `llm_switchboard/web.py` | FastAPI routes, the root picker and former preview redirects, and the deterministic OpenAPI export; keeps the `App` and `make_app` imports |
 | `llm_switchboard/web_app.py` | HTTP-independent picker operations and the composition of local, Codex and Mac session sources |

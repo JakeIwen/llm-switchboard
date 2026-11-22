@@ -45,6 +45,10 @@ class ProcessRecord:
     argv: tuple[str, ...]
     # /proc/<pid>/exe resolved, or None when unreadable.
     exe: str | None
+    # stat fields 5 and 8: the process group, and the foreground process group
+    # of its controlling terminal (-1 without one). The startup ack reads them.
+    pgrp: int = -1
+    tpgid: int = -1
 
 
 # --- adapter: /proc and the session registry ---------------------------------
@@ -72,7 +76,7 @@ def read_process(proc_dir: Path, pid: int) -> ProcessRecord | None:
         raw_argv = (proc / "cmdline").read_bytes()
         # The command name in stat may hold spaces and ")", so split after the last one.
         fields = stat.rsplit(")", 1)[1].split()
-        ppid, start = int(fields[1]), fields[19]
+        ppid, pgrp, tpgid, start = int(fields[1]), int(fields[2]), int(fields[5]), fields[19]
     except (OSError, ValueError, IndexError):
         return None
     try:
@@ -81,7 +85,7 @@ def read_process(proc_dir: Path, pid: int) -> ProcessRecord | None:
         exe = None
     body = raw_argv[:-1] if raw_argv.endswith(b"\0") else raw_argv
     argv = tuple(part.decode(errors="surrogateescape") for part in body.split(b"\0")) if body else ()
-    return ProcessRecord(pid=pid, ppid=ppid, start=start, argv=argv, exe=exe)
+    return ProcessRecord(pid=pid, ppid=ppid, start=start, argv=argv, exe=exe, pgrp=pgrp, tpgid=tpgid)
 
 
 def read_session_file(sessions_dir: Path, pid: int) -> dict | None:

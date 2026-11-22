@@ -17,6 +17,13 @@
 <div id="banner-sends" class="banner warn" data-testid="banner-sends" hidden>Sends are off</div>
 <div id="banner-lock-store" class="banner bad" data-testid="banner-lock-store" hidden></div>
 
+<section id="startup" class="panel startup" data-testid="startup" hidden>
+  <h2>Startup blocked</h2>
+  <p class="note">Claude is waiting at its development-channel warning. Read it, then acknowledge: the hub presses Enter once, only if this screen is still showing.</p>
+  <ul id="startup-list" class="plain"></ul>
+  <p id="startup-sent" class="result" data-tone="ok" data-testid="startup-sent" role="status" hidden></p>
+</section>
+
 <section id="settings" class="panel" hidden>
   <h2>Enrollment</h2>
   <ul id="enroll-list" class="plain"></ul>
@@ -92,6 +99,7 @@
 
 <script src="/desk/text_rule.js"></script>
 <script src="/desk/desk_logic.js"></script>
+<script src="/desk/startup.js"></script>
 <script src="/desk/app.js"></script>
 </body>
 </html>

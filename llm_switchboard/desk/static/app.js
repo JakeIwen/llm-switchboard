@@ -25,6 +25,7 @@
   var sentAckSeq = null; // pollSeq when the send was acknowledged
   var sentAckVersion = null; // version of the fresh snapshot fetched after the send ack
   var compose = freshCompose();
+  var startup = null; // startup.js's blocked-session view, created in wire()
 
   function $(id) { return document.getElementById(id); }
 
@@ -106,6 +107,7 @@
     clear($("enroll-list"));
     $("settings-note").textContent = "";
     $("desk").hidden = true;
+    startup.stop();
     $("banner-sends").hidden = true;
     $("banner-lock-store").hidden = true;
     setConn("offline", "Not paired");
@@ -159,6 +161,7 @@
           $("desk").hidden = false;
           primed = false;
           startStateLoop();
+          startup.start();
         } else if (r.status === 409) {
           pollClaim(mySession, pairId, secret, deadline);
         } else {
@@ -696,6 +699,10 @@
   // ---- Wiring -------------------------------------------------------------
 
   function wire() {
+    startup = window.DeskStartup.create({
+      api: api,
+      labelFor: function (id) { var t = findTarget(id); return t ? t.label : null; }
+    });
     $("pair-new").addEventListener("click", function () { startPairing(); });
     $("settings-toggle").addEventListener("click", function () {
       var open = $("settings").hidden;

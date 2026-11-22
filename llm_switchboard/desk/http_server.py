@@ -47,6 +47,7 @@ STATIC_ROUTES = {
     "/desk/app.css": (STATIC_DIR / "app.css", _CSS),
     "/desk/text_rule.js": (STATIC_DIR / "text_rule.js", _JS),
     "/desk/desk_logic.js": (STATIC_DIR / "desk_logic.js", _JS),
+    "/desk/startup.js": (STATIC_DIR / "startup.js", _JS),
     # The hub's own cases, so the page's mirror of the rule checks the same table.
     "/desk/text_rule_cases.json": (DESK_DIR / "text_rule_cases.json", _JSON),
 }
@@ -60,8 +61,10 @@ POST_ROUTES = {
     "/desk/api/clear": ("clear", True),
     "/desk/api/enroll": ("enroll", True),
     "/desk/api/unenroll": ("unenroll", True),
+    "/desk/api/startup/ack": ("startup_ack", True),
 }
 STATE_PATH = "/desk/api/state"
+STARTUP_PATH = "/desk/api/startup"
 # A refused body up to this size is read and dropped so the error reaches the client.
 _MAX_DRAIN_BYTES = 4 * MAX_BODY_BYTES
 
@@ -131,7 +134,7 @@ class _TlsThreadingServer(ThreadingHTTPServer):
 
 
 class DeskHttpServer:
-    """`api` is the hub: authenticate, state_view, wait_for_change and the
+    """`api` is the hub: authenticate, state_view, wait_for_change, startup_view and the
     POST_ROUTES methods (each takes the parsed body and may raise DeskError)."""
 
     def __init__(self, config: DeskConfig, api, max_connections: int = MAX_HTTP_CONNECTIONS,
@@ -226,6 +229,9 @@ class _DeskHandler(BaseHTTPRequestHandler):
             self._respond(200, data, content_type)
         elif path == STATE_PATH:
             self._state()
+        elif path == STARTUP_PATH:
+            token = self._token()
+            self._json(200, self.desk.api.startup_view(token))
         else:
             raise DeskError(404, "not found")
 

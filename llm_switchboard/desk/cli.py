@@ -1,8 +1,9 @@
 """`llm-switchboard desk ...`: run the hub and operate it.
 
 A light command (`__main__._LIGHT_COMMANDS`): it never imports the HTTP
-stack. `pair`, `revoke`, `status` and `clear` talk to the running hub over
-the operator socket. `sends`, `enroll` and `unenroll` go through the hub
+stack. `pair`, `revoke`, `status`, `clear` and `ack` talk to the running hub
+over the operator socket (`ack` only through the hub, which sends its one
+Enter). `sends`, `enroll` and `unenroll` go through the hub
 when it runs (so its sends see the change in order) and edit the file
 directly only when the connect proved no hub listens; once connected, a
 missing answer is reported as unknown and nothing is written. `flags` and
@@ -47,6 +48,9 @@ def main(argv=None) -> int:
     sends.add_argument("value", choices=("on", "off"))
     for name, text in (("enroll", "let the desk route to a session"), ("unenroll", "stop routing to a session")):
         commands.add_parser(name, help=text).add_argument("session_id")
+    ack = commands.add_parser("ack", help="show a session's startup warning, then press Enter once to accept it")
+    ack.add_argument("session_id")
+    ack.add_argument("--digest", metavar="HEX", help="the digest a previous `desk ack` printed; sends without asking")
     commands.add_parser("flags", help="print the claude launch flags for an enrolled session")
     commands.add_parser("install-config", help="write the pinned MCP config (mcp.json)")
     args = parser.parse_args(argv)
@@ -145,6 +149,39 @@ def _unenroll(args, config):
     return 0
 
 
+def _ack(args, config):
+    digest = args.digest
+    if digest is None:
+        response = operator_request(config.operator_socket, OperatorOp.STARTUP_VIEW, session_id=args.session_id)
+        if not response.get("ok"):
+            print(f"desk: {response.get('error', 'refused')}", file=sys.stderr)
+            return EXIT_REFUSED
+        print(_printable(response.get("capture") or "").rstrip("\n"))
+        if response.get("refusal") or not response.get("digest"):
+            print(f"desk: {response.get('refusal') or 'not acknowledgeable'}", file=sys.stderr)
+            return EXIT_REFUSED
+        digest = response["digest"]
+        print(f"digest {digest}")
+        if not sys.stdin.isatty():
+            print(f"nothing sent; to press Enter once: llm-switchboard desk ack {args.session_id} --digest {digest}")
+            return 0
+        if input("Press Enter once in this session to accept the warning? [y/N] ").strip().lower() not in ("y", "yes"):
+            print("nothing sent")
+            return 0
+    response = operator_request(config.operator_socket, OperatorOp.STARTUP_ACK, session_id=args.session_id,
+                                digest=digest)
+    if not response.get("ok"):
+        print(f"desk: {response.get('error', 'refused')}", file=sys.stderr)
+        return EXIT_REFUSED
+    print(f"{args.session_id}: Enter sent; the session continues starting")
+    return 0
+
+
+def _printable(text: str) -> str:
+    """Only matched warning text reaches here; keep the terminal safe anyway."""
+    return "".join(c for c in text if c == "\n" or c.isprintable())
+
+
 def _flags(args, config):
     print(" ".join(config.launch_flags))
     return 0
@@ -168,6 +205,6 @@ def _install_config(args, config):
 
 _COMMANDS = {
     "serve": _serve, "pair": _pair, "revoke": _revoke, "status": _status, "clear": _clear,
-    "sends": _sends, "enroll": _enroll, "unenroll": _unenroll, "flags": _flags,
+    "sends": _sends, "enroll": _enroll, "unenroll": _unenroll, "ack": _ack, "flags": _flags,
     "install-config": _install_config,
 }

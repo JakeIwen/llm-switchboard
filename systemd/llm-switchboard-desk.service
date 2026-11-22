@@ -12,9 +12,10 @@ Environment=LANG=C.UTF-8
 UMask=0077
 # Safe for a user manager (no extra privileges needed). Deliberately no
 # ProtectHome/ProtectSystem: the hub reads ~/.claude/sessions, /proc and the
-# repo, and writes under ~/.config and ~/.local/state.
+# repo, and writes under ~/.config and ~/.local/state. No PrivateTmp either:
+# the startup acknowledgement reaches the supervisor's tmux server through its
+# socket under /tmp/tmux-<uid>/ (the hub writes nothing in /tmp).
 NoNewPrivileges=yes
-PrivateTmp=yes
 
 [Install]
 WantedBy=default.target

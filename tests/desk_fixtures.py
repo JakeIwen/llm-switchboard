@@ -253,6 +253,9 @@ class HubCase(unittest.TestCase):
 
     def start_hub(self, **options):
         from llm_switchboard.desk.hub import Hub
+        from llm_switchboard.tmux import Tmux
+        # Never the supervisor's tmux server: a socket name no server uses.
+        options.setdefault("tmux", Tmux(socket=f"desk-test-none-{os.getpid()}", timeout=5))
         hub = Hub(self.config, peer=self.peer, recheck_seconds=3600, long_poll_seconds=self.long_poll_seconds,
                   **options)
         hub.start()

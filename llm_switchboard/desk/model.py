@@ -70,6 +70,14 @@ LABEL_HEAD_BYTES = 64 * 1024
 LABEL_TAIL_BYTES = 256 * 1024
 MAX_LABEL_CACHE = 256
 
+# Startup acknowledgement (one Enter at the development-channel warning):
+# acknowledgements and blocked-session views per minute across all callers
+# (the page polls every 5 s), and each tmux call's timeout, short because an
+# acknowledgement holds the enrollment lock across its tmux calls.
+MAX_STARTUP_ACKS_PER_MINUTE = 6
+MAX_STARTUP_VIEWS_PER_MINUTE = 60
+STARTUP_TMUX_TIMEOUT_SECONDS = 3
+
 # Operator socket: concurrent connections and the request line's size.
 MAX_OPERATOR_CONNECTIONS = 4
 MAX_OPERATOR_LINE_BYTES = 4 * 1024
