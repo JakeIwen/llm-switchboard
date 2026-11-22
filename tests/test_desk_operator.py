@@ -9,6 +9,7 @@ import socket
 import stat
 import subprocess
 import sys
+import threading
 import time
 import unittest
 from unittest import mock
@@ -228,6 +229,108 @@ class DispatchTest(ChannelHubCase):
         self.hub.recheck_now()
         self.assertEqual(self.operator(OperatorOp.STATUS)["registrations"], [])
         self.assertEqual(other.read(), (None, {}))
+
+
+class DeliveryGuardTest(ChannelHubCase):
+    def test_a_lock_stays_unclearable_until_the_channel_reports_delivery(self):
+        client, generation = self.registered(SESSION_A)
+        request_id = self.send(SESSION_A, generation)["request_id"]
+        # The hub's socket write is done; the channel holds the event without
+        # having written it to Claude yet.
+        self.assertIs(client.read()[0], MessageType.EVENT)
+        lock_id = self.target(SESSION_A)["lock"]["lock_id"]
+        clear = {"session_id": SESSION_A, "lock_id": lock_id}
+        self.assertEqual(self.operator(OperatorOp.CLEAR, **clear), {"ok": False, "error": "delivery in progress"})
+        self.assertRefused(409, "busy", self.hub.ticket,
+                           {"session_id": SESSION_A, "generation": generation, "epoch": self.hub.epoch}, self.token)
+        client.send(MessageType.DELIVERED, request_id=request_id)
+        wait_until(lambda: self.operator(OperatorOp.CLEAR, **clear)["ok"])
+
+    def test_a_lost_delivery_report_resolves_through_disconnect_as_unknown(self):
+        client, generation = self.registered(SESSION_A)
+        request_id = self.send(SESSION_A, generation)["request_id"]
+        client.read()
+        lock_id = self.target(SESSION_A)["lock"]["lock_id"]
+        client.close()
+        wait_until(lambda: self.hub.state.request_state(request_id) == "unknown")
+        self.assertEqual(self.operator(OperatorOp.CLEAR, session_id=SESSION_A, lock_id=lock_id),
+                         {"ok": True, "cleared": True})
+
+
+class ReplyRecheckTest(ChannelHubCase):
+    def test_a_reply_after_the_session_changed_is_refused_and_keeps_the_lock(self):
+        client, generation = self.registered(SESSION_A)
+        request_id = self.send(SESSION_A, generation)["request_id"]
+        client.read()
+        client.send(MessageType.DELIVERED, request_id=request_id)
+        # /clear: the session file names another session; housekeeping hasn't run.
+        self.peer.recheck_failures[SESSION_A] = "session file names another session"
+        client.send(MessageType.REPLY, request_id=request_id, text="answer", spoken="answer")
+        kind, result = client.read()
+        self.assertEqual((kind, result["ok"], result["reason"]), (MessageType.REPLY_RESULT, False, "session changed"))
+        self.assertEqual(self.hub.state.request_state(request_id), "unknown")
+        self.assertEqual(self.target(SESSION_A)["lock"]["request_id"], request_id)
+        self.assertEqual(client.read(), (None, {}))
+
+
+class PreHandoffFailureTest(ChannelHubCase):
+    def test_an_error_before_handoff_expires_the_request_and_frees_the_target(self):
+        _, generation = self.registered(SESSION_A)
+        with mock.patch.object(self.hub, "refresh_files", side_effect=OSError("settings unreadable")):
+            with self.assertRaises(OSError):
+                self.send(SESSION_A, generation)
+        [request] = self.hub.state_view()["requests"]
+        self.assertEqual(request["state"], "expired")
+        self.assertIsNone(self.target(SESSION_A)["lock"])
+        self.assertEqual(self.send(SESSION_A, generation)["state"], "handed_off")
+
+
+class PolicyRaceTest(ChannelHubCase):
+    def test_a_stale_settings_read_is_never_published_over_a_newer_sends_off(self):
+        reading, go = threading.Event(), threading.Event()
+        real = self.hub.settings.sends_enabled
+
+        def slow_read():
+            value = real()  # reads "on"
+            reading.set()
+            go.wait(5)
+            return value
+        with mock.patch.object(self.hub.settings, "sends_enabled", side_effect=slow_read):
+            refresher = threading.Thread(target=self.hub.refresh_files)
+            refresher.start()
+            reading.wait(5)
+            operator = threading.Thread(target=self.hub.handle_operator, args=({"op": "sends", "enabled": False},))
+            operator.start()
+            # Unserialized, the operator's change lands now and the refresh's
+            # stale "on" overwrites it below; serialized, it waits.
+            operator.join(0.5)
+            go.set()
+            refresher.join(5)
+            operator.join(5)
+        self.assertFalse(self.hub.state.snapshot()["sends_enabled"])
+        self.assertEqual(json.loads(self.config.settings_file.read_text()), {"sends_enabled": False})
+
+
+class LabelFailureTest(ChannelHubCase):
+    def test_a_malformed_transcript_degrades_its_label_and_nothing_else(self):
+        project = self.home / ".claude" / "projects" / "-work-van"
+        project.mkdir(parents=True)
+        records = [{"type": "user", "cwd": "/work/van", "message": "a bare string"},
+                   {"type": "user", "message": {"content": [{"type": "text", "text": 5}]}}]
+        (project / f"{SESSION_A}.jsonl").write_text("".join(json.dumps(r) .replace(" ", "") + "\n" for r in records))
+        self.hub.close()
+        self.hub = self.start_hub()
+        self.assertEqual(self.target(SESSION_A)["label"], "van")
+        self.assertTrue(self.operator(OperatorOp.STATUS)["ok"])
+
+    def test_a_label_error_at_registration_leaves_the_connection_served(self):
+        with mock.patch.object(SessionLabels, "describe", side_effect=RuntimeError("boom")):
+            with self.assertLogs("llm_switchboard.desk", "WARNING"):
+                client, _ = self.registered(SESSION_A)
+            client.send(MessageType.PING)
+            self.assertIs(client.read()[0], MessageType.PONG)
+        self.assertEqual(self.target(SESSION_A)["label"], SESSION_A[:8])
+        self.assertEqual(self.target(SESSION_A)["registration"], "registered")
 
 
 class UndeliverableTest(ChannelHubCase):

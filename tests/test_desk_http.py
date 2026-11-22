@@ -253,6 +253,10 @@ class SendHttpTest(HttpCase):
         ticket = self.ticket(token, generation)
         _, _, sent = self.call("POST", "/desk/api/send", {"ticket": ticket, "text": "hi"}, token=token)
         lock = self.target(SESSION_A)["lock"]
+        client.read()
+        client.send(MessageType.DELIVERED, request_id=sent["request_id"])
+        client.send(MessageType.PING)
+        client.read()
         self.assertEqual(self.call("POST", "/desk/api/clear", {"session_id": SESSION_A, "lock_id": "0" * 16},
                                    token=token)[::2], (409, {"error": "lock id does not match"}))
         self.assertEqual(self.call("POST", "/desk/api/clear", {"session_id": SESSION_A, "lock_id": lock["lock_id"]},

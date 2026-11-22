@@ -98,6 +98,10 @@ class Hub:
         self._now = now
         self.enrollment = Enrollment(config.enrolled_file)
         self.settings = DeskSettings(config.settings_file)
+        # Reading the policy files and publishing them into the state, and
+        # changing them, happen under this lock so a stale read can't be
+        # published over a newer change. Order: this lock, then the state's.
+        self._policy_lock = threading.RLock()
         self.state = HubState(lock_store or LockStore(config.lock_file), now=now, token_bytes=token_bytes)
         self.labels = SessionLabels(config)
         self.recheck_seconds = recheck_seconds
@@ -184,15 +188,24 @@ class Hub:
     # -- files and rechecks ----------------------------------------------------
 
     def refresh_files(self) -> None:
-        self.state.set_enrolled(self.enrollment.sessions())
-        self.state.set_sends_enabled(self.settings.sends_enabled())
+        with self._policy_lock:
+            self.state.set_enrolled(self.enrollment.sessions())
+            self.state.set_sends_enabled(self.settings.sends_enabled())
 
     def refresh_labels(self) -> None:
         """Every target's label and folder, from bounded, cached transcript
-        reads; never run by the state long-poll."""
+        reads; never run by the state long-poll. Never raises: a transcript
+        that can't be read labels its target by the session id instead of
+        stopping startup, a registration or the recheck loop."""
         pids = {r.session_id: getattr(r.identity, "claude_pid", None) for r in self.state.registrations()}
-        self.state.set_labels({session_id: self.labels.describe(session_id, pids.get(session_id))
-                               for session_id in self.state.target_session_ids()})
+        labels = {}
+        for session_id in self.state.target_session_ids():
+            try:
+                labels[session_id] = self.labels.describe(session_id, pids.get(session_id))
+            except Exception as exc:
+                log.warning("desk: label for session %s failed: %s", session_id[:8], type(exc).__name__)
+                labels[session_id] = (session_id[:8], "")
+        self.state.set_labels(labels)
 
     def recheck_now(self) -> None:
         """One pass of the 5 s loop: files, expiry, identity rechecks, labels."""
@@ -321,7 +334,9 @@ class Hub:
             elif kind is MessageType.PONG:
                 pass
             elif kind is MessageType.DELIVERED:
-                log.info("desk: delivered %s", _logged_request_id(message.get("request_id")))
+                request_id = message.get("request_id")
+                if self.state.mark_delivered(connection.conn_id, request_id):
+                    log.info("desk: delivered %s", _logged_request_id(request_id))
             elif kind is MessageType.UNDELIVERABLE:
                 self._handle_undeliverable(connection, message)
             elif kind is MessageType.REPLY:
@@ -331,7 +346,19 @@ class Hub:
         return "hub stopping"
 
     def _handle_reply(self, connection: ChannelConnection, message: dict) -> None:
+        """A reply counts only while the connection still belongs to the
+        session it registered as: after /clear the same channel process
+        speaks for another session, so a failed recheck refuses the reply and
+        drops the connection (the request becomes unknown, its lock stays)."""
         request_id = message.get("request_id")
+        registration = next((r for r in self.state.registrations() if r.conn_id == connection.conn_id), None)
+        recheck = self._recheck(registration.identity) if registration else None
+        if recheck:
+            log.info("desk: reply for %s refused: recheck: %s", _logged_request_id(request_id), _loggable(recheck))
+            connection.send(MessageType.REPLY_RESULT, request_id=request_id if isinstance(request_id, str) else None,
+                            ok=False, reason="session changed")
+            self._drop_connection(connection.conn_id, f"recheck at reply: {recheck}")
+            return
         reason = self.state.handle_reply(connection.conn_id, request_id, message.get("text"), message.get("spoken"))
         if reason:
             log.info("desk: reply for %s dropped: %s", _logged_request_id(request_id), reason)
@@ -387,15 +414,13 @@ class Hub:
 
     def send(self, body: dict, token: str) -> dict:
         request = self.state.begin_send(body.get("ticket"), body.get("text"), token)
-        registration = next((r for r in self.state.registrations() if r.conn_id == request.conn_id), None)
-        reason = "connection gone" if registration is None else self._recheck(registration.identity)
-        if reason:
+        try:
+            conn_id, content = self._prepare_handoff(request)
+        except BaseException:
+            # Whatever failed before handoff, the pending request must not
+            # keep the target busy (a no-op once it is no longer pending).
             self.state.expire_request(request.request_id)
-            self._drop_connection(request.conn_id, f"dispatch recheck: {reason}")
-            raise DeskError(409, "target changed; not sent")
-        # A CLI unenroll or sends change since the last 5 s pass counts too.
-        self.refresh_files()
-        conn_id, content = self.state.hand_off(request.request_id)
+            raise
         written = False
         try:
             with self._connections_lock:
@@ -409,6 +434,17 @@ class Hub:
         log.info("desk: request %s handed off to session %s", request.request_id, request.session_id[:8])
         return {"request_id": request.request_id, "state": self.state.request_state(request.request_id)}
 
+    def _prepare_handoff(self, request) -> tuple[int, str]:
+        registration = next((r for r in self.state.registrations() if r.conn_id == request.conn_id), None)
+        reason = "connection gone" if registration is None else self._recheck(registration.identity)
+        if reason:
+            self.state.expire_request(request.request_id)
+            self._drop_connection(request.conn_id, f"dispatch recheck: {reason}")
+            raise DeskError(409, "target changed; not sent")
+        # A CLI unenroll or sends change since the last 5 s pass counts too.
+        self.refresh_files()
+        return self.state.hand_off(request.request_id)
+
     def clear(self, body: dict, token: str) -> dict:
         with self.state.authorized(token):
             self.state.clear_lock(body.get("session_id"), body.get("lock_id"))
@@ -416,14 +452,14 @@ class Hub:
 
     def enroll(self, body: dict, token: str) -> dict:
         session_id = body.get("session_id")
-        with self.state.authorized(token):
+        with self._policy_lock, self.state.authorized(token):
             self.enrollment.enroll(session_id, self._now())
             self.refresh_files()
         return {"session_id": session_id, "enrolled": True}
 
     def unenroll(self, body: dict, token: str) -> dict:
         session_id = body.get("session_id")
-        with self.state.authorized(token):
+        with self._policy_lock, self.state.authorized(token):
             self.enrollment.unenroll(session_id)
             self.refresh_files()
         # Routing stops at once, not at the next recheck.
@@ -465,6 +501,7 @@ class Hub:
         enabled = message.get("enabled")
         if not isinstance(enabled, bool):
             raise DeskError(400, "enabled must be true or false")
-        self.settings.set_sends_enabled(enabled)
-        self.state.set_sends_enabled(enabled)
+        with self._policy_lock:
+            self.settings.set_sends_enabled(enabled)
+            self.state.set_sends_enabled(enabled)
         return {"sends_enabled": enabled}

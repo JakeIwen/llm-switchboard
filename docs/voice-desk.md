@@ -45,7 +45,7 @@ All 0600 in 0700 directories.
 
 | Path (`DeskConfig`) | Content | Bound |
 | --- | --- | --- |
-| `config_dir/enrolled.json` | `{"sessions": {<session id>: {"since": <unix s>}}}`; an unreadable or malformed file reads as nobody enrolled, and enroll/unenroll refuse (503) to edit it | 64 sessions |
+| `config_dir/enrolled.json` | `{"sessions": {<session id>: {"since": <unix s>}}}` and nothing else; an unreadable file, or any key or record of another shape (a `null` record, an extra field), makes the whole file malformed: it reads as nobody enrolled, and enroll/unenroll refuse (503) to edit it | 64 sessions |
 | `config_dir/desk-settings.json` | `{"sends_enabled": false}` | fixed |
 | `config_dir/mcp.json` | The pinned MCP config (`desk install-config` writes it) | fixed |
 | `config_dir/tls/leaf.pem`, `leaf.key` | The hub's TLS leaf (from `scripts/desk-ca.sh`) | fixed |
@@ -86,7 +86,11 @@ retention.
   state's lock, everything the send was accepted on: the sending token is
   still valid, sends are on, the lock store is usable, the session is still
   enrolled (the hub rereads the files first) and its registration is the
-  same single one. One outstanding request per target: a target is **busy**
+  same single one. Reading the enrollment and settings files and publishing
+  them into the state happen under one hub lock, which `desk sends` and the
+  page's enroll/unenroll also hold while they write, so a slow read can't
+  publish a stale value over a newer change. Any failure before handoff,
+  expected or not, expires the pending request. One outstanding request per target: a target is **busy**
   while it has a lock. Answered, expired and unknown requests, with their
   reply text, are dropped 24 h after they finished (and beyond the last 20);
   a request still `handed_off` is kept, and no lock is ever aged out.
@@ -104,7 +108,13 @@ retention.
   Cleared by the verified answer, or by Jacob's explicit clear naming that
   `lock_id` (a clear naming an older lock id is refused, and a clear while
   that request's event write is still under way is refused with 409
-  `delivery in progress`). Locks survive hub restarts; a locked target stays
+  `delivery in progress`). The delivery stays in progress after the hub's
+  socket write until that connection reports `delivered` (written to
+  Claude's stdin) or `undeliverable`, answers, or disconnects: a socket
+  write only means the channel has the event. A lost report resolves
+  through the disconnect (unknown), never as success; a channel stuck
+  writing to Claude keeps the lock unclearable until its session is stopped.
+  Locks survive hub restarts; a locked target stays
   busy in the new epoch, shown as `unknown (earlier hub run)`, until cleared.
   An unreadable, oversize (over 64 KiB), corrupt, full or unwritable lock
   file, or any entry with a malformed field (lock id not 16 hex, unknown
@@ -112,7 +122,11 @@ retention.
   ticket hash not SHA-256 hex, `since` not a finite positive number, extra
   or missing keys), refuses every send and shows a lock-store error.
 - **Replies** count only from the connection the request was handed to,
-  while it is `handed_off`, with its request id, under the size caps. The
+  while it is `handed_off`, with its request id, under the size caps, as
+  strict UTF-8 (a lone surrogate is refused before anything changes), and
+  only after that connection passes the identity recheck again: after
+  `/clear` the reply is refused (`session changed`), the connection dropped
+  and the request left unknown with its lock. The
   first valid one wins; late, duplicate, oversize or mismatched replies are
   dropped and logged without content. A ring keeps the last 20 answered
   replies (and at most 256 KiB of text) in memory only.
@@ -180,7 +194,10 @@ while its request was in flight changes nothing):
   characters; the hub works it out in its 5 s loop and on registration from
   the transcript's first 64 KiB and last 256 KiB, rereading only when the
   file's inode, size or mtime changed, never while answering this request
-  (a custom title only in the middle of a larger file is missed). Targets
+  (a custom title only in the middle of a larger file is missed; a record
+  of an unexpected shape is skipped, and a transcript that can't be read at
+  all labels its target by the id, without affecting startup or the
+  channel). Targets
   are the enrolled
   sessions plus any live registration. `Request = {request_id, session_id,
   state, text, created, reply: {text, spoken} | null}` for the last 20.
@@ -229,10 +246,14 @@ It never runs `kill-server`, `am`, `input`, `shell` or `reverse --remove`. The
 unit doesn't restart after exit 2 (bad arguments) or 4.
 
 `install.sh` hands the two desk units to `scripts/desk-units.sh`, which
-reconciles them on every run: the hub is restarted when active (a rotated
-leaf or changed unit takes effect), the adb unit when the serial or its unit
-file changed, and the adb unit is disabled and stopped when `DESK_ADB_SERIAL`
-is empty. Each action is printed.
+reconciles them on every run. Both units are rendered first (a failed render
+or replacement aborts before any reload or restart). The hub is restarted when
+active (a rotated leaf or changed unit takes effect), enabled if it was
+active but disabled, and stopped and disabled when its leaf or key is missing.
+The adb unit is restarted when the serial, `bin/desk-adb-link`'s checksum
+(both recorded in `~/.config/llm-switchboard/desk/adb-link.applied`) or its
+unit file changed, enabled if active but disabled, and disabled and stopped
+when `DESK_ADB_SERIAL` is empty. Each action is printed.
 
 ## Enrollment and launch
 

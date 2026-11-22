@@ -52,19 +52,28 @@ def _bounded_lines(path: Path, size: int) -> list[bytes]:
 
 
 def read_title_and_cwd(path: Path, size: int) -> tuple[str, str]:
-    cwd = first_prompt = custom = ai = summary = ""
+    found = {"cwd": "", "first_prompt": "", "custom": "", "ai": "", "summary": ""}
     for line in _bounded_lines(path, size):
-        if not cwd and _CWD in line:
-            cwd = str(_record(line).get("cwd") or "")
-        if _CUSTOM_TITLE in line:
-            custom = str(_record(line).get("customTitle") or custom)
-        elif _AI_TITLE in line:
-            ai = str(_record(line).get("aiTitle") or ai)
-        elif _SUMMARY in line:
-            summary = str(_record(line).get("summary") or summary)
-        elif not first_prompt and _USER in line:
-            first_prompt = prompt_text(_record(line))
-    return one_line(custom or ai or summary or first_prompt), cwd
+        try:
+            _read_line_into(line, found)
+        except Exception:
+            # Valid JSON in a shape this reader doesn't expect: skip the line.
+            continue
+    title = found["custom"] or found["ai"] or found["summary"] or found["first_prompt"]
+    return one_line(title), found["cwd"]
+
+
+def _read_line_into(line: bytes, found: dict) -> None:
+    if not found["cwd"] and _CWD in line:
+        found["cwd"] = str(_record(line).get("cwd") or "")
+    if _CUSTOM_TITLE in line:
+        found["custom"] = str(_record(line).get("customTitle") or found["custom"])
+    elif _AI_TITLE in line:
+        found["ai"] = str(_record(line).get("aiTitle") or found["ai"])
+    elif _SUMMARY in line:
+        found["summary"] = str(_record(line).get("summary") or found["summary"])
+    elif not found["first_prompt"] and _USER in line:
+        found["first_prompt"] = prompt_text(_record(line))
 
 
 @dataclass(frozen=True)

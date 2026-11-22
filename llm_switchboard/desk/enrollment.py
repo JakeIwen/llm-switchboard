@@ -32,8 +32,10 @@ def ensure_private_dir(path: Path) -> None:
 class _CachedJson:
     """A JsonFile whose parsed content is reused until the file changes."""
 
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, valid=lambda data: True):
         self.file = JsonFile(path)
+        # A file whose content fails `valid` reads as empty and can't be edited.
+        self._valid = valid
         self._key = None
         self._data: dict = {}
 
@@ -54,14 +56,17 @@ class _CachedJson:
         except (OSError, ValueError):
             log.warning("desk: %s unreadable; treating it as empty", self.file.path.name)
             return {}
-        return data if isinstance(data, dict) else {}
+        if not isinstance(data, dict) or not self._valid(data):
+            log.warning("desk: %s malformed; treating it as empty", self.file.path.name)
+            return {}
+        return data
 
     def _load_for_edit(self) -> dict:
         try:
             data = self.file.load()
         except (OSError, ValueError) as exc:
             raise DeskError(503, f"{self.file.path.name} unreadable; not changed") from exc
-        if not isinstance(data, dict):
+        if not isinstance(data, dict) or not self._valid(data):
             raise DeskError(503, f"{self.file.path.name} malformed; not changed")
         return data
 
@@ -82,15 +87,30 @@ class _CachedJson:
         self._key = None
 
 
+def valid_enrollment(data: dict) -> bool:
+    """`{"sessions": {<session id>: {"since": <unix s>}}}` and nothing else, at
+    most MAX_ENROLLED sessions. One bad entry makes the whole file malformed."""
+    if not set(data) <= {"sessions"}:
+        return False
+    sessions = data.get("sessions", {})
+    if not isinstance(sessions, dict) or len(sessions) > MAX_ENROLLED:
+        return False
+    return all(is_session_id(sid) and _valid_record(record) for sid, record in sessions.items())
+
+
+def _valid_record(record) -> bool:
+    if not isinstance(record, dict) or set(record) != {"since"}:
+        return False
+    since = record["since"]
+    return isinstance(since, int) and not isinstance(since, bool) and since >= 0
+
+
 class Enrollment:
     def __init__(self, path: Path):
-        self._json = _CachedJson(path)
+        self._json = _CachedJson(path, valid_enrollment)
 
     def sessions(self) -> dict[str, dict]:
-        sessions = self._json.read().get("sessions")
-        if not isinstance(sessions, dict):
-            return {}
-        return {sid: info for sid, info in sessions.items() if isinstance(sid, str) and is_session_id(sid)}
+        return dict(self._json.read().get("sessions", {}))
 
     def is_enrolled(self, session_id: str) -> bool:
         return session_id in self.sessions()
@@ -100,7 +120,6 @@ class Enrollment:
         _check_session_id(session_id)
         with self._json.updating() as data:
             sessions = data.setdefault("sessions", {})
-            _check_sessions(sessions)
             if session_id in sessions:
                 return False
             if len(sessions) >= MAX_ENROLLED:
@@ -113,7 +132,6 @@ class Enrollment:
         _check_session_id(session_id)
         with self._json.updating() as data:
             sessions = data.get("sessions", {})
-            _check_sessions(sessions)
             if session_id not in sessions:
                 return False
             del sessions[session_id]
@@ -131,11 +149,6 @@ class DeskSettings:
         with self._json.updating(replace_unreadable=True) as data:
             data.clear()
             data["sends_enabled"] = bool(enabled)
-
-
-def _check_sessions(sessions) -> None:
-    if not isinstance(sessions, dict):
-        raise DeskError(503, "enrolled.json malformed; not changed")
 
 
 def _check_session_id(session_id) -> None:

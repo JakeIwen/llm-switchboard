@@ -67,8 +67,9 @@ class StateCase(unittest.TestCase):
         request = self.begin(state, self.ticket(state, session_id, generation), text)
         conn, content = state.hand_off(request.request_id)
         self.assertEqual(conn, conn_id)
-        # The hub wrote the event.
+        # The hub wrote the event and the channel emitted it.
         state.finish_write(request.request_id, True)
+        state.mark_delivered(conn_id, request.request_id)
         return request.request_id, content
 
     def target(self, state, session_id):
@@ -252,9 +253,28 @@ class HandoffTest(StateCase):
         # The writer is stalled; the tablet already sees handed_off.
         self.assertEqual(self.state.request_state(request.request_id), "handed_off")
         self.assertRefused(409, "delivery in progress", self.state.clear_lock, SESSION_A, lock_id)
+        # The socket write finished, but the channel hasn't emitted it yet.
         self.state.finish_write(request.request_id, True)
+        self.assertRefused(409, "delivery in progress", self.state.clear_lock, SESSION_A, lock_id)
+        other = self.state.register(2, SESSION_B, identity(SESSION_B))
+        self.assertFalse(self.state.mark_delivered(2, request.request_id))
+        self.assertRefused(409, "delivery in progress", self.state.clear_lock, SESSION_A, lock_id)
+        self.assertTrue(self.state.mark_delivered(1, request.request_id))
         self.state.clear_lock(SESSION_A, lock_id)
         self.assertEqual(self.lock_file_ids(), [])
+        self.assertTrue(other)
+
+    def test_a_disconnect_or_undeliverable_ends_the_delivery_and_the_request_stays_unknown(self):
+        for end in (lambda rid: self.state.drop_registration(1), lambda rid: self.state.mark_undeliverable(1, rid)):
+            self.state = self.new_state()
+            generation = self.state.register(1, SESSION_A, identity(SESSION_A))
+            request = self.begin(self.state, self.ticket(self.state, SESSION_A, generation), "hi")
+            self.state.hand_off(request.request_id)
+            self.state.finish_write(request.request_id, True)
+            lock_id = self.target(self.state, SESSION_A)["lock"]["lock_id"]
+            end(request.request_id)
+            self.assertEqual(self.state.request_state(request.request_id), "unknown")
+            self.state.clear_lock(SESSION_A, lock_id)
 
     def test_a_failed_event_write_makes_the_request_unknown_and_keeps_its_lock(self):
         request = self.begin(self.state, self.ticket(self.state, SESSION_A, self.generation), "hi")
@@ -335,6 +355,14 @@ class ReplyTest(StateCase):
         self.assertIsNone(self.target(self.state, SESSION_A)["lock"])
         self.assertEqual(self.target(self.state, SESSION_A)["registration"], "replied")
         self.assertEqual(self.lock_file_ids(), [])
+
+    def test_a_reply_with_a_lone_surrogate_is_refused_before_any_change(self):
+        for text, spoken in (("bad \udc80 text", "ok"), ("ok", "bad \ud800")):
+            with self.subTest(text=ascii(text), spoken=ascii(spoken)):
+                self.assertEqual(self.state.handle_reply(1, self.request_id, text, spoken), "reply not valid UTF-8")
+                self.assertEqual(self.state.request_state(self.request_id), "handed_off")
+                self.assertEqual(len(self.lock_file_ids()), 1)
+        self.assertIsNone(self.state.handle_reply(1, self.request_id, "fine", "fine"))
 
     def test_a_reply_after_disconnect_or_clear_is_dropped(self):
         lock_id = self.target(self.state, SESSION_A)["lock"]["lock_id"]

@@ -202,6 +202,25 @@ class EnrollmentFilesTest(unittest.TestCase):
             self.config.enrolled_file.write_text("{broken!")
             self.assertEqual(enrollment.sessions(), {})
 
+    def test_a_bad_record_makes_the_whole_enrollment_file_malformed(self):
+        enrollment = Enrollment(self.config.enrolled_file)
+        enrollment.enroll(SESSION_A, 1.0)
+        bad = [{SESSION_A: None}, {SESSION_A: {"since": "x"}}, {SESSION_A: {"since": True}},
+               {SESSION_A: {"since": 1, "note": "x"}}, {SESSION_A: {}}, {"not-a-session": {"since": 1}},
+               {SESSION_A: {"since": 1}, SESSION_B: None}]
+        contents = [json.dumps({"sessions": sessions}) for sessions in bad]
+        contents.append(json.dumps({"sessions": {SESSION_A: {"since": 1}}, "other": 1}))
+        for content in contents:
+            with self.subTest(content=content):
+                self.config.enrolled_file.write_text(content)
+                with self.assertLogs("llm_switchboard.desk", "WARNING"):
+                    self.assertFalse(enrollment.is_enrolled(SESSION_A))
+                for edit in (lambda: enrollment.enroll(SESSION_B, 2.0), lambda: enrollment.unenroll(SESSION_A)):
+                    with self.assertRaises(DeskError) as caught:
+                        edit()
+                    self.assertEqual(caught.exception.status, 503)
+                    self.assertEqual(self.config.enrolled_file.read_text(), content)
+
     def test_sends_replace_a_broken_settings_file(self):
         self.config.config_dir.mkdir(parents=True)
         self.config.settings_file.write_text("{broken")

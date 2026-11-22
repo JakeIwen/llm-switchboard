@@ -10,8 +10,11 @@ visible changes.
 A send runs in steps so the hub can recheck the channel's identity (I/O,
 outside this module) between them: `begin_send` (pending) -> `hand_off`
 (every routing rule checked again, the lock persisted, handed_off recorded
-and the write marked in progress) -> the caller writes the event ->
-`finish_write`; or `expire_request` when the recheck failed. HTTP callers
+and the delivery marked in progress) -> the caller writes the event ->
+`finish_write`; or `expire_request` when a check failed. The delivery stays
+in progress (its lock can't be cleared) until that connection reports
+`delivered` or `undeliverable`, answers, or goes away: a socket write only
+means the channel has the event, not that Claude does. HTTP callers
 run their mutation inside `authorized(token)`, so a token revoked while the
 request was in flight can't act.
 """
@@ -80,8 +83,9 @@ class HubState:
         self._pairings: dict[str, Pairing] = {}
         self._pair_starts: deque[float] = deque()
         self._tokens: dict[str, Token] = {}
-        # Request ids whose event write is under way; their locks can't be cleared yet.
-        self._writing: set[str] = set()
+        # Request id -> connection, for events the channel hasn't reported
+        # emitted or refused yet; their locks can't be cleared.
+        self._in_delivery: dict[str, int] = {}
         self._labels: dict[str, tuple[str, str]] = {}
         try:
             self._locks = {lock.lock_id: lock for lock in lock_store.load()}
@@ -180,6 +184,7 @@ class HubState:
         with self._mutex:
             if self._registrations.pop(conn_id, None) is None:
                 return []
+            self._release_deliveries(conn_id)
             lost = []
             for request in self._requests.values():
                 if request.conn_id != conn_id:
@@ -325,7 +330,7 @@ class HubState:
             self._locks[lock.lock_id] = lock
             request.lock_id = lock.lock_id
             request.state = RequestState.HANDED_OFF
-            self._writing.add(request.request_id)
+            self._in_delivery[request.request_id] = request.conn_id
             self._bump()
             return request.conn_id, event_content(request.text, request.request_id)
 
@@ -339,14 +344,36 @@ class HubState:
             raise DeskError(409, "target changed; not sent")
 
     def finish_write(self, request_id: str, written: bool) -> None:
-        """The caller's event write is over. A failed write makes the request
-        unknown (part of it may have reached the channel); its lock stays."""
+        """The caller's socket write is over. A failed write makes the request
+        unknown (part of it may have reached the channel) and ends the
+        delivery; its lock stays. A written event stays in delivery until the
+        channel reports on it."""
         with self._mutex:
-            self._writing.discard(request_id)
             request = self._requests.get(request_id)
-            if not written and request and request.state is RequestState.HANDED_OFF:
-                self._finish(request, RequestState.UNKNOWN)
+            if not written:
+                self._in_delivery.pop(request_id, None)
+                if request and request.state is RequestState.HANDED_OFF:
+                    self._finish(request, RequestState.UNKNOWN)
             self._bump()
+
+    def _release_delivery(self, conn_id: int, request_id) -> bool:
+        if not isinstance(request_id, str) or self._in_delivery.get(request_id) != conn_id:
+            return False
+        del self._in_delivery[request_id]
+        return True
+
+    def _release_deliveries(self, conn_id: int) -> None:
+        for request_id in [r for r, c in self._in_delivery.items() if c == conn_id]:
+            del self._in_delivery[request_id]
+
+    def mark_delivered(self, conn_id: int, request_id) -> bool:
+        """The channel wrote the event to Claude's stdin. Only the connection
+        it was handed to counts. True when a delivery ended."""
+        with self._mutex:
+            if not self._release_delivery(conn_id, request_id):
+                return False
+            self._bump()
+            return True
 
     def mark_undeliverable(self, conn_id: int, request_id) -> bool:
         """The channel refused to emit the event (its own last check failed,
@@ -357,6 +384,7 @@ class HubState:
             request = self._requests.get(request_id) if isinstance(request_id, str) else None
             if request is None or request.conn_id != conn_id or request.state is not RequestState.HANDED_OFF:
                 return False
+            self._release_delivery(conn_id, request_id)
             self._finish(request, RequestState.UNKNOWN)
             self._bump()
             return True
@@ -367,8 +395,13 @@ class HubState:
         """None when this reply is accepted, else why it was dropped."""
         if not all(isinstance(value, str) for value in (request_id, text, spoken)):
             return "bad reply"
-        if len(text.encode("utf-8", "surrogatepass")) > MAX_REPLY_TEXT_BYTES or \
-                len(spoken.encode("utf-8", "surrogatepass")) > MAX_SPOKEN_BYTES:
+        # Strict UTF-8, before any state changes: a lone surrogate can't be
+        # stored, served or sized, so it is refused here, not after the lock is gone.
+        try:
+            text_bytes, spoken_bytes = len(text.encode("utf-8")), len(spoken.encode("utf-8"))
+        except UnicodeEncodeError:
+            return "reply not valid UTF-8"
+        if text_bytes > MAX_REPLY_TEXT_BYTES or spoken_bytes > MAX_SPOKEN_BYTES:
             return "reply too large"
         with self._mutex:
             request = self._requests.get(request_id)
@@ -386,6 +419,7 @@ class HubState:
                     self._bump()
                     return "lock store error"
                 del self._locks[request.lock_id]
+            self._release_delivery(conn_id, request_id)
             self._finish(request, RequestState.ANSWERED)
             self._registrations[conn_id].replied = True
             self._remember_reply(Reply(request_id, text, spoken))
@@ -402,7 +436,7 @@ class HubState:
 
     def clear_lock(self, session_id, lock_id) -> None:
         """Jacob checked the session: release exactly the lock he saw. Refused
-        while that request's event write is still under way."""
+        while that request's delivery is still in progress."""
         if not isinstance(session_id, str) or not isinstance(lock_id, str):
             raise DeskError(400, "bad session_id or lock_id")
         with self._mutex:
@@ -412,7 +446,7 @@ class HubState:
             lock = next((lock for lock in locks if lock.lock_id == lock_id), None)
             if lock is None:
                 raise DeskError(409, "lock id does not match")
-            if lock.request_id in self._writing:
+            if lock.request_id in self._in_delivery:
                 raise DeskError(409, "delivery in progress")
             try:
                 self._lock_store.remove(lock.lock_id)
