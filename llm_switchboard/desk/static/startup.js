@@ -8,22 +8,27 @@
   "use strict";
 
   var POLL_MS = 5000;
-  // An acknowledgement's outcome stays shown this long, even after its
-  // session leaves the list (which a sent Enter normally makes it do).
+  // An acknowledgement's outcome stays shown this long from when it is first
+  // drawn, even after its session leaves the list (which a sent Enter
+  // normally makes it do).
   var OUTCOME_MS = 60000;
+  // Longer than the hub's own bound on an acknowledgement (its tmux calls
+  // time out after 3 s each); past it the outcome is unknown.
+  var ACK_TIMEOUT_MS = 20000;
 
-  // The three outcomes the page tells apart. Only "unknown" may have typed
-  // a key without the hub confirming it; a refusal typed nothing.
+  // The three outcomes the page tells apart. "sent" only when the hub
+  // confirmed the key; "unknown" may have typed it; a refusal typed nothing
+  // this time (its reason may say an earlier attempt did).
   var OUTCOME = {
     sent: function (label) {
-      return { tone: "ok", text: "Enter sent to " + label + ". The session continues starting." };
+      return { tone: "ok", text: "Enter sent to " + label + ". The session continues starting.", typed: true };
     },
     unknown: function (label, why) {
-      return { tone: "warn", text: "Result unknown for " + label + ": " + why +
+      return { tone: "warn", typed: true, text: "Result unknown for " + label + ": " + why +
         " The Enter may have been delivered; check the session before acknowledging again." };
     },
     refused: function (label, why) {
-      return { tone: "bad", text: "Not sent to " + label + ": " + why + ". Nothing was typed." };
+      return { tone: "bad", typed: false, text: "Not sent to " + label + ": " + why + ". Nothing was typed this time." };
     }
   };
 
@@ -39,6 +44,10 @@
     var sessions = []; // the last listing
     var pending = {}; // session id -> true while its acknowledgement is in flight
     var outcomes = {}; // session id -> {text, tone, until}, kept across polls and the session leaving
+    // Session id -> the digest of a view whose acknowledgement may have typed
+    // a key (sent or unknown): its button stays disabled until a listing
+    // shows that session with another view.
+    var attempted = {};
 
     function el(tag, props, text) {
       var node = document.createElement(tag);
@@ -57,8 +66,13 @@
     }
 
     function render() {
+      // An outcome's minute starts when it is first drawn, which is now.
+      var now = Date.now();
+      Object.keys(outcomes).forEach(function (id) {
+        if (outcomes[id].until === undefined) outcomes[id].until = now + OUTCOME_MS;
+      });
       var shown = liveOutcomes();
-      var key = JSON.stringify([sessions, pending, shown]);
+      var key = JSON.stringify([sessions, pending, attempted, shown]);
       if (key === shownKey) return;
       shownKey = key;
       while (list.firstChild) list.removeChild(list.firstChild);
@@ -72,9 +86,10 @@
         var screen = (s.capture || "").replace(/^\s*\n/, "").replace(/\s+$/, "");
         item.appendChild(el("pre", { "class": "screen", "data-testid": "startup-capture" }, screen));
         if (s.refusal) item.appendChild(el("p", { "class": "problem", "data-testid": "startup-refusal" }, s.refusal));
+        var tried = !!s.digest && attempted[s.session_id] === s.digest;
         var btn = el("button", { type: "button", "class": "btn warnbtn", "data-testid": "startup-ack" },
-          pending[s.session_id] ? "Sending Enter..." : "Acknowledge startup warning");
-        btn.disabled = !s.digest || !!pending[s.session_id];
+          pending[s.session_id] ? "Sending Enter..." : tried ? "Attempted for this view" : "Acknowledge startup warning");
+        btn.disabled = !s.digest || !!pending[s.session_id] || tried;
         btn.addEventListener("click", function () {
           // Disabled before anything else runs, so a second tap can't queue another request.
           if (btn.disabled || pending[s.session_id]) return;
@@ -89,10 +104,14 @@
       });
     }
 
+    // Drawn at once, never waiting on the next listing, which may not come
+    // (the connection can drop right after the POST); the listing that
+    // follows only updates the sessions.
     function settle(s, outcome) {
       delete pending[s.session_id];
-      outcome.until = Date.now() + OUTCOME_MS;
-      outcomes[s.session_id] = outcome;
+      if (outcome.typed) attempted[s.session_id] = s.digest;
+      outcomes[s.session_id] = { tone: outcome.tone, text: outcome.text };
+      render();
       poll(false);
     }
 
@@ -102,15 +121,31 @@
       pending[s.session_id] = true;
       delete outcomes[s.session_id];
       render();
-      api("POST", "/desk/api/startup/ack", { session_id: s.session_id, digest: s.digest }).then(function (r) {
+      var abort = typeof AbortController === "function" ? new AbortController() : null;
+      var timeout = abort ? setTimeout(function () { abort.abort(); }, ACK_TIMEOUT_MS) : null;
+      api("POST", "/desk/api/startup/ack", { session_id: s.session_id, digest: s.digest },
+          abort ? { signal: abort.signal } : undefined).then(function (r) {
+        if (timeout) clearTimeout(timeout);
         if (myRun !== run) return;
         var why = (r.data && r.data.error) || "HTTP " + r.status;
-        if (r.status === 200) settle(s, OUTCOME.sent(label));
-        else if (r.data && r.data.delivery === "unknown") settle(s, OUTCOME.unknown(label, "tmux did not confirm the Enter."));
+        if (r.status === 200 && r.data && r.data.sent === true) settle(s, OUTCOME.sent(label));
+        else if (r.status === 200 || (r.data && r.data.delivery === "unknown")) settle(s, OUTCOME.unknown(label, "tmux did not confirm the Enter."));
         else settle(s, OUTCOME.refused(label, why));
       }, function () {
+        if (timeout) clearTimeout(timeout);
         if (myRun !== run) return;
-        settle(s, OUTCOME.unknown(label, "the hub could not be reached."));
+        // The request may have reached the hub before the connection failed.
+        settle(s, OUTCOME.unknown(label, "the hub could not be reached or did not answer."));
+      });
+    }
+
+    // A local attempt is cleared once the listing shows its session with
+    // another view (or not at all); until then that view's button stays off.
+    function dropStaleAttempts() {
+      var current = {};
+      sessions.forEach(function (s) { current[s.session_id] = s.digest; });
+      Object.keys(attempted).forEach(function (id) {
+        if (current[id] !== attempted[id]) delete attempted[id];
       });
     }
 
@@ -120,6 +155,7 @@
         if (myRun !== run) return;
         if (r.status === 200 && r.data && Array.isArray(r.data.sessions)) {
           sessions = r.data.sessions;
+          dropStaleAttempts();
           render();
         }
       }, function () { /* the state loop reports the connection */ }).then(function () {
@@ -140,6 +176,7 @@
         sessions = [];
         pending = {};
         outcomes = {};
+        attempted = {};
         while (list.firstChild) list.removeChild(list.firstChild);
         while (outcomeList.firstChild) outcomeList.removeChild(outcomeList.firstChild);
         root.hidden = true;

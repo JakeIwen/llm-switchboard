@@ -283,9 +283,15 @@ while its request was in flight changes nothing):
   When tmux doesn't confirm the key the answer is 503 `{"error": "...",
   "delivery": "unknown"}`. It sends no
   prompt, so it does not depend on `sends on`, and works while sends are
-  off. The page tells the three outcomes apart: sent, not sent (nothing
-  typed), and unknown (check the session), and keeps the outcome shown for
-  a minute after the session leaves the list.
+  off. The page tells the three outcomes apart: sent (only on a 200 the
+  hub confirmed), not sent (nothing typed this time), and unknown (check
+  the session; also a connection that failed or gave no answer within
+  20 s, since the request may have reached the hub). It draws the outcome
+  as soon as the POST settles, never waiting for the next listing, and
+  keeps it shown for a minute from when it was drawn, even after the
+  session leaves the list. After a sent or unknown outcome that view's
+  button stays disabled on the page until a listing shows the session with
+  a different view.
 
 ## Operator socket and CLI
 
