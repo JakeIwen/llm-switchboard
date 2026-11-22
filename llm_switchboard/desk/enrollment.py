@@ -101,6 +101,9 @@ class _CachedJson:
         self._valid = valid
         self._key = None
         self._data: dict = {}
+        # Whether the last read failed (it then read as empty): routing treats
+        # that as nothing enrolled, but a listing must not report it as absence.
+        self.unreadable = False
         self.lock = _FileLock.for_file(path)
 
     def read(self) -> dict:
@@ -111,23 +114,25 @@ class _CachedJson:
             key = None
         except OSError:
             self._key = None
+            self.unreadable = True
             log.warning("desk: %s cannot be inspected; treating it as empty", self.file.path.name)
             return {}
         if key != self._key or key is None:
-            self._data = self._load()
+            self._data, self.unreadable = self._load()
             self._key = key
         return self._data
 
-    def _load(self) -> dict:
+    def _load(self) -> tuple[dict, bool]:
+        """The content, and whether it failed to read (then empty)."""
         try:
             data = self.file.load()
         except (OSError, ValueError, RecursionError):
             log.warning("desk: %s unreadable; treating it as empty", self.file.path.name)
-            return {}
+            return {}, True
         if not isinstance(data, dict) or not self._valid(data):
             log.warning("desk: %s malformed; treating it as empty", self.file.path.name)
-            return {}
-        return data
+            return {}, True
+        return data, False
 
     def _load_for_edit(self) -> dict:
         try:
@@ -144,7 +149,7 @@ class _CachedJson:
         An unreadable file raises DeskError unless `replace_unreadable`."""
         ensure_private_dir(self.file.path.parent)
         with self.lock.held():
-            data = self._load() if replace_unreadable else self._load_for_edit()
+            data = self._load()[0] if replace_unreadable else self._load_for_edit()
             before = json.dumps(data, sort_keys=True)
             yield data
             if json.dumps(data, sort_keys=True) != before:
@@ -179,11 +184,17 @@ class Enrollment:
         """Hold `enrolled.json`'s cross-process lock (re-entrant here)."""
         return self._json.lock.held()
 
-    def sessions(self) -> dict[str, dict]:
-        return dict(self._json.read().get("sessions", {}))
+    def sessions(self, *, strict: bool = False) -> dict[str, dict]:
+        """The enrolled sessions; an unreadable or malformed file reads as
+        none, or raises (503) with `strict`, for callers that must not report
+        a failed read as "nothing enrolled"."""
+        data = self._json.read()
+        if strict and self._json.unreadable:
+            raise DeskError(503, f"{self._json.file.path.name} unreadable")
+        return dict(data.get("sessions", {}))
 
-    def is_enrolled(self, session_id: str) -> bool:
-        return session_id in self.sessions()
+    def is_enrolled(self, session_id: str, *, strict: bool = False) -> bool:
+        return session_id in self.sessions(strict=strict)
 
     def enroll(self, session_id: str, now: float) -> bool:
         """True when newly enrolled, False when it already was."""

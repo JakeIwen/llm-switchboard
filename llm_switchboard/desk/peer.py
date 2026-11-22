@@ -71,15 +71,28 @@ def socket_peer_pid(sock) -> int:
 
 def read_process(proc_dir: Path, pid: int) -> ProcessRecord | None:
     """None when the process is gone or its files can't be read."""
+    entry = read_process_entry(proc_dir, pid)
+    return entry if isinstance(entry, ProcessRecord) else None
+
+
+def read_process_entry(proc_dir: Path, pid: int) -> ProcessRecord | ChannelProcess:
+    """The record; GONE only when a mounted process tree (`<proc>/self`
+    present) has no entry for the pid (ENOENT or ESRCH, as when it exits
+    mid-read); UNVERIFIABLE when the entry can't be read or parsed."""
     proc = Path(proc_dir) / str(pid)
     try:
         stat = (proc / "stat").read_text()
         raw_argv = (proc / "cmdline").read_bytes()
+    except (FileNotFoundError, ProcessLookupError):
+        return ChannelProcess.GONE if (Path(proc_dir) / "self").is_dir() else ChannelProcess.UNVERIFIABLE
+    except (OSError, ValueError):
+        return ChannelProcess.UNVERIFIABLE
+    try:
         # The command name in stat may hold spaces and ")", so split after the last one.
         fields = stat.rsplit(")", 1)[1].split()
         ppid, pgrp, tpgid, start = int(fields[1]), int(fields[2]), int(fields[5]), fields[19]
-    except (OSError, ValueError, IndexError):
-        return None
+    except (ValueError, IndexError):
+        return ChannelProcess.UNVERIFIABLE
     try:
         exe = os.path.realpath(os.readlink(proc / "exe"))
     except OSError:

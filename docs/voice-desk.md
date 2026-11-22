@@ -268,8 +268,12 @@ while its request was in flight changes nothing):
   the failed check (including **an Enter was already sent for this view**,
   or **already attempted** when tmux never confirmed it).
   Each pane's screen is read first; only one showing the warning gets the
-  process checks. A tmux that fails (a socket it may not open, an error
-  other than "no server") answers 503 rather than an empty list. At most 60
+  process checks. A failed read is never reported as absence: a tmux whose
+  pane listing fails (a socket it may not open, an error other than "no
+  server") or an unreadable `enrolled.json` answers 503 rather than an
+  empty list, and a pane whose screen can't be read is listed with
+  `capture: null` and `refusal` **tmux did not answer**. Only a pane tmux
+  no longer lists (it closed during the call) is left out. At most 60
   views a minute across all callers (429).
 - `POST /desk/api/startup/ack {session_id, digest}` -> `{session_id, sent:
   true}`: presses Enter once in that session's pane (see "Startup
@@ -397,7 +401,11 @@ must hold (`desk/startup_identity.py`, `desk/startup_ack.py`,
   named for its version; on the Pi `~/.local/bin/claude` links there, and a
   running claude may still be an older version), and its environment
   carries the supervisor's `LLM_SWITCHBOARD_SESSION=<session id>` from
-  `tmux new-window -e`. Another program named `claude` is refused.
+  `tmux new-window -e`. Another program named `claude` is refused. A
+  `/proc` entry that exists but can't be read (the pane's process, or any
+  process the child scan meets, which might be a second claude) refuses
+  with 503 **the session's process can't be checked**; only a missing entry
+  counts as no process.
 - Its options (argv up to a `--`; what follows is a prompt) are compared by
   name, never by spelling: `--name=value` sets `--name`, and every letter
   of a single-dash argument counts as a short option (`-cr` is `-c` and

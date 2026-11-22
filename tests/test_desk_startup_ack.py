@@ -30,7 +30,7 @@ from llm_switchboard.desk.startup_identity import StartupRefusal, check_launch_a
 from llm_switchboard.desk.startup_registry import MAX_SESSION_FILE_BYTES
 from llm_switchboard.paths import MANAGED_ENV_VAR
 from llm_switchboard.screen import desk_startup_warning
-from llm_switchboard.tmux import Tmux
+from llm_switchboard.tmux import Tmux, TmuxError
 
 FAKE_PANE = Path(__file__).parent / "fake_claude_pane.py"
 _sockets = itertools.count(1)
@@ -49,6 +49,9 @@ class RecordingTmux(Tmux):
         self.before_send: list = []
         self.after_send: list = []
         self.sent: list[list[str]] = []
+        # The next this many capture-pane calls fail the way tmux reports an
+        # error (exit status 1), for a pane that still exists.
+        self.failing_captures = 0
 
     def capture(self, target, history=0, check=False):
         if self.before_capture:
@@ -66,6 +69,11 @@ class RecordingTmux(Tmux):
     def _run(self, args, check=True, new_server=False):
         if args and args[0] in ("send-keys", "if-shell"):
             self.sent.append(list(args))
+        if args and args[0] == "capture-pane" and self.failing_captures:
+            self.failing_captures -= 1
+            if check:
+                raise TmuxError("capture-pane failed: simulated")
+            return subprocess.CompletedProcess(args, 1, "", "simulated")
         return super()._run(args, check=check, new_server=new_server)
 
 

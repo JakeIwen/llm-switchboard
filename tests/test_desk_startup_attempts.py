@@ -2,13 +2,14 @@
 proof (nothing typed, or its claude proven gone), never on an unreadable
 process and never by eviction; a full table refuses new acknowledgements."""
 
-import os
 import unittest
 from unittest import mock
 
 from desk_fixtures import SESSION_A, SESSION_B, wait_until
 from test_desk_startup_ack import StartupCase
 
+from llm_switchboard.desk import startup_ack
+from llm_switchboard.desk.model import ChannelProcess
 from llm_switchboard.desk.startup_identity import StartupRefusal
 
 
@@ -24,12 +25,14 @@ class AttemptRecordTest(StartupCase):
 
     def test_an_unreadable_process_keeps_its_record(self):
         first, digest = self.acknowledged(SESSION_A)
-        stat = self.config.proc_dir / str(first.claude_pid) / "stat"
-        # Unreadable, not gone: the next acknowledgement's prune must keep the record.
-        os.chmod(stat, 0)
-        self.addCleanup(os.chmod, stat, 0o644)
-        self.acknowledged(SESSION_B)
-        os.chmod(stat, 0o644)
+        real = startup_ack.process_presence
+
+        def unreadable_first(proc_dir, pid, start):
+            # A transient failure reading the first claude's /proc entry.
+            return ChannelProcess.UNVERIFIABLE if pid == first.claude_pid else real(proc_dir, pid, start)
+        with mock.patch.object(startup_ack, "process_presence", unreadable_first):
+            # The next acknowledgement prunes the table first.
+            self.acknowledged(SESSION_B)
         self.assertEqual(self.view()[SESSION_A]["refusal"], StartupRefusal.ALREADY_SENT.value)
         self.assertEqual(self.ack(SESSION_A, digest), (409, {"error": StartupRefusal.ALREADY_SENT.value}))
         self.assertEqual((first.typed(), len(self.tmux.sent)), (b"\r", 2))

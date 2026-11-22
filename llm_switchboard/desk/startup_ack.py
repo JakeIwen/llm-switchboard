@@ -63,7 +63,7 @@ from .model import (
     MAX_STARTUP_ACKS_PER_MINUTE, MAX_STARTUP_ATTEMPTS, MAX_STARTUP_VIEWS_PER_MINUTE, SHA256_HEX_PATTERN,
     ChannelProcess, DeskError,
 )
-from .peer import ProcessRecord, process_presence, read_process
+from .peer import ProcessRecord, process_presence, read_process_entry
 from .startup_identity import (
     LaunchIdentity, StartupRefusal, check_launch_argv, check_session_file, foreground_claude, refused,
     view_digest,
@@ -186,21 +186,33 @@ class StartupAck:
         """Every enrolled session whose supervisor pane shows the warning, with
         its capture and, when it may be acknowledged, the digest to send back.
         The screen is read first; only a pane showing the warning gets the
-        process checks."""
+        process checks. A failed read is never reported as absence: a pane
+        whose screen tmux couldn't read is listed with TMUX_FAILED, and an
+        unreadable `enrolled.json` or pane listing fails the whole call (503);
+        only a pane tmux no longer lists is skipped."""
         if not self._views.take():
             raise refused(StartupRefusal.TOO_MANY)
         try:
             panes = self.tmux.panes()
-            enrolled = set(self.enrollment.sessions())
-            # A pane that closed since the listing reads as an empty screen.
-            showing = sorted({pane.session_id for pane in panes if pane.session_id in enrolled
-                              and desk_startup_selection(self.tmux.capture(pane.pane_id)) is not None})
         except _TMUX_ERRORS:
             raise refused(StartupRefusal.TMUX_FAILED) from None
+        enrolled = set(self.enrollment.sessions(strict=True))
+        candidates = set()
+        for pane in panes:
+            if pane.session_id not in enrolled:
+                continue
+            try:
+                screen = self._capture_live(pane.pane_id)
+            except _TMUX_ERRORS:
+                # Unknown screen: inspected below, and listed if it fails again.
+                candidates.add(pane.session_id)
+                continue
+            if screen is not None and desk_startup_selection(screen) is not None:
+                candidates.add(pane.session_id)
         found = []
-        for session_id in showing:
+        for session_id in sorted(candidates):
             inspection = self._inspect(session_id)
-            if inspection.selection is not None:
+            if inspection.selection is not None or inspection.refusal is StartupRefusal.TMUX_FAILED:
                 found.append(self._item(inspection))
         return found
 
@@ -295,14 +307,16 @@ class StartupAck:
     def _inspect(self, session_id: str) -> _Inspection:
         """Pane, process, then the screen, then pane and process again (a
         change during the capture is a refusal)."""
-        if not self.enrollment.is_enrolled(session_id):
+        if not self.enrollment.is_enrolled(session_id, strict=True):
             return _Inspection(session_id, None, None, None, StartupRefusal.NOT_ENROLLED)
         try:
             pane = self._pane(session_id)
             if isinstance(pane, StartupRefusal):
                 return _Inspection(session_id, None, None, None, pane)
             identity = self._identity(session_id, pane)
-            capture = self.tmux.capture(pane.pane_id, check=True)
+            capture = self._capture_live(pane.pane_id)
+            if capture is None:
+                return _Inspection(session_id, None, None, None, StartupRefusal.NO_WINDOW)
             selection = desk_startup_selection(capture)
             if isinstance(identity, StartupRefusal):
                 return _Inspection(session_id, capture, selection, None, identity)
@@ -314,6 +328,16 @@ class StartupAck:
             return _Inspection(session_id, capture, selection, identity, refusal, digest)
         except _TMUX_ERRORS:
             return _Inspection(session_id, None, None, None, StartupRefusal.TMUX_FAILED)
+
+    def _capture_live(self, pane_id: str) -> str | None:
+        """The pane's screen, or None when tmux's error is explained by the
+        pane being gone (it is no longer listed). Any other failure raises."""
+        try:
+            return self.tmux.capture(pane_id, check=True)
+        except TmuxError:
+            if any(pane.pane_id == pane_id for pane in self.tmux.panes()):
+                raise
+            return None
 
     def _pane(self, session_id: str) -> Pane | StartupRefusal:
         """The supervisor's window for the session: the one tagged with its
@@ -336,11 +360,14 @@ class StartupAck:
         # Without a mounted process tree nothing can be told apart.
         if not (proc / "self").is_dir():
             return StartupRefusal.UNVERIFIABLE
-        pane_process = read_process(proc, pane.pane_pid)
-        if pane_process is None:
-            return StartupRefusal.NO_FOREGROUND
+        pane_process = read_process_entry(proc, pane.pane_pid)
+        if not isinstance(pane_process, ProcessRecord):
+            return _UNREADABLE_PROCESS[pane_process]
+        children = self._children(pane_process.pid)
+        if isinstance(children, StartupRefusal):
+            return children
         versions_dir = Path(os.path.realpath(self.config.claude_versions_dir))
-        claude = foreground_claude(pane_process, self._children(pane_process.pid), versions_dir)
+        claude = foreground_claude(pane_process, children, versions_dir)
         if isinstance(claude, StartupRefusal):
             return claude
         if managed_for(proc / str(claude.pid)) != session_id:
@@ -355,15 +382,25 @@ class StartupAck:
                               pane_pid=pane_process.pid, pane_start=pane_process.start,
                               claude_pid=claude.pid, claude_start=claude.start)
 
-    def _children(self, pid: int) -> list[ProcessRecord]:
+    def _children(self, pid: int) -> list[ProcessRecord] | StartupRefusal:
+        """Every process whose parent is `pid`. An entry that can't be read
+        might be one of them (a second claude must not hide), so it refuses;
+        one that exits during the scan is skipped."""
         found = []
         with os.scandir(self.config.proc_dir) as entries:
             for entry in entries:
                 if entry.name.isdigit():
-                    record = read_process(self.config.proc_dir, int(entry.name))
-                    if record is not None and record.ppid == pid:
+                    record = read_process_entry(self.config.proc_dir, int(entry.name))
+                    if record is ChannelProcess.UNVERIFIABLE:
+                        return StartupRefusal.UNVERIFIABLE
+                    if isinstance(record, ProcessRecord) and record.ppid == pid:
                         found.append(record)
         return found
+
+
+# The pane's own process: gone means nothing runs there; unreadable means unknown.
+_UNREADABLE_PROCESS = {ChannelProcess.GONE: StartupRefusal.NO_FOREGROUND,
+                       ChannelProcess.UNVERIFIABLE: StartupRefusal.UNVERIFIABLE}
 
 
 def _pane_guard(identity: LaunchIdentity) -> PaneGuard:
