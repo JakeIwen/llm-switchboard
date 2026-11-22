@@ -5,7 +5,9 @@ config dir, shared by the hub and the operator CLI through `JsonFile`'s lock.
 The hub rereads them only when their mtime, size or inode changes, so an
 `llm-switchboard desk enroll|unenroll|sends` from the CLI is seen at the
 hub's next recheck without a restart. Anything unreadable reads as "nothing
-enrolled" and "sends off": the desk fails closed. Editing is stricter: an
+enrolled" and "sends off": the desk fails closed. The startup
+acknowledgement's strict read skips that cache and opens the file every
+time, since a permission change alters none of the three. Editing is stricter: an
 enroll or unenroll over an unreadable or malformed `enrolled.json` is
 refused (503) rather than overwriting the sessions it may still hold.
 `desk sends` rewrites its whole one-key file, so it replaces a broken one.
@@ -101,9 +103,6 @@ class _CachedJson:
         self._valid = valid
         self._key = None
         self._data: dict = {}
-        # Whether the last read failed (it then read as empty): routing treats
-        # that as nothing enrolled, but a listing must not report it as absence.
-        self.unreadable = False
         self.lock = _FileLock.for_file(path)
 
     def read(self) -> dict:
@@ -114,13 +113,17 @@ class _CachedJson:
             key = None
         except OSError:
             self._key = None
-            self.unreadable = True
             log.warning("desk: %s cannot be inspected; treating it as empty", self.file.path.name)
             return {}
         if key != self._key or key is None:
-            self._data, self.unreadable = self._load()
+            self._data = self._load()[0]
             self._key = key
         return self._data
+
+    def read_fresh(self) -> tuple[dict, bool]:
+        """Opened and validated now, never from the cache: a permission
+        change alters none of the mtime, size and inode it is keyed on."""
+        return self._load()
 
     def _load(self) -> tuple[dict, bool]:
         """The content, and whether it failed to read (then empty)."""
@@ -187,9 +190,12 @@ class Enrollment:
     def sessions(self, *, strict: bool = False) -> dict[str, dict]:
         """The enrolled sessions; an unreadable or malformed file reads as
         none, or raises (503) with `strict`, for callers that must not report
-        a failed read as "nothing enrolled"."""
-        data = self._json.read()
-        if strict and self._json.unreadable:
+        a failed read as "nothing enrolled". Routing reads the cache; `strict`
+        (the startup acknowledgement) opens the file every time."""
+        if not strict:
+            return dict(self._json.read().get("sessions", {}))
+        data, unreadable = self._json.read_fresh()
+        if unreadable:
             raise DeskError(503, f"{self._json.file.path.name} unreadable")
         return dict(data.get("sessions", {}))
 

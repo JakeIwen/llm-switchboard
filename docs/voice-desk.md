@@ -430,9 +430,11 @@ must hold (`desk/startup_identity.py`, `desk/startup_ack.py`,
   without blocking, must be a regular file of at most 64 KiB, and anything
   else (permission denied, a FIFO, a link, oversize) refuses with 503.
   Nothing writes or fakes one.
-- The session is enrolled (read fresh, under `enrolled.json`'s lock); the
-  screen passes the exact warning matcher with option 1 (**I am using this
-  for local development**) selected, never **Exit**; and the digest equals
+- The session is enrolled (read fresh, under `enrolled.json`'s lock: the
+  file is opened and validated on every listing and acknowledgement, never
+  answered from the hub's routing cache, so a permission change counts at
+  once); the screen passes the exact warning matcher with option 1 (**I am
+  using this for local development**) selected, never **Exit**; and the digest equals
   the one the page or CLI was shown. The digest is SHA-256 over the capture
   together with the window id, pane id, pane pid and start time, claude's
   pid and start time, and the hub's epoch, so a pane respawned with an
