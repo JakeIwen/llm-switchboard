@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { SessionRow, SessionStatus } from '../api/sessionRow'
-import { badges, identityTags, sessionBlockedReason, STATE } from './badges'
+import { badges, deskBadge, DESK_BADGE, identityTags, sessionBlockedReason, STATE } from './badges'
 
 type BadgeRow = Parameters<typeof badges>[0] & Parameters<typeof sessionBlockedReason>[0]
 const base: BadgeRow = { host: '', enabled: false, status: null, new: false, tool: 'claude', open_elsewhere: [] }
@@ -8,6 +8,16 @@ const status = (fields: Partial<SessionStatus>): SessionStatus => ({
   session_id: 'a', state: 'running', detail: '', window_id: null, pid: null, rss_kb: null,
   rc_active: false, busy: false, duplicate: false, started_at: null, next_attempt: 0,
   failures: 0, launches: 0, last_exit: null, rc_name: '', no_rc_since: null, auto_restarts: 0, ...fields,
+})
+
+describe('desk badge', () => {
+  it('shows only for enrolled rows and explains how to change it', () => {
+    expect(deskBadge({ desk_enrolled: true })).toBe(DESK_BADGE)
+    expect(deskBadge({ desk_enrolled: false })).toBeNull()
+    expect(deskBadge({})).toBeNull()
+    expect(DESK_BADGE.label).toBe('Desk')
+    expect(DESK_BADGE.title).toBe('Enrolled in the voice desk. Change it from the desk or with `llm-switchboard desk enroll|unenroll`.')
+  })
 })
 
 describe('session badges', () => {

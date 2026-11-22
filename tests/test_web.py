@@ -7,6 +7,7 @@ import urllib.request
 from pathlib import Path
 
 from llm_switchboard import settings
+from llm_switchboard.desk.enrollment import Enrollment
 from llm_switchboard.hosts import Hosts
 from llm_switchboard.codex_trash import CodexTrash
 from llm_switchboard.store import Store
@@ -52,6 +53,20 @@ class WebTest(unittest.TestCase):
         [row] = body["sessions"]
         self.assertTrue(row["enabled"])
         self.assertEqual(row["status"]["state"], "starting")
+
+    def test_desk_enrolled_is_read_only_and_defaults_false(self):
+        self.assertFalse(self.call("/api/sessions")[1]["sessions"][0]["desk_enrolled"])
+        enrolled = self.root / "enrolled.json"
+        self.app.enrollment = Enrollment(enrolled)
+        # Missing file: nobody enrolled, no error.
+        self.assertFalse(self.call("/api/sessions")[1]["sessions"][0]["desk_enrolled"])
+        self.assertTrue(self.app.enrollment.enroll(SID, 1.0))
+        status, body = self.call("/api/sessions")
+        self.assertEqual(status, 200)
+        self.assertTrue(body["sessions"][0]["desk_enrolled"])
+        # An unreadable file reads as nobody enrolled.
+        enrolled.write_text("{not json")
+        self.assertFalse(self.call("/api/sessions")[1]["sessions"][0]["desk_enrolled"])
 
     def test_post_must_be_json(self):
         status, _ = self.call(f"/api/sessions/{SID}/enable", {}, content_type="text/plain")

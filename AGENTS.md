@@ -131,6 +131,11 @@ Sharing the socket would let its supervisor close the real windows.
 | `/`, `/index.html`, `/assets/*`, `/theme.js` | Picker browsers; extensionless client routes also use the index | `llm_switchboard/page.py`, `web/dist` |
 | `/next`, `/next/*` | Former preview bookmarks; permanent redirects to the matching root URL | `llm_switchboard/page.py` |
 | `python -m scripts.api_parity` | Developer HTTP parity checks | `scripts/api_parity/__main__.py` |
+| `bin/desk-channel` | Claude Code, through the pinned `mcp.json` that `desk install-config` writes; its argv is pinned by `DeskConfig.channel_argv` and checked by `desk/peer.py`, so moving it breaks enrolled sessions | `llm_switchboard/desk/channel.py` |
+| `bin/desk-adb-link` | `systemd/llm-switchboard-desk-adb.service` | `llm_switchboard/desk/` (see `docs/voice-desk.md`) |
+| `systemd/llm-switchboard-desk.service`, `systemd/llm-switchboard-desk-adb.service` | `install.sh` template inputs | `install.sh` |
+| `scripts/desk-ca.sh` | Mac operator, one-off (the desk's local CA) | `docs/voice-desk.md` |
+| `llm-switchboard desk ...` | Operator CLI and the hub unit (`desk serve`) | `llm_switchboard/desk/cli.py` |
 
 The package remains shared by Pi and Mac. Public cross-feature boundaries are
 listed in the ownership map; import records from their pure owner rather than

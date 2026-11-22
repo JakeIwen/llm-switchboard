@@ -105,6 +105,6 @@ def page_row(row: dict, host: str, online: bool, last_seen: float, settings: Set
     return {**row, "id": f"{host}:{sid}", "session_id": sid, "host": host,
             "host_online": online, "last_seen": last_seen, "short_id": sid[:8],
             "project": host_display_path(cwd), "resume_cmd": command,
-            "enabled": False, "new": False, "remote_url": "", "rc_name": "", "status": None,
+            "enabled": False, "desk_enrolled": False, "new": False, "remote_url": "", "rc_name": "", "status": None,
             "open_elsewhere": [] if row["state"] == SessionState.CLOSED else [{"status": row["state"]}],
             "codex_state": "active" if row["state"] == SessionState.BUSY else "notLoaded"}

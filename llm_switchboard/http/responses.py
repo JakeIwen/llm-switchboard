@@ -52,6 +52,8 @@ class SessionRow(ResponseRecord):
     headless: bool = False
     new: bool
     enabled: bool
+    # Read-only: enrolled in the voice desk (administered from the desk or its CLI).
+    desk_enrolled: bool = False
     rc_name: str
     open_elsewhere: list[OpenProcess]
     status: StatusRecord | None

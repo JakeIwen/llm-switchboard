@@ -22,7 +22,7 @@ const base = {
   id, tool: 'claude', host: '', short_id: 'aaaaaaaa', title: 'New', first_prompt: '',
   cwd: '/work/project', project: '/work/project', mtime: 10, size: null,
   remote_url: '', resume_cmd: `cd -- /work/project && claude --resume ${id}`,
-  new: true, enabled: true, rc_name: '', open_elsewhere: [], status: null, headless: false,
+  new: true, enabled: true, desk_enrolled: false, rc_name: '', open_elsewhere: [], status: null, headless: false,
 } satisfies SessionRow
 
 it('types a pending local Claude row, including its nested supervisor and exit records', () => {
@@ -42,7 +42,7 @@ print(json.dumps(session_rows([], {sid: entry}, live, {sid: status})))`)).toEqua
 it('types local Codex rows with no supervisor and Codex-specific state', () => {
   const expected: SessionRow = {
     ...base, tool: 'codex', short_id: 'eeeeeeee', title: 'Codex', first_prompt: 'Hello',
-    mtime: null, size: 42, new: false, enabled: false, codex_state: 'active',
+    mtime: null, size: 42, new: false, enabled: false, desk_enrolled: false, codex_state: 'active',
     resume_cmd: `cd -- /work/project && codex resume ${id}`,
   }
   expect(rowsFromPython(`
@@ -56,7 +56,7 @@ it('types host metadata without prompts or local process pids', () => {
   const expected: SessionRow[] = (['closed', 'idle', 'busy'] as const).map((state) => ({
     ...common, id: `mac:${id}`, session_id: id, host: 'mac', host_online: true, last_seen: 20,
     title: 'Remote', cwd: '/Users/me/dev/project', project: '~/dev/project', mtime: null,
-    size: null, enabled: false, new: false, mutable: true, state,
+    size: null, enabled: false, desk_enrolled: false, new: false, mutable: true, state,
     open_elsewhere: state === 'closed' ? [] : [{ status: state }],
     codex_state: state === 'busy' ? 'active' : 'notLoaded',
     resume_cmd: `cd -- /Users/me/dev/project && claude --resume ${id}`,

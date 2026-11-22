@@ -17,6 +17,8 @@ from .codex_client import CodexClient, CodexError, CodexUnavailable
 from .codex_threads import CodexCatalog, codex_names, codex_short_id
 from .codex_trash import CodexTrash
 from .conversation import recent_messages
+from .desk.config import DeskConfig
+from .desk.enrollment import Enrollment
 from .folders import new_session_folders
 from .hosts import Hosts
 from .live_registry import live_processes
@@ -34,7 +36,8 @@ from .trash import Trash
 class App:
     def __init__(self, store: Store, index: TranscriptIndex, supervisor: Supervisor, tmux: Tmux, trash: Trash,
                  registry=live_processes, actions: SessionActions | None = None, codex: CodexActions | None = None,
-                 hosts: Hosts | None = None, search: SearchHandlers | None = None, settings_file: Path | None = None):
+                 hosts: Hosts | None = None, search: SearchHandlers | None = None, settings_file: Path | None = None,
+                 enrolled_file: Path | None = None):
         self.store = store
         self.index = index
         self.supervisor = supervisor
@@ -48,6 +51,15 @@ class App:
         self.search = search or SearchHandlers(SEARCH_INDEX_FILE, lambda: settings.load(self.settings_file))
         # Other machines' pushed sessions (hosts.py); None leaves them out.
         self.hosts = hosts
+        # Read-only: the desk and `llm-switchboard desk enroll` own this file.
+        self.enrollment = Enrollment(enrolled_file or DeskConfig.from_env().enrolled_file)
+
+    def desk_enrolled(self) -> set[str]:
+        """Enrolled session ids; a missing or unreadable file means none."""
+        try:
+            return set(self.enrollment.sessions())
+        except Exception:
+            return set()
 
     def settings_payload(self, partial: dict | None = None) -> dict:
         current = (settings.load(self.settings_file) if partial is None
@@ -69,7 +81,8 @@ class App:
 
     def list_sessions(self) -> dict:
         current = settings.load(self.settings_file)
-        rows = session_rows(self.index.all(), self.store.load(), self.registry(), self.supervisor.snapshot(), current)
+        rows = session_rows(self.index.all(), self.store.load(), self.registry(), self.supervisor.snapshot(), current,
+                            self.desk_enrolled())
         codex = {"enabled": self.codex is not None, "error": ""}
         if self.codex:
             rows += codex_rows(self.codex.catalog.threads(), current)

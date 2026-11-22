@@ -2,7 +2,7 @@ import { memo, useEffect, useState, type ReactNode } from 'react'
 import { Badge, Checkbox, Switch, Tooltip } from '@mantine/core'
 import type { SessionRow as Row } from '../../api/sessionRow'
 import { age, size } from '../../format/format'
-import { badges, type BadgeTone } from '../../sessions/badges'
+import { badges, deskBadge, type BadgeTone } from '../../sessions/badges'
 import { SessionDetails, type RowActions } from './SessionDetails'
 import type { RowNotice } from './useHostActions'
 import type { SelectEvent } from './useSelection'
@@ -67,6 +67,7 @@ export const SessionRow = memo(function SessionRow(p: Props) {
   const { row } = p
   const offline = Boolean(row.host) && row.host_online === false
   const shownPills = pills(row)
+  const desk = deskBadge(row)
   // The switch moves at once; the server's answer (or a cancel) settles it.
   const [keepShown, setKeepShown] = useState<boolean | null>(null)
   useEffect(() => setKeepShown(null), [row.enabled])
@@ -97,7 +98,7 @@ export const SessionRow = memo(function SessionRow(p: Props) {
           </button>
           <span>{age(row.mtime, p.now)}</span>
           {p.showSize && row.size ? <span>{size(row.size)}</span> : null}
-          {(p.notice || shownPills.length > 0) && (
+          {(p.notice || shownPills.length > 0 || desk) && (
             <span className="session-pills">
               {p.notice && (
                 <Badge className={TONE_CLASS[p.notice.tone]} title={p.notice.title}>
@@ -109,6 +110,13 @@ export const SessionRow = memo(function SessionRow(p: Props) {
                   {b.label}
                 </Badge>
               ))}
+              {desk && (
+                <Tooltip label={desk.title}>
+                  <Badge className="tone-info desk-badge" tabIndex={0}>
+                    {desk.label}
+                  </Badge>
+                </Tooltip>
+              )}
             </span>
           )}
         </div>

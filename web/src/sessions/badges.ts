@@ -14,6 +14,14 @@ export const STATE: Record<SupervisorState, Badge> = {
   error: { label: 'Error', tone: 'bad' },
 }
 
+export const DESK_BADGE = {
+  label: 'Desk',
+  title: 'Enrolled in the voice desk. Change it from the desk or with `llm-switchboard desk enroll|unenroll`.',
+}
+/** Read-only marker for a session enrolled in the voice desk; Mac and Codex rows never carry it. */
+export const deskBadge = (session: Pick<SessionRow, 'desk_enrolled'>): typeof DESK_BADGE | null =>
+  session.desk_enrolled ? DESK_BADGE : null
+
 type BadgeRow = Pick<SessionRow, 'host' | 'host_online' | 'last_seen' | 'enabled' | 'status' | 'new' | 'tool' | 'codex_state' | 'open_elsewhere'>
 export function sessionBlockedReason(session: Pick<SessionRow, 'host' | 'host_online' | 'mutable' | 'state' | 'open_elsewhere'>): string {
   return hostLock(session) || (session.open_elsewhere.length

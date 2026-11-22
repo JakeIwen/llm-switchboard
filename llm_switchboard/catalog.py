@@ -20,10 +20,15 @@ def session_rows(
     live: list[LiveProcess],
     statuses: dict[str, Status],
     settings: Settings | None = None,
+    desk_enrolled: frozenset[str] | set[str] = frozenset(),
 ) -> list[dict]:
     by_id = {t.session_id: t for t in transcripts}
     ids = list(by_id) + [sid for sid in entries if sid not in by_id]
-    return [_row(sid, by_id.get(sid), entries.get(sid), live, statuses.get(sid), settings) for sid in ids]
+    rows = [_row(sid, by_id.get(sid), entries.get(sid), live, statuses.get(sid), settings) for sid in ids]
+    for row in rows:
+        # Read-only mirror of the voice desk's enrollment (desk/enrollment.py).
+        row["desk_enrolled"] = row["id"] in desk_enrolled
+    return rows
 
 
 def codex_rows(threads: list[CodexThread], settings: Settings | None = None) -> list[dict]:
@@ -42,6 +47,7 @@ def codex_rows(threads: list[CodexThread], settings: Settings | None = None) -> 
         "resume_cmd": codex_resume_command(t.thread_id, t.cwd, settings),
         "new": False,
         "enabled": False,
+        "desk_enrolled": False,
         "rc_name": "",
         "open_elsewhere": [],
         "status": None,

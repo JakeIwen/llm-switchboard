@@ -869,6 +869,11 @@ export interface components {
             cwd: string;
             /** Deleted At */
             deleted_at?: number | null;
+            /**
+             * Desk Enrolled
+             * @default false
+             */
+            desk_enrolled?: boolean;
             /** Enabled */
             enabled: boolean;
             /**

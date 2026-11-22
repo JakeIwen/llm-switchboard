@@ -1068,6 +1068,11 @@
             ],
             "title": "Deleted At"
           },
+          "desk_enrolled": {
+            "default": false,
+            "title": "Desk Enrolled",
+            "type": "boolean"
+          },
           "enabled": {
             "title": "Enabled",
             "type": "boolean"
