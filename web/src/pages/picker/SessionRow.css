@@ -105,6 +105,14 @@
   gap: 4px;
 }
 
+/* Each pill sits above the title's stretched hit area so its tooltip opens on
+   hover and a tap on it doesn't expand the row; the container itself stays
+   below so the empty part of the line still expands the row. */
+.session-pills > * {
+  position: relative;
+  z-index: 1;
+}
+
 /* On a phone every row reads title / meta / pills, so pills don't land
    wherever they happen to fit. */
 @media (max-width: 47.99em) {

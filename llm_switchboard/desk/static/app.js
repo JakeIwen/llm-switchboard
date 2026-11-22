@@ -5,8 +5,11 @@
   "use strict";
 
   var Rule = window.DeskTextRule;
+  var Logic = window.DeskLogic;
   var TEST_TEXT = 'Desk test: reply with "desk OK" and nothing else.';
   var POLL_ABORT_MS = 35000;
+  var SEND_DEADLINE_MS = 20000;
+  var BUSY_NOTE = "This target is busy.";
   var CLAIM_EVERY_MS = 2000;
 
   var token = null; // never stored anywhere else
@@ -16,7 +19,8 @@
   var primed = false; // first state load must not speak old replies
   var spoken = new Set();
   var recognition = null;
-  var clearOpen = false;
+  var clearFrozen = null; // {session_id, lock_id, request_id} while the confirmation is open
+  var sentRequestId = null; // request whose "waiting" result is on screen
   var compose = freshCompose();
 
   function $(id) { return document.getElementById(id); }
@@ -87,6 +91,17 @@
     session++;
     voidCompose(null);
     stopSpeaking();
+    // A new pairing starts clean: no old draft, target, result or settings.
+    selectedId = null;
+    clearFrozen = null;
+    sentRequestId = null;
+    primed = false;
+    spoken.clear();
+    $("draft").value = "";
+    $("interim").textContent = "";
+    hideResult();
+    clear($("enroll-list"));
+    $("settings-note").textContent = "";
     $("desk").hidden = true;
     $("banner-sends").hidden = true;
     $("banner-lock-store").hidden = true;
@@ -211,7 +226,21 @@
     if (epochChanged) voidCompose("The hub restarted: the review was discarded.");
     else validateCompose();
     speakNewReplies(next);
+    Logic.pruneIds(spoken, next.requests);
+    expireWaitingResult(next);
+    if (clearFrozen && !Logic.clearStillValid(clearFrozen, findTarget(clearFrozen.session_id))) clearFrozen = null;
     render();
+  }
+
+  // "Delivered, waiting" must not outlive the wait.
+  function expireWaitingResult(next) {
+    if (!sentRequestId) return;
+    var rq = next.requests.filter(function (x) { return x.request_id === sentRequestId; })[0];
+    if (rq && rq.state !== "handed_off") {
+      sentRequestId = null;
+      if (compose.phase === "done") compose = freshCompose();
+      hideResult();
+    }
   }
 
   function findTarget(id) {
@@ -231,15 +260,15 @@
         : { text: "Busy", tone: "warn" };
     }
     switch (t.registration) {
-      case "verified": return { text: "Verified", tone: "ok" };
-      case "registered": return { text: "Registered, no desk reply verified yet", tone: "warn" };
+      case "replied": return { text: "Replied before", tone: "ok" };
+      case "registered": return { text: "Registered, no desk reply yet", tone: "warn" };
       case "ambiguous": return { text: "Ambiguous", tone: "bad" };
       default: return { text: "Unavailable", tone: "" };
     }
   }
 
   function canCompose(t) {
-    return !!t && !t.lock && (t.registration === "verified" || t.registration === "registered");
+    return !!t && !t.lock && (t.registration === "replied" || t.registration === "registered");
   }
 
   function folderOf(t) { return t.cwd || ""; }
@@ -275,7 +304,8 @@
     voidCompose(null);
     $("draft").value = "";
     $("interim").textContent = "";
-    clearOpen = false;
+    clearFrozen = null;
+    sentRequestId = null;
     hideResult();
     selectedId = id;
     render();
@@ -294,15 +324,14 @@
     b.setAttribute("data-tone", badge.tone);
 
     $("clear-area").hidden = !t.lock;
-    var showConfirm = !!t.lock && clearOpen;
+    var showConfirm = !!clearFrozen;
     $("clear-confirm").hidden = !showConfirm;
     $("clear-btn").hidden = showConfirm;
-    if (t.lock) {
+    if (showConfirm) {
       $("clear-text").textContent =
-        "Only clear if you checked the session and the earlier request is finished or lost. Lock: request " +
-        t.lock.request_id + ", since " + formatTime(t.lock.since) + ".";
-    } else {
-      clearOpen = false;
+        "Only clear if you checked the session and the earlier request is finished or lost. Lock " +
+        clearFrozen.lock_id + " for request " + clearFrozen.request_id + ", since " +
+        formatTime(t.lock.since) + ".";
     }
 
     var composable = canCompose(t);
@@ -314,11 +343,13 @@
     $("review-btn").disabled = !composable || busy;
     $("dictate").textContent = recognition ? "Stop" : "Dictate";
     $("dictate").hidden = !speechInputAvailable();
-    if (!composable && editing) {
-      $("compose-note").textContent = t.lock
-        ? "This target is busy."
-        : "This target is not available for sends.";
+    var noteNode = $("compose-note");
+    if (t.lock) {
+      if (!noteNode.textContent) noteNode.textContent = BUSY_NOTE;
+    } else if (noteNode.textContent === BUSY_NOTE) {
+      noteNode.textContent = "";
     }
+    if (!composable && !t.lock && editing) noteNode.textContent = "This target is not available for sends.";
     renderReview();
     renderReplies(t);
   }
@@ -398,6 +429,8 @@
   }
 
   function startReview(text) {
+    // Dictation after this point would change the draft but not the review.
+    stopRecognition();
     if (!freezeDestination()) return;
     compose.phase = "review";
     compose.text = Rule.normalizeText(text);
@@ -439,27 +472,33 @@
     var ticket = compose.ticket;
     compose.phase = "sending";
     render();
-    api("POST", "/desk/api/send", { ticket: ticket, text: text }).then(function (r) {
+    var ctl = new AbortController();
+    var timer = setTimeout(function () { ctl.abort(); }, SEND_DEADLINE_MS);
+    api("POST", "/desk/api/send", { ticket: ticket, text: text }, { signal: ctl.signal }).then(function (r) {
+      clearTimeout(timer);
       if (seq !== compose.seq || compose.phase !== "sending") return;
-      if (r.status === 200) {
-        finishSend("Sent. Waiting for the reply.", "ok");
-        $("draft").value = "";
-      } else {
-        // The hub answered with a refusal: it did not dispatch.
-        finishSend("Not sent: " + errorText(r) + ".", "bad");
-      }
+      settleSend(Logic.classifySend(r));
     }, function () {
+      clearTimeout(timer);
       if (seq !== compose.seq || compose.phase !== "sending") return;
-      // No response arrived: the hub may have handed the text off. Never
-      // offer a retry; the hub's state shows whether the target is busy.
-      stopRecognition();
+      settleSend(Logic.classifySend(null));
+    });
+  }
+
+  // Shows exactly what the hub said. Unknown is never retried.
+  function settleSend(result) {
+    stopRecognition();
+    if (result.outcome === "handed_off") sentRequestId = result.request_id;
+    if (result.outcome === "handed_off" || result.outcome === "answered") $("draft").value = "";
+    if (result.outcome === "unknown") {
       compose = freshCompose();
       compose.phase = "unknown";
-      showResult("Result unknown: the connection dropped while sending, so the request may have been delivered. " +
-        "Check the target and its replies. It is not retried.", "warn");
       $("review").hidden = true;
+      showResult(result.text, result.tone);
       render();
-    });
+    } else {
+      finishSend(result.text, result.tone);
+    }
   }
 
   function finishSend(text, tone) {
@@ -492,6 +531,7 @@
   function toggleDictation() {
     if (recognition) { stopRecognition(); return; }
     resetAfterResult();
+    if (compose.phase === "review") { compose.phase = "edit"; $("review").hidden = true; }
     if (!freezeDestination()) { setNote("This target is not available for sends."); return; }
     var Ctor = window.SpeechRecognition || window.webkitSpeechRecognition;
     var rec = new Ctor();
@@ -589,28 +629,29 @@
   }
 
   function describeState(rq) {
-    var map = {
-      pending: "Accepted, not yet delivered",
-      handed_off: "Delivered, waiting for the reply",
-      answered: "Answered",
-      unknown: "Result unknown (connection lost after delivery)",
-      expired: "Not delivered (safe to send again)"
-    };
-    return (map[rq.state] || rq.state) + " - " + formatTime(rq.created);
+    return Logic.describeRequestState(rq.state) + " - " + formatTime(rq.created);
   }
 
   // ---- Clear, enroll ------------------------------------------------------
 
   function doClear() {
-    var t = selectedId === null ? null : findTarget(selectedId);
-    if (!t || !t.lock) return;
-    api("POST", "/desk/api/clear", { session_id: t.session_id, lock_id: t.lock.lock_id }).then(function (r) {
-      clearOpen = false;
+    // Submit only the pair the operator confirmed, never the current lock.
+    var frozen = clearFrozen;
+    var t = frozen ? findTarget(frozen.session_id) : null;
+    if (!frozen || !Logic.clearStillValid(frozen, t)) {
+      clearFrozen = null;
+      render();
+      return;
+    }
+    api("POST", "/desk/api/clear", { session_id: frozen.session_id, lock_id: frozen.lock_id }).then(function (r) {
+      clearFrozen = null;
       if (r.status === 200) hideResult();
       else showResult("Not cleared: " + errorText(r) + ".", "bad");
       render();
     }, function () {
+      clearFrozen = null;
       showResult("Clear result unknown: the hub could not be reached.", "warn");
+      render();
     });
   }
 
@@ -672,8 +713,11 @@
       voidCompose("Review discarded.");
       render();
     });
-    $("clear-btn").addEventListener("click", function () { clearOpen = true; render(); });
-    $("clear-no").addEventListener("click", function () { clearOpen = false; render(); });
+    $("clear-btn").addEventListener("click", function () {
+      clearFrozen = Logic.freezeClear(selectedId === null ? null : findTarget(selectedId));
+      render();
+    });
+    $("clear-no").addEventListener("click", function () { clearFrozen = null; render(); });
     $("clear-yes").addEventListener("click", doClear);
     document.addEventListener("visibilitychange", function () {
       if (document.visibilityState !== "hidden") return;
