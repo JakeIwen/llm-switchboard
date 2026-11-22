@@ -5,7 +5,10 @@ config dir, shared by the hub and the operator CLI through `JsonFile`'s lock.
 The hub rereads them only when their mtime, size or inode changes, so an
 `llm-switchboard desk enroll|unenroll|sends` from the CLI is seen at the
 hub's next recheck without a restart. Anything unreadable reads as "nothing
-enrolled" and "sends off": the desk fails closed.
+enrolled" and "sends off": the desk fails closed. Editing is stricter: an
+enroll or unenroll over an unreadable or malformed `enrolled.json` is
+refused (503) rather than overwriting the sessions it may still hold.
+`desk sends` rewrites its whole one-key file, so it replaces a broken one.
 """
 
 import contextlib
@@ -53,14 +56,24 @@ class _CachedJson:
             return {}
         return data if isinstance(data, dict) else {}
 
+    def _load_for_edit(self) -> dict:
+        try:
+            data = self.file.load()
+        except (OSError, ValueError) as exc:
+            raise DeskError(503, f"{self.file.path.name} unreadable; not changed") from exc
+        if not isinstance(data, dict):
+            raise DeskError(503, f"{self.file.path.name} malformed; not changed")
+        return data
+
     @contextlib.contextmanager
-    def updating(self):
-        """Yields the current content for a read/modify/write under the lock."""
+    def updating(self, replace_unreadable: bool = False):
+        """Yields the current content for a read/modify/write under the lock.
+        An unreadable file raises DeskError unless `replace_unreadable`."""
         ensure_private_dir(self.file.path.parent)
         lock_path = self.file.path.with_suffix(".lock")
         os.close(os.open(lock_path, os.O_WRONLY | os.O_CREAT, 0o600))
         with self.file.locked():
-            data = self._load()
+            data = self._load() if replace_unreadable else self._load_for_edit()
             before = json.dumps(data, sort_keys=True)
             yield data
             if json.dumps(data, sort_keys=True) != before:
@@ -87,8 +100,7 @@ class Enrollment:
         _check_session_id(session_id)
         with self._json.updating() as data:
             sessions = data.setdefault("sessions", {})
-            if not isinstance(sessions, dict):
-                sessions = data["sessions"] = {}
+            _check_sessions(sessions)
             if session_id in sessions:
                 return False
             if len(sessions) >= MAX_ENROLLED:
@@ -100,8 +112,9 @@ class Enrollment:
         """True when it was enrolled."""
         _check_session_id(session_id)
         with self._json.updating() as data:
-            sessions = data.get("sessions")
-            if not isinstance(sessions, dict) or session_id not in sessions:
+            sessions = data.get("sessions", {})
+            _check_sessions(sessions)
+            if session_id not in sessions:
                 return False
             del sessions[session_id]
             return True
@@ -115,9 +128,14 @@ class DeskSettings:
         return self._json.read().get("sends_enabled") is True
 
     def set_sends_enabled(self, enabled: bool) -> None:
-        with self._json.updating() as data:
+        with self._json.updating(replace_unreadable=True) as data:
             data.clear()
             data["sends_enabled"] = bool(enabled)
+
+
+def _check_sessions(sessions) -> None:
+    if not isinstance(sessions, dict):
+        raise DeskError(503, "enrolled.json malformed; not changed")
 
 
 def _check_session_id(session_id) -> None:

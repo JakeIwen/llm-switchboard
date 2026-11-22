@@ -52,7 +52,8 @@ class App:
         # Other machines' pushed sessions (hosts.py); None leaves them out.
         self.hosts = hosts
         # Read-only: the desk and `llm-switchboard desk enroll` own this file.
-        self.enrollment = Enrollment(enrolled_file or DeskConfig.from_env().enrolled_file)
+        # Only the path: an unrelated desk setting (a bad port) must not stop the picker.
+        self.enrollment = Enrollment(enrolled_file or DeskConfig.enrolled_file_from_env())
 
     def desk_enrolled(self) -> set[str]:
         """Enrolled session ids; a missing or unreadable file means none."""

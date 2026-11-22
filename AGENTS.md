@@ -135,6 +135,7 @@ Sharing the socket would let its supervisor close the real windows.
 | `bin/desk-adb-link` | `systemd/llm-switchboard-desk-adb.service` | `llm_switchboard/desk/` (see `docs/voice-desk.md`) |
 | `systemd/llm-switchboard-desk.service`, `systemd/llm-switchboard-desk-adb.service` | `install.sh` template inputs | `install.sh` |
 | `scripts/desk-ca.sh` | Mac operator, one-off (the desk's local CA) | `docs/voice-desk.md` |
+| `scripts/desk-units.sh <repo> <local.env>` | `install.sh` (reconciles the desk hub and adb link units) | `scripts/desk-units.sh` itself; `docs/voice-desk.md` |
 | `llm-switchboard desk ...` | Operator CLI and the hub unit (`desk serve`) | `llm_switchboard/desk/cli.py` |
 
 The package remains shared by Pi and Mac. Public cross-feature boundaries are

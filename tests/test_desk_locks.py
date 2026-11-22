@@ -6,17 +6,18 @@ import os
 import secrets
 import stat
 import unittest
+from unittest import mock
 
-from desk_fixtures import SESSION_A, SESSION_B, Clock, FakeIdentity, desk_config, make_home
+from desk_fixtures import SESSION_A, SESSION_B, Clock, FakeIdentity, desk_config, make_home, request_id
 
 from llm_switchboard.desk.enrollment import DeskSettings, Enrollment
 from llm_switchboard.desk.hub_state import HubState
 from llm_switchboard.desk.locks import LockStore, LockStoreError
-from llm_switchboard.desk.model import MAX_ENROLLED, MAX_LOCKS, DeskError, Lock
+from llm_switchboard.desk.model import MAX_ENROLLED, MAX_LOCK_FILE_BYTES, MAX_LOCKS, DeskError, Lock
 
 
 def lock(n: int, session_id: str = SESSION_A) -> Lock:
-    return Lock(f"{n:016x}", "pi", session_id, f"epoch.{n}", "ab" * 32, 1000.0 + n)
+    return Lock(f"{n:016x}", "pi", session_id, request_id(n), "ab" * 32, 1000.0 + n)
 
 
 def mode(path) -> int:
@@ -76,6 +77,63 @@ class LockStoreTest(unittest.TestCase):
         store.add(lock(3))
         self.assertEqual(LockStore(self.path).load(), [lock(1), lock(3)])
 
+    def test_a_short_os_write_still_writes_the_whole_file(self):
+        real_write = os.write
+
+        def short_write(fd, data):
+            return real_write(fd, bytes(data[:7]))
+        store = LockStore(self.path)
+        store.load()
+        with mock.patch("llm_switchboard.desk.locks.os.write", side_effect=short_write):
+            store.add(lock(1))
+            store.add(lock(2, SESSION_B))
+        self.assertEqual(LockStore(self.path).load(), [lock(1), lock(2, SESSION_B)])
+
+    def test_a_write_that_makes_no_progress_fails_instead_of_looping(self):
+        store = LockStore(self.path)
+        store.load()
+        with mock.patch("llm_switchboard.desk.locks.os.write", return_value=0):
+            with self.assertRaisesRegex(LockStoreError, "unwritable"):
+                store.add(lock(1))
+        self.assertEqual(LockStore(self.path).load(), [])
+
+    def test_an_oversize_file_is_refused_without_parsing_it(self):
+        self.path.parent.mkdir(parents=True)
+        padded = json.dumps({"version": 1, "locks": [lock(1).to_json()]}) + " " * MAX_LOCK_FILE_BYTES
+        self.path.write_text(padded)
+        with self.assertRaisesRegex(LockStoreError, "too large"):
+            LockStore(self.path).load()
+
+    def test_every_field_of_every_lock_is_validated_on_load(self):
+        self.path.parent.mkdir(parents=True)
+        good = lock(1).to_json()
+        bad_fields = {
+            "lock_id": ["", "x" * 16, "0" * 15, 7], "host": ["mac", "", None],
+            "session_id": ["not-a-session", SESSION_A.upper(), 1],
+            "request_id": ["epoch.1", "e" * 32 + ".zz", ["list"]], "ticket_hash": ["h", "A" * 64],
+        }
+        raw_since = ["NaN", "Infinity", "-Infinity", "-1", "0", "1e400", '"soon"', "true"]
+        contents = [json.dumps({"version": 1, "locks": [good, {**lock(2).to_json(), name: value}]})
+                    for name, values in bad_fields.items() for value in values]
+        template = json.dumps({"version": 1, "locks": [{**good, "since": "SINCE"}]})
+        contents += [template.replace('"SINCE"', since) for since in raw_since]
+        contents += [json.dumps({"version": 1, "locks": [{**good, "extra": "text"}]}),
+                     json.dumps({"version": 1, "locks": [{k: v for k, v in good.items() if k != "host"}]})]
+        for content in contents:
+            with self.subTest(content=content[-90:]):
+                self.path.write_text(content)
+                with self.assertRaises(LockStoreError):
+                    LockStore(self.path).load()
+        self.path.write_text(json.dumps({"version": 1, "locks": [good]}))
+        self.assertEqual(LockStore(self.path).load(), [lock(1)])
+
+    def test_a_malformed_lock_is_never_written(self):
+        store = LockStore(self.path)
+        store.load()
+        with self.assertRaisesRegex(LockStoreError, "malformed"):
+            store.add(Lock("0" * 16, "pi", SESSION_A, "not an id", "ab" * 32, 1.0))
+        self.assertFalse(self.path.exists())
+
     def test_the_cap_is_enforced_on_add(self):
         store = LockStore(self.path)
         store.load()
@@ -127,6 +185,29 @@ class EnrollmentFilesTest(unittest.TestCase):
         self.config.enrolled_file.write_text("{broken")
         with self.assertLogs("llm_switchboard.desk", "WARNING"):
             self.assertEqual(reader.sessions(), {})
+
+    def test_edits_refuse_an_unreadable_or_malformed_enrollment_file(self):
+        enrollment = Enrollment(self.config.enrolled_file)
+        enrollment.enroll(SESSION_A, 1.0)
+        for content in ("{broken", "[1, 2]", '{"sessions": []}', '{"sessions": "x"}'):
+            with self.subTest(content=content):
+                self.config.enrolled_file.write_text(content)
+                for edit in (lambda: enrollment.enroll(SESSION_B, 2.0), lambda: enrollment.unenroll(SESSION_A)):
+                    with self.assertRaises(DeskError) as caught:
+                        edit()
+                    self.assertEqual(caught.exception.status, 503)
+                    self.assertEqual(self.config.enrolled_file.read_text(), content)
+        # Routing still fails closed: an unreadable file means nobody enrolled.
+        with self.assertLogs("llm_switchboard.desk", "WARNING"):
+            self.config.enrolled_file.write_text("{broken!")
+            self.assertEqual(enrollment.sessions(), {})
+
+    def test_sends_replace_a_broken_settings_file(self):
+        self.config.config_dir.mkdir(parents=True)
+        self.config.settings_file.write_text("{broken")
+        with self.assertLogs("llm_switchboard.desk", "WARNING"):
+            DeskSettings(self.config.settings_file).set_sends_enabled(True)
+        self.assertEqual(json.loads(self.config.settings_file.read_text()), {"sends_enabled": True})
 
     def test_sends_default_off_and_persist(self):
         settings = DeskSettings(self.config.settings_file)

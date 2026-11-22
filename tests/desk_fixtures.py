@@ -5,9 +5,11 @@ client speaking the real socket protocol."""
 import atexit
 from dataclasses import dataclass
 import contextlib
+import hashlib
 import json
 import os
 from pathlib import Path
+import secrets
 import shutil
 import socket
 import ssl
@@ -16,6 +18,7 @@ import tempfile
 import threading
 import time
 import unittest
+import weakref
 
 from llm_switchboard.desk.config import PORT_ENV, DeskConfig
 from llm_switchboard.desk.protocol import MessageType, decode, encode, read_line
@@ -40,6 +43,24 @@ authorityKeyIdentifier = keyid:always
 """
 _cert_dir: Path | None = None
 _cert_lock = threading.Lock()
+
+
+_state_tokens: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
+
+
+def token_for(state) -> str:
+    """A tablet token paired in-process with this HubState, made once per state."""
+    if state not in _state_tokens:
+        secret = secrets.token_hex(32)
+        started = state.pair_start(hashlib.sha256(secret.encode()).hexdigest())
+        state.pair_confirm(started["code"])
+        _state_tokens[state] = state.pair_claim(started["pair_id"], secret)["token"]
+    return _state_tokens[state]
+
+
+def request_id(n: int, epoch: str = "e" * 32) -> str:
+    """A request id in the hub-issued shape."""
+    return f"{epoch}.{n:016x}"
 
 
 def wait_until(predicate, timeout: float = 5.0, interval: float = 0.02):
@@ -213,6 +234,11 @@ class HubCase(unittest.TestCase):
     @property
     def port(self) -> int:
         return self.hub.http.port
+
+    @property
+    def token(self) -> str:
+        """A token for calling the hub's protected API methods directly."""
+        return token_for(self.hub.state)
 
     def call(self, method, path, body=None, *, token=None, headers=None, raw=None, timeout=30):
         import http.client

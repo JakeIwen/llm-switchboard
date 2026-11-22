@@ -9,12 +9,18 @@ import socket
 import stat
 import subprocess
 import sys
+import time
 import unittest
+from unittest import mock
 
 from desk_fixtures import SESSION_A, SESSION_B, SESSION_C, HubCase, desk_config, make_home, wait_until
 
 from llm_switchboard.desk.enrollment import Enrollment
-from llm_switchboard.desk.model import DeskError
+from llm_switchboard.desk.hub import INVALID_ID_MARKER
+from llm_switchboard.desk.labels import SessionLabels
+from llm_switchboard.desk.model import (
+    LABEL_HEAD_BYTES, LABEL_TAIL_BYTES, MAX_OPERATOR_CONNECTIONS, MAX_OPERATOR_LINE_BYTES, DeskError,
+)
 from llm_switchboard.desk.operator import OperatorOp, SocketInUse, bind_private_socket, operator_request
 from llm_switchboard.desk.protocol import DELIVERY_SUFFIX, MAX_REPLY_TEXT_BYTES, MessageType, encode
 
@@ -32,8 +38,9 @@ class ChannelHubCase(HubCase):
         return client, welcome["generation"]
 
     def send(self, session_id, generation, text="what changed?"):
-        ticket = self.hub.ticket({"session_id": session_id, "generation": generation, "epoch": self.hub.epoch})
-        return self.hub.send({"ticket": ticket["ticket"], "text": text})
+        ticket = self.hub.ticket({"session_id": session_id, "generation": generation, "epoch": self.hub.epoch},
+                                 self.token)
+        return self.hub.send({"ticket": ticket["ticket"], "text": text}, self.token)
 
     def assertRefused(self, status, reason, call, *args):
         with self.assertRaises(DeskError) as caught:
@@ -66,7 +73,7 @@ class RegistrationTest(ChannelHubCase):
         self.assertEqual(self.target(SESSION_A)["registration"], "ambiguous")
         for gen in (generation, later):
             self.assertRefused(409, "ambiguous", self.hub.ticket,
-                               {"session_id": SESSION_A, "generation": gen, "epoch": self.hub.epoch})
+                               {"session_id": SESSION_A, "generation": gen, "epoch": self.hub.epoch}, self.token)
         first.close()
         wait_until(lambda: self.target(SESSION_A)["registration"] == "registered")
         self.assertEqual(self.send(SESSION_A, later)["state"], "handed_off")
@@ -78,8 +85,40 @@ class RegistrationTest(ChannelHubCase):
                    {"type": "custom-title", "customTitle": "Van wiring", "sessionId": SESSION_A}]
         (project / f"{SESSION_A}.jsonl").write_text("".join(json.dumps(r, separators=(",", ":")) + "\n"
                                                            for r in records))
+        self.hub.recheck_now()
         self.assertEqual((self.target(SESSION_A)["label"], self.target(SESSION_A)["cwd"]), ("Van wiring", "/work/van"))
         self.assertEqual(self.target(SESSION_B)["label"], SESSION_B[:8])
+
+    def test_labels_read_only_a_bounded_head_and_tail_and_are_cached_by_file_identity(self):
+        project = self.home / ".claude" / "projects" / "-work-van"
+        project.mkdir(parents=True)
+        path = project / f"{SESSION_A}.jsonl"
+
+        def line(record):
+            return json.dumps(record, separators=(",", ":")) + "\n"
+        filler = line({"type": "assistant", "message": {"content": "x" * 1000}})
+        middle = line({"type": "custom-title", "customTitle": "Middle title"})
+        with open(path, "w") as f:
+            f.write(line({"type": "user", "cwd": "/work/van", "message": {"content": "first"}}))
+            f.write(filler * (LABEL_HEAD_BYTES // len(filler) + 2))
+            f.write(middle)
+            f.write(filler * (LABEL_TAIL_BYTES // len(filler) + 2))
+            f.write(line({"type": "ai-title", "aiTitle": "Tail title"}))
+        labels = SessionLabels(self.config)
+        # The middle custom title would win a whole-file read; it is never read.
+        self.assertEqual(labels.describe(SESSION_A), ("Tail title", "/work/van"))
+        with mock.patch("llm_switchboard.desk.labels.read_title_and_cwd") as read:
+            self.assertEqual(labels.describe(SESSION_A), ("Tail title", "/work/van"))
+            read.assert_not_called()
+        with open(path, "a") as f:
+            f.write(line({"type": "custom-title", "customTitle": "Renamed"}))
+        self.assertEqual(labels.describe(SESSION_A), ("Renamed", "/work/van"))
+
+    def test_the_state_api_reads_no_transcripts(self):
+        self.hub.recheck_now()
+        with mock.patch.object(SessionLabels, "describe", side_effect=AssertionError("read on the request path")):
+            view = self.hub.state_view()
+        self.assertEqual({t["label"] for t in view["targets"]}, {SESSION_A[:8], SESSION_B[:8]})
 
     def test_the_real_peer_check_refuses_a_process_that_is_not_the_pinned_channel(self):
         self.hub.close()
@@ -141,7 +180,7 @@ class DispatchTest(ChannelHubCase):
                 self.assertEqual((result["ok"], result["reason"]), (reason is None, reason))
         [request] = [r for r in self.hub.state_view()["requests"] if r["request_id"] == request_id]
         self.assertEqual(request["reply"], {"text": "the answer", "spoken": "Short."})
-        self.assertEqual(self.target(SESSION_A)["registration"], "verified")
+        self.assertEqual(self.target(SESSION_A)["registration"], "replied")
         self.assertIsNone(self.target(SESSION_A)["lock"])
 
     def test_disconnect_after_handoff_leaves_an_unknown_locked_request(self):
@@ -152,7 +191,7 @@ class DispatchTest(ChannelHubCase):
         self.assertEqual(self.target(SESSION_A)["lock"]["request_id"], request_id)
         _, generation = self.registered(SESSION_A)
         self.assertRefused(409, "busy", self.hub.ticket,
-                           {"session_id": SESSION_A, "generation": generation, "epoch": self.hub.epoch})
+                           {"session_id": SESSION_A, "generation": generation, "epoch": self.hub.epoch}, self.token)
 
     def test_a_failed_recheck_turns_a_handed_off_request_unknown_and_keeps_its_lock(self):
         client, generation = self.registered(SESSION_A)
@@ -168,9 +207,11 @@ class DispatchTest(ChannelHubCase):
 
     def test_a_failed_dispatch_recheck_writes_nothing_and_expires_the_request(self):
         client, generation = self.registered(SESSION_A)
-        ticket = self.hub.ticket({"session_id": SESSION_A, "generation": generation, "epoch": self.hub.epoch})
+        ticket = self.hub.ticket({"session_id": SESSION_A, "generation": generation, "epoch": self.hub.epoch},
+                                 self.token)
         self.peer.recheck_failures[SESSION_A] = "parent start time changed"
-        self.assertRefused(409, "target changed; not sent", self.hub.send, {"ticket": ticket["ticket"], "text": "hi"})
+        self.assertRefused(409, "target changed; not sent", self.hub.send,
+                           {"ticket": ticket["ticket"], "text": "hi"}, self.token)
         [request] = self.hub.state_view()["requests"]
         self.assertEqual(request["state"], "expired")
         self.assertIsNone(self.target(SESSION_A)["lock"])
@@ -178,7 +219,7 @@ class DispatchTest(ChannelHubCase):
 
     def test_unenroll_stops_routing_from_the_api_at_once_and_from_the_cli_at_the_next_recheck(self):
         client, _ = self.registered(SESSION_A)
-        self.hub.unenroll({"session_id": SESSION_A})
+        self.hub.unenroll({"session_id": SESSION_A}, self.token)
         self.assertNotIn(SESSION_A, [t["session_id"] for t in self.hub.state_view()["targets"]])
         self.assertEqual(client.read(), (None, {}))
         other, _ = self.registered(SESSION_B)
@@ -187,6 +228,59 @@ class DispatchTest(ChannelHubCase):
         self.hub.recheck_now()
         self.assertEqual(self.operator(OperatorOp.STATUS)["registrations"], [])
         self.assertEqual(other.read(), (None, {}))
+
+
+class UndeliverableTest(ChannelHubCase):
+    def test_undeliverable_makes_the_request_unknown_keeps_the_lock_and_rechecks_at_once(self):
+        client, generation = self.registered(SESSION_A)
+        request_id = self.send(SESSION_A, generation)["request_id"]
+        self.assertIs(client.read()[0], MessageType.EVENT)
+        # /clear: the channel's own check failed, and the hub's recheck fails too.
+        self.peer.recheck_failures[SESSION_A] = "session file names another session"
+        client.send(MessageType.UNDELIVERABLE, request_id=request_id, reason="session changed")
+        wait_until(lambda: self.hub.state.request_state(request_id) == "unknown")
+        self.assertEqual(self.target(SESSION_A)["lock"]["request_id"], request_id)
+        self.assertEqual(client.read(), (None, {}))
+        wait_until(lambda: self.target(SESSION_A)["registration"] == "none")
+
+    def test_undeliverable_with_a_passing_recheck_keeps_the_connection(self):
+        client, generation = self.registered(SESSION_A)
+        request_id = self.send(SESSION_A, generation)["request_id"]
+        client.read()
+        client.send(MessageType.UNDELIVERABLE, request_id=request_id, reason="session changed")
+        wait_until(lambda: self.hub.state.request_state(request_id) == "unknown")
+        client.send(MessageType.PING)
+        self.assertIs(client.read()[0], MessageType.PONG)
+        self.assertEqual(self.target(SESSION_A)["registration"], "registered")
+        self.assertEqual(self.target(SESSION_A)["lock"]["request_id"], request_id)
+
+    def test_undeliverable_for_another_connections_request_changes_nothing(self):
+        client, generation = self.registered(SESSION_A)
+        other, _ = self.registered(SESSION_B)
+        request_id = self.send(SESSION_A, generation)["request_id"]
+        other.send(MessageType.UNDELIVERABLE, request_id=request_id, reason="session changed")
+        other.send(MessageType.PING)
+        self.assertIs(other.read()[0], MessageType.PONG)
+        self.assertEqual(self.hub.state.request_state(request_id), "handed_off")
+
+
+class JournalTest(ChannelHubCase):
+    def test_an_invalid_request_id_from_the_channel_is_never_logged(self):
+        client, generation = self.registered(SESSION_A)
+        request_id = self.send(SESSION_A, generation)["request_id"]
+        client.read()
+        private = "my private words about the van"
+        with self.assertLogs("llm_switchboard.desk", "INFO") as logs:
+            client.send(MessageType.DELIVERED, request_id=private)
+            client.send(MessageType.UNDELIVERABLE, request_id=private, reason=private + "!")
+            client.send(MessageType.REPLY, request_id=private, text="t", spoken="s")
+            self.assertIs(client.read()[0], MessageType.REPLY_RESULT)
+            client.send(MessageType.REPLY, request_id=request_id, text="t", spoken="s")
+            self.assertIs(client.read()[0], MessageType.REPLY_RESULT)
+        journal = "\n".join(logs.output)
+        self.assertNotIn("private", journal)
+        self.assertIn(INVALID_ID_MARKER, journal)
+        self.assertIn(request_id, journal)
 
 
 class RestartTest(ChannelHubCase):
@@ -210,13 +304,13 @@ class RestartTest(ChannelHubCase):
         self.assertEqual((lock["lock_id"], lock["request_id"], lock["earlier_run"]), (held_lock, held, True))
         client, generation = self.registered(SESSION_A)
         ticket = {"session_id": SESSION_A, "generation": generation, "epoch": self.hub.epoch}
-        self.assertRefused(409, "busy", self.hub.ticket, ticket)
+        self.assertRefused(409, "busy", self.hub.ticket, ticket, self.token)
         # The channel answering the earlier run's request is not this connection's request.
         client.send(MessageType.REPLY, request_id=held, text="late", spoken="late")
         self.assertEqual(client.read()[1]["reason"], "unknown request")
         refused = self.operator(OperatorOp.CLEAR, session_id=SESSION_A, lock_id=old_lock)
         self.assertEqual(refused, {"ok": False, "error": "lock id does not match"})
-        self.assertRefused(409, "busy", self.hub.ticket, ticket)
+        self.assertRefused(409, "busy", self.hub.ticket, ticket, self.token)
         self.assertEqual(self.operator(OperatorOp.CLEAR, session_id=SESSION_A, lock_id=held_lock),
                          {"ok": True, "cleared": True})
         self.assertEqual(self.send(SESSION_A, generation)["state"], "handed_off")
@@ -232,7 +326,8 @@ class OperatorTest(ChannelHubCase):
         self.assertEqual(status["epoch"], self.hub.epoch)
         self.assertEqual([r["session_id"] for r in status["registrations"]], [SESSION_A])
         self.assertEqual(len(status["locks"]), 1)
-        self.assertEqual(len(status["tokens"]), 1)
+        # The tablet's token and the one this test calls the hub with.
+        self.assertEqual(len(status["tokens"]), 2)
         self.assertEqual(status["enrolled"], sorted([SESSION_A, SESSION_B]))
         dumped = json.dumps(status)
         self.assertNotIn("secret prompt", dumped)
@@ -260,6 +355,34 @@ class OperatorTest(ChannelHubCase):
         self.assertEqual(json.loads(raw.makefile("rb").readline()), {"ok": False, "error": "bad request"})
         raw.close()
         self.assertEqual(self.operator(OperatorOp.PAIR, code="ZZZ-ZZZ"), {"ok": False, "error": "no such pairing"})
+
+
+class OperatorAdmissionTest(ChannelHubCase):
+    def test_connections_are_capped_and_a_busy_hub_answers_at_once(self):
+        idle = []
+        for _ in range(MAX_OPERATOR_CONNECTIONS):
+            conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            conn.connect(str(self.config.operator_socket))
+            idle.append(conn)
+        self.addCleanup(lambda: [c.close() for c in idle])
+        started = time.monotonic()
+        self.assertEqual(wait_until(lambda: (r := self.operator(OperatorOp.STATUS, timeout=2)) and not r["ok"] and r),
+                         {"ok": False, "error": "busy"})
+        self.assertLess(time.monotonic() - started, 2)
+        for conn in idle:
+            conn.close()
+        wait_until(lambda: self.operator(OperatorOp.STATUS)["ok"])
+
+    def test_an_oversize_request_line_is_refused(self):
+        raw = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        raw.settimeout(5)
+        self.addCleanup(raw.close)
+        raw.connect(str(self.config.operator_socket))
+        line = json.dumps({"op": "status", "pad": "x" * MAX_OPERATOR_LINE_BYTES}).encode() + b"\n"
+        raw.sendall(line)
+        self.assertEqual(json.loads(raw.makefile("rb").readline()), {"ok": False, "error": "bad request"})
+        with self.assertRaisesRegex(ValueError, "too large"):
+            self.operator(OperatorOp.PAIR, code="x" * MAX_OPERATOR_LINE_BYTES)
 
 
 class DeskCliTest(unittest.TestCase):

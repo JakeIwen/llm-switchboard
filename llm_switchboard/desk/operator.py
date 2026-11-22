@@ -3,8 +3,12 @@ its client, used by `llm-switchboard desk pair|revoke|status|clear|sends`.
 
 One request per connection: the client writes one JSON line `{op, ...}`, the
 hub answers one line `{ok, ...}` (`{ok: false, error}` on refusal) and
-closes. Lines are bounded like the channel socket's (`protocol.read_line`),
-but these are operator messages, not channel `MessageType`s.
+closes. A request line is at most `MAX_OPERATOR_LINE_BYTES`; responses are
+bounded like the channel socket's lines (`protocol.read_line`). These are
+operator messages, not channel `MessageType`s. At most
+`MAX_OPERATOR_CONNECTIONS` are served at once; another is answered
+`{ok: false, error: "busy"}` at once and closed, so a stuck client can't
+pile up threads or stall `desk status` for longer than its own timeout.
 """
 
 from enum import Enum
@@ -19,7 +23,8 @@ import threading
 from typing import Callable
 
 from .enrollment import ensure_private_dir
-from .protocol import FrameError, MAX_LINE_BYTES, read_line
+from .model import MAX_OPERATOR_CONNECTIONS, MAX_OPERATOR_LINE_BYTES
+from .protocol import FrameError, read_line
 
 log = logging.getLogger("llm_switchboard.desk")
 
@@ -78,9 +83,11 @@ def bind_private_socket(path: Path, backlog: int = 16) -> socket.socket:
 
 
 class OperatorServer:
-    def __init__(self, path: Path, handle: Callable[[dict], dict]):
+    def __init__(self, path: Path, handle: Callable[[dict], dict],
+                 max_connections: int = MAX_OPERATOR_CONNECTIONS):
         self.path = Path(path)
         self._handle = handle
+        self._slots = threading.BoundedSemaphore(max_connections)
         self._listener: socket.socket | None = None
         self._stopping = threading.Event()
         self._thread: threading.Thread | None = None
@@ -112,15 +119,43 @@ class OperatorServer:
                 if self._stopping.is_set():
                     return
                 raise
-            threading.Thread(target=self._serve_one, args=(conn,), name="desk-operator-conn",
-                             daemon=True).start()
+            if not self._slots.acquire(blocking=False):
+                self._refuse_busy(conn)
+                continue
+            try:
+                threading.Thread(target=self._serve_one, args=(conn,), name="desk-operator-conn",
+                                 daemon=True).start()
+            except BaseException:
+                self._slots.release()
+                conn.close()
+                raise
+
+    @staticmethod
+    def _refuse_busy(conn: socket.socket) -> None:
+        """Answer without waiting on the client. Whatever it already sent is
+        read first: closing over unread bytes resets the connection on Linux
+        and the client would lose the answer."""
+        with conn:
+            conn.setblocking(False)
+            with contextlib.suppress(OSError):
+                conn.recv(MAX_OPERATOR_LINE_BYTES)
+            _send(conn, {"ok": False, "error": "busy"})
 
     def _serve_one(self, conn: socket.socket) -> None:
+        try:
+            self._answer(conn)
+        finally:
+            self._slots.release()
+
+    def _answer(self, conn: socket.socket) -> None:
         with conn:
             conn.settimeout(OPERATOR_TIMEOUT_SECONDS)
             try:
                 with conn.makefile("rb") as stream:
-                    message = json.loads(read_line(stream))
+                    line = stream.readline(MAX_OPERATOR_LINE_BYTES + 1)
+                if len(line) > MAX_OPERATOR_LINE_BYTES:
+                    raise FrameError("line too long")
+                message = json.loads(line)
                 if not isinstance(message, dict):
                     raise ValueError("not an object")
             except (OSError, FrameError, ValueError):
@@ -142,7 +177,7 @@ def _send(conn: socket.socket, message: dict) -> None:
 def operator_request(path: Path, op: OperatorOp, timeout: float = OPERATOR_TIMEOUT_SECONDS, **fields) -> dict:
     """Send one operator request and return the hub's response."""
     data = json.dumps({"op": op.value, **fields}, separators=(",", ":")).encode() + b"\n"
-    if len(data) > MAX_LINE_BYTES:
+    if len(data) > MAX_OPERATOR_LINE_BYTES:
         raise ValueError("request too large")
     client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     client.settimeout(timeout)
@@ -151,9 +186,14 @@ def operator_request(path: Path, op: OperatorOp, timeout: float = OPERATOR_TIMEO
             client.connect(str(path))
         except (FileNotFoundError, ConnectionRefusedError) as exc:
             raise HubUnavailable("the desk hub is not running") from exc
-        client.sendall(data)
-        with client.makefile("rb") as stream:
-            line = read_line(stream)
+        # A busy hub may answer and close before reading; its answer still counts.
+        with contextlib.suppress(BrokenPipeError, ConnectionResetError):
+            client.sendall(data)
+        try:
+            with client.makefile("rb") as stream:
+                line = read_line(stream)
+        except ConnectionResetError:
+            line = b""
     finally:
         client.close()
     if not line:

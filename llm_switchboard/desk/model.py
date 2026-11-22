@@ -6,9 +6,11 @@ named constant here so the state machine, the adapters and the tests agree.
 
 from dataclasses import dataclass
 from enum import Enum
+import re
 
 # Phase 1 has one host; the Mac relay adds another in phase 2.
 HOST = "pi"
+KNOWN_HOSTS = frozenset({HOST})
 
 EPOCH_BYTES = 16
 
@@ -20,6 +22,9 @@ TICKET_RANDOM_BYTES = 18
 # Requests kept in memory (and listed by the state API).
 MAX_REQUESTS = 20
 REQUEST_ID_RANDOM_BYTES = 8
+# Answered, expired and unknown requests (and their reply text) are dropped
+# this long after they finished; an unresolved lock is never aged out.
+MAX_REQUEST_AGE_SECONDS = 24 * 3600
 
 # Replies: the last answered replies, bounded by count and by text bytes.
 MAX_REPLIES = 20
@@ -30,6 +35,8 @@ MAX_REGISTRATIONS = 64
 MAX_LOCKS = 64
 MAX_ENROLLED = 64
 LOCK_ID_BYTES = 8
+# A full file of MAX_LOCKS entries is about 20 KiB; anything larger is not ours.
+MAX_LOCK_FILE_BYTES = 64 * 1024
 
 # Pairing.
 PAIR_TTL_SECONDS = 5 * 60
@@ -57,8 +64,24 @@ HTTP_REQUEST_TIMEOUT_SECONDS = 10
 # Unverified channel connections still waiting for their hello.
 MAX_PENDING_CHANNEL_CONNECTIONS = 8
 HELLO_TIMEOUT_SECONDS = 10
-# Cached transcript labels are reread at most this often per session.
-LABEL_TTL_SECONDS = 60
+# Transcript labels: only this much of a transcript's head and tail is read,
+# and only when the file's identity (inode, size, mtime) changed.
+LABEL_HEAD_BYTES = 64 * 1024
+LABEL_TAIL_BYTES = 256 * 1024
+MAX_LABEL_CACHE = 256
+
+# Operator socket: concurrent connections and the request line's size.
+MAX_OPERATOR_CONNECTIONS = 4
+MAX_OPERATOR_LINE_BYTES = 4 * 1024
+
+# Hub-issued ids: "<epoch hex>.<random hex>" and lock ids, as written in locks.json.
+REQUEST_ID_PATTERN = re.compile(rf"[0-9a-f]{{{2 * EPOCH_BYTES}}}\.[0-9a-f]{{{2 * REQUEST_ID_RANDOM_BYTES}}}")
+LOCK_ID_PATTERN = re.compile(rf"[0-9a-f]{{{2 * LOCK_ID_BYTES}}}")
+SHA256_HEX_PATTERN = re.compile(r"[0-9a-f]{64}")
+
+
+def is_request_id(value) -> bool:
+    return isinstance(value, str) and REQUEST_ID_PATTERN.fullmatch(value) is not None
 
 
 class RequestState(str, Enum):
@@ -74,7 +97,9 @@ OUTSTANDING_STATES = frozenset({RequestState.PENDING, RequestState.HANDED_OFF})
 
 
 class RegistrationState(str, Enum):
-    VERIFIED = "verified"
+    # A desk reply was received on this connection at some point. Historical:
+    # the hub can't see Claude's current model or readiness.
+    REPLIED = "replied"
     REGISTERED = "registered"
     NONE = "none"
     AMBIGUOUS = "ambiguous"
@@ -102,7 +127,8 @@ class Registration:
     generation: int
     # The peer.PeerIdentity the channel was verified as; rechecked every 5 s.
     identity: object
-    verified: bool = False
+    # A request handed to this connection was answered through `reply`.
+    replied: bool = False
 
 
 @dataclass
@@ -123,8 +149,12 @@ class Request:
     text: str
     created: float
     ticket_hash: str
+    # The bearer token that sent it, rechecked at handoff (revocation wins).
+    token_hash: str = ""
     state: RequestState = RequestState.PENDING
     lock_id: str | None = None
+    # When it left the outstanding states; history ages out from here.
+    finished: float | None = None
 
 
 @dataclass(frozen=True)

@@ -20,8 +20,9 @@ round trip passes.
 | `desk/text_rule.py` | rules | The prompt text rule (`check_text`, `normalize_text`); mirrored by `static/text_rule.js` over `text_rule_cases.json` |
 | `desk/model.py` | model | `RequestState`, `Registration`, request/ticket/token/pairing records, limits |
 | `desk/hub_state.py` | rules | The hub's in-memory state machine; clock and randomness injected, no I/O |
-| `desk/locks.py` | adapter | The target lock file (fsync before handoff; refuses on unreadable/full) |
+| `desk/locks.py` | adapter | The target lock file (fsync before handoff; refuses on unreadable, oversize, malformed or full) |
 | `desk/enrollment.py` | adapter | `enrolled.json` (JsonFile) and `desk-settings.json` (`sends_enabled`) |
+| `desk/labels.py` | adapter | Target labels from a bounded, cached read of each transcript's head and tail |
 | `desk/peer.py` | rules + adapter | Channel identity: peer PID from the socket, `/proc` walk, session-file check and recheck |
 | `desk/channel.py` | runtime | The channel server: MCP over stdio plus the hub socket client |
 | `desk/hub.py` | runtime | Wires the state, the channel socket, the operator socket and HTTPS |
@@ -44,14 +45,21 @@ All 0600 in 0700 directories.
 
 | Path (`DeskConfig`) | Content | Bound |
 | --- | --- | --- |
-| `config_dir/enrolled.json` | `{"sessions": {<session id>: {"since": <unix s>}}}` | 64 sessions |
+| `config_dir/enrolled.json` | `{"sessions": {<session id>: {"since": <unix s>}}}`; an unreadable or malformed file reads as nobody enrolled, and enroll/unenroll refuse (503) to edit it | 64 sessions |
 | `config_dir/desk-settings.json` | `{"sends_enabled": false}` | fixed |
 | `config_dir/mcp.json` | The pinned MCP config (`desk install-config` writes it) | fixed |
 | `config_dir/tls/leaf.pem`, `leaf.key` | The hub's TLS leaf (from `scripts/desk-ca.sh`) | fixed |
-| `state_dir/locks.json` | Target locks, no prompt or reply content | 64 entries |
+| `state_dir/locks.json` | Target locks, no prompt or reply content | 64 entries, 64 KiB |
 | `runtime_dir/channel.sock`, `operator.sock` | Unix sockets | n/a |
 
-No prompt or reply text is ever written to disk or logged.
+The hub and these files never hold prompt or reply text on disk, and the
+hub's logs carry ids and reasons only: a request id that came from a channel
+is logged only when it has the hub-issued shape (`<epoch hex>.<16 hex>`),
+otherwise as `<invalid id>`. That promise covers the desk's own code and
+files, not Claude: the enrolled session's transcript records each desk event
+(the prompt plus the delivery suffix) and its `reply` tool call (text and
+spoken) like any other prompt and tool call, under Claude Code's own
+retention.
 
 ## Hub state
 
@@ -71,25 +79,47 @@ No prompt or reply text is ever written to disk or logged.
   kept until its expiry. A full table refuses new tickets.
 - **Requests**: `pending` (accepted) -> `handed_off` (the lock is persisted
   and the state recorded *before* the event is written) -> `answered`, or
-  -> `unknown` (the connection dropped, the recheck failed, or the hub
-  restarted, after handoff). `pending` -> `expired` when the dispatch recheck
-  fails before handoff (nothing was written; safe to send again). One
-  outstanding request per target: a target is **busy** while it has a lock.
+  -> `unknown` (after handoff: the event write failed, the connection
+  dropped, the recheck failed, the channel answered `undeliverable`, or the
+  hub restarted). `pending` -> `expired` when a check fails before handoff
+  (nothing was written; safe to send again). Handoff rechecks, under the
+  state's lock, everything the send was accepted on: the sending token is
+  still valid, sends are on, the lock store is usable, the session is still
+  enrolled (the hub rereads the files first) and its registration is the
+  same single one. One outstanding request per target: a target is **busy**
+  while it has a lock. Answered, expired and unknown requests, with their
+  reply text, are dropped 24 h after they finished (and beyond the last 20);
+  a request still `handed_off` is kept, and no lock is ever aged out.
+- **Delivery boundary**: the channel makes its own last check (its parent
+  still runs the registered session) just before writing the event to
+  Claude's stdin and answers `undeliverable {request_id, reason}` instead
+  when it fails; the hub then makes the request unknown (lock kept) and
+  rechecks that connection at once. What stays non-atomic: Claude can change
+  sessions (`/clear`, resume) between that check and the pipe write, or
+  after the write and before reading it, and the 5 s recheck can't retract
+  an event already written. The lock and Jacob's explicit clear cover that
+  window: a request in doubt stays unknown and the target busy.
 - **Target lock** (`locks.json`): `{lock_id, host, session_id, request_id,
-  ticket_hash, since}`. Written and fsynced before handoff. Cleared by the
-  verified answer, or by Jacob's explicit clear naming that `lock_id` (a clear
-  naming an older lock id is refused). Locks survive hub restarts; a locked
-  target stays busy in the new epoch, shown as `unknown (earlier hub run)`,
-  until cleared. An unreadable, corrupt, full or unwritable lock file refuses
-  every send and shows a lock-store error.
+  ticket_hash, since}`. Written completely and fsynced before handoff.
+  Cleared by the verified answer, or by Jacob's explicit clear naming that
+  `lock_id` (a clear naming an older lock id is refused, and a clear while
+  that request's event write is still under way is refused with 409
+  `delivery in progress`). Locks survive hub restarts; a locked target stays
+  busy in the new epoch, shown as `unknown (earlier hub run)`, until cleared.
+  An unreadable, oversize (over 64 KiB), corrupt, full or unwritable lock
+  file, or any entry with a malformed field (lock id not 16 hex, unknown
+  host, session id not a session id, request id not the hub-issued shape,
+  ticket hash not SHA-256 hex, `since` not a finite positive number, extra
+  or missing keys), refuses every send and shows a lock-store error.
 - **Replies** count only from the connection the request was handed to,
   while it is `handed_off`, with its request id, under the size caps. The
   first valid one wins; late, duplicate, oversize or mismatched replies are
   dropped and logged without content. A ring keeps the last 20 answered
   replies (and at most 256 KiB of text) in memory only.
-- **Verified reply**: a registration shows `verified` once one request
-  handed to it has been answered through `reply`; a new registration starts
-  unverified.
+- **Replied**: a registration shows `replied` once a request handed to it
+  has been answered through `reply` on this connection. It is history, not
+  readiness: the hub can't see Claude's current model or whether it will
+  answer the next one. A new registration starts `registered`.
 - **Pairing**: `pair_start(secret_hash)` returns `pair_id` and a 6-character
   code (Crockford base32, shown as `XXX-XXX`), expiring after 5 minutes, at
   most 3 pending, at most 10 starts a minute. The operator's `desk pair
@@ -116,31 +146,42 @@ shared cases in `desk/text_rule_cases.json` run through both implementations.
 
 Served only over TLS on `127.0.0.1:<port>`. Every request needs `Host:
 localhost:<port>` exactly. Every response carries `Cache-Control: no-store`,
-`X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer` and
+`X-Content-Type-Options: nosniff`, `Referrer-Policy: same-origin` (not
+`no-referrer`: under that policy a browser sends `Origin: null` on the page's
+own POSTs, which the exact Origin guard refuses; `same-origin` keeps the
+Origin and sends no referrer anywhere else) and
 `Content-Security-Policy: default-src 'self'; frame-ancestors 'none';
 base-uri 'none'; form-action 'none'`. No CORS headers, ever. POST bodies are
 JSON (`Content-Type: application/json`), at most 16 KiB, and need `Origin:
-https://localhost:<port>` exactly. Errors are `{"error": "<reason>"}` with
-400 (bad input), 401 (no or bad token), 403 (refused: sends off, wrong origin),
-404, 409 (state conflict: busy, stale ticket or generation), 413, 429 (rate
-limit) or 503 (lock store error).
+https://localhost:<port>` exactly (`null` is refused). Errors are
+`{"error": "<reason>"}` with 400 (bad input), 401 (no or bad token), 403
+(refused: sends off, wrong origin), 404, 409 (state conflict: busy, stale
+ticket or generation, not enrolled, delivery in progress), 413, 429 (rate
+limit) or 503 (lock store error, enrollment file unreadable).
 
 Unauthenticated:
 - `GET /desk`, `/desk/app.js`, `/desk/app.css`, `/desk/text_rule.js`,
-  `/desk/text_rule_cases.json`: the page.
+  `/desk/desk_logic.js`, `/desk/text_rule_cases.json`: the page.
 - `POST /desk/pair/start {secret_hash}` -> `{pair_id, code, expires_in}`.
 - `POST /desk/pair/claim {pair_id, secret}` -> `{token, expires_at}`; 409
   `{"error": "not confirmed"}` while waiting (the page polls every 2 s).
 
-Protected (`Authorization: Bearer <token>`):
+Protected (`Authorization: Bearer <token>`; checked before the body is read
+and again inside the state's lock with each mutation, so a token revoked
+while its request was in flight changes nothing):
 - `GET /desk/api/state?after=<version>`: returns at once when the state
   version differs from `after` (or `after` is absent), else holds up to 25 s
   and returns the unchanged state. Body:
   `{version, epoch, sends_enabled, lock_store_error, targets: [Target], requests: [Request]}`.
   `Target = {host: "pi", session_id, label, cwd, enrolled, registration:
-  "verified"|"registered"|"none"|"ambiguous", generation, lock: {lock_id,
+  "replied"|"registered"|"none"|"ambiguous", generation, lock: {lock_id,
   request_id, since, earlier_run} | null}`. `label` is the session's title
-  from its transcript, else its folder name. Targets are the enrolled
+  from its transcript, else its folder name, else the id's first 8
+  characters; the hub works it out in its 5 s loop and on registration from
+  the transcript's first 64 KiB and last 256 KiB, rereading only when the
+  file's inode, size or mtime changed, never while answering this request
+  (a custom title only in the middle of a larger file is missed). Targets
+  are the enrolled
   sessions plus any live registration. `Request = {request_id, session_id,
   state, text, created, reply: {text, spoken} | null}` for the last 20.
 - `POST /desk/api/ticket {session_id, generation, epoch}` -> `{ticket, expires_at}`.
@@ -157,7 +198,8 @@ no id), `status` (epoch, registrations, locks, token ids and expiry, sends
 flag), `clear <session id> <lock id>`, `sends on|off` (persisted in
 `desk-settings.json`). `enroll|unenroll <session id>` and `flags` (prints the
 launch flags) and `install-config` (writes `mcp.json`) work without the hub.
-`serve` runs the hub.
+`serve` runs the hub. A request line is at most 4 KiB; at most 4 connections
+are served at once, and another gets `{"ok": false, "error": "busy"}` at once.
 
 ## Channel identity
 
@@ -172,13 +214,25 @@ adjacent arguments. The session must be enrolled.
 
 ## Tablet link
 
-`bin/desk-adb-link <serial> <port>` loops: `adb -s <serial> wait-for-device`;
-refuses (logs, exits 3) an unauthorized or offline device; reads `adb -s
-<serial> reverse --list`: an identical `tcp:<port> tcp:<port>` mapping is
-adopted, a different mapping on that remote port is refused (exit 4);
-otherwise `adb -s <serial> reverse --no-rebind tcp:<port> tcp:<port>`; then
-`adb -s <serial> wait-for-disconnect`. It never runs `kill-server`, `am`,
-`input`, or `reverse --remove`. The unit doesn't restart after exit 3 or 4.
+`bin/desk-adb-link <serial> <port>` polls `adb devices` every
+`DESK_ADB_POLL_SECONDS` (default 3), because `wait-for-device` only returns for
+state `device` and `get-state` fails the same way for an absent and an
+unauthorized serial. A serial that is absent, `unauthorized` or `offline` makes
+it wait and log once per change (the tablet may be plugged in or the USB
+debugging prompt accepted later); it never exits for these. On `device` it
+reads `adb -s <serial> reverse --list`: an identical `tcp:<port> tcp:<port>`
+mapping is adopted, a different mapping on that remote port is refused (exit
+4); otherwise `adb -s <serial> reverse --no-rebind tcp:<port> tcp:<port>`,
+and a failure there is a disconnect when the serial has left the list, else
+retried. Then `adb -s <serial> wait-for-disconnect`, and the loop starts over.
+It never runs `kill-server`, `am`, `input`, `shell` or `reverse --remove`. The
+unit doesn't restart after exit 2 (bad arguments) or 4.
+
+`install.sh` hands the two desk units to `scripts/desk-units.sh`, which
+reconciles them on every run: the hub is restarted when active (a rotated
+leaf or changed unit takes effect), the adb unit when the serial or its unit
+file changed, and the adb unit is disabled and stopped when `DESK_ADB_SERIAL`
+is empty. Each action is printed.
 
 ## Enrollment and launch
 

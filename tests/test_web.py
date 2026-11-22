@@ -1,7 +1,9 @@
 import json
+import os
 import tempfile
 import threading
 import unittest
+from unittest import mock
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -67,6 +69,16 @@ class WebTest(unittest.TestCase):
         # An unreadable file reads as nobody enrolled.
         enrolled.write_text("{not json")
         self.assertFalse(self.call("/api/sessions")[1]["sessions"][0]["desk_enrolled"])
+
+    def test_a_bad_desk_port_setting_does_not_stop_the_picker(self):
+        home = self.root / "home"
+        env = {"HOME": str(home), "XDG_CONFIG_HOME": "", "LLM_SWITCHBOARD_DESK_PORT": "not-a-port"}
+        with mock.patch.dict(os.environ, env):
+            app = App(self.store, FakeIndex(transcript()), self.sup, self.tmux, Trash(self.root / "trash2"),
+                      registry=lambda: [], settings_file=self.root / "settings.json")
+        self.assertEqual(app.desk_enrolled(), set())
+        Enrollment(home / ".config" / "llm-switchboard" / "desk" / "enrolled.json").enroll(SID, 1.0)
+        self.assertEqual(app.desk_enrolled(), {SID})
 
     def test_post_must_be_json(self):
         status, _ = self.call(f"/api/sessions/{SID}/enable", {}, content_type="text/plain")

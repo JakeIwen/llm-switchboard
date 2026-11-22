@@ -7,9 +7,10 @@ its owner stops the hub from starting.
 
 Every request needs the exact Host; POSTs also need the exact Origin, a JSON
 content type and a body of at most 16 KiB; `/desk/api/*` needs the bearer
-token. No CORS header is ever sent. The handshake runs in the connection's
-own thread, so a slow client can't stall the accept loop, and concurrent
-connections are capped.
+token, which the hub checks again together with the mutation, after the
+body is read. No CORS header is ever sent. The handshake runs in the
+connection's own thread, so a slow client can't stall the accept loop, and
+concurrent connections are capped.
 """
 
 from dataclasses import replace
@@ -45,6 +46,7 @@ STATIC_ROUTES = {
     "/desk/app.js": (STATIC_DIR / "app.js", _JS),
     "/desk/app.css": (STATIC_DIR / "app.css", _CSS),
     "/desk/text_rule.js": (STATIC_DIR / "text_rule.js", _JS),
+    "/desk/desk_logic.js": (STATIC_DIR / "desk_logic.js", _JS),
     # The hub's own cases, so the page's mirror of the rule checks the same table.
     "/desk/text_rule_cases.json": (DESK_DIR / "text_rule_cases.json", _JSON),
 }
@@ -66,7 +68,11 @@ _MAX_DRAIN_BYTES = 4 * MAX_BODY_BYTES
 SECURITY_HEADERS = (
     ("Cache-Control", "no-store"),
     ("X-Content-Type-Options", "nosniff"),
-    ("Referrer-Policy", "no-referrer"),
+    # Not no-referrer: under it a browser sends `Origin: null` on the page's
+    # own POSTs (Fetch, "serialize a request origin"), which the exact Origin
+    # guard refuses. same-origin keeps the Origin and sends no referrer
+    # anywhere else.
+    ("Referrer-Policy", "same-origin"),
     ("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"),
 )
 
@@ -250,8 +256,7 @@ class _DeskHandler(BaseHTTPRequestHandler):
         length = int(lengths[0])
         if length > MAX_BODY_BYTES:
             raise DeskError(413, "body too large")
-        if protected:
-            self._token()
+        token = self._token() if protected else None
         raw = self.rfile.read(length)
         self._body_read = True
         if len(raw) != length:
@@ -262,7 +267,8 @@ class _DeskHandler(BaseHTTPRequestHandler):
             raise DeskError(400, "bad json") from None
         if not isinstance(body, dict):
             raise DeskError(400, "bad json")
-        self._json(200, getattr(self.desk.api, method)(body))
+        handler = getattr(self.desk.api, method)
+        self._json(200, handler(body, token) if protected else handler(body))
 
     def _drain_unread_body(self) -> None:
         """Read (and drop) a refused POST's body before answering: closing

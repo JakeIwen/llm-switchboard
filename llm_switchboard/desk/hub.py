@@ -6,16 +6,19 @@ Channel connections: the hub reads the peer PID from the socket, reads
 `welcome {epoch, generation}` or `refused {reason}` and closes. A verified
 connection is rechecked before every dispatch and every 5 s; a failed
 recheck or a disconnect drops its registration, and a request handed to it
-becomes unknown (its lock stays). Peer verification is injected (`peer=`)
-so tests run without /proc; production imports `desk.peer` at start.
+becomes unknown (its lock stays), as does one the channel reports
+`undeliverable`. Peer verification is injected (`peer=`) so tests run
+without /proc; production imports `desk.peer` at start.
+
+Logs carry ids and reasons only: a request id from the channel is logged
+only when it has the hub-issued shape, never as sent.
 """
 
 import contextlib
 import itertools
-import json
 import logging
 import os
-from pathlib import Path
+import re
 import secrets
 import signal
 import socket
@@ -28,9 +31,10 @@ from .config import DeskConfig
 from .enrollment import DeskSettings, Enrollment, ensure_private_dir
 from .hub_state import HubState
 from .http_server import DeskHttpServer, make_tls_context
+from .labels import SessionLabels
 from .locks import LockStore
 from .model import (
-    HELLO_TIMEOUT_SECONDS, LABEL_TTL_SECONDS, MAX_PENDING_CHANNEL_CONNECTIONS, RECHECK_SECONDS, DeskError,
+    HELLO_TIMEOUT_SECONDS, MAX_PENDING_CHANNEL_CONNECTIONS, RECHECK_SECONDS, DeskError, is_request_id,
 )
 from .operator import OperatorOp, OperatorServer, bind_private_socket
 from .protocol import (
@@ -40,11 +44,23 @@ from .protocol import (
 log = logging.getLogger("llm_switchboard.desk")
 
 _ACCEPT_POLL_SECONDS = 0.5
-_MAX_LOGGED_ID = 80
+_MAX_LOGGED_REASON = 80
+# A channel's own refusal reasons are short machine words; anything else is
+# logged as a marker in case it carries text.
+_LOGGABLE_REASON = re.compile(r"[A-Za-z0-9 _.:/-]{1,80}")
+INVALID_ID_MARKER = "<invalid id>"
 
 
 def _loggable(value) -> str:
-    return value[:_MAX_LOGGED_ID] if isinstance(value, str) else "?"
+    return value[:_MAX_LOGGED_REASON] if isinstance(value, str) else "?"
+
+
+def _logged_request_id(value) -> str:
+    return value if is_request_id(value) else INVALID_ID_MARKER
+
+
+def _logged_channel_reason(value) -> str:
+    return value if isinstance(value, str) and _LOGGABLE_REASON.fullmatch(value) else "?"
 
 
 class ChannelConnection:
@@ -70,49 +86,6 @@ class ChannelConnection:
             self.sock.shutdown(socket.SHUT_RDWR)
         with contextlib.suppress(OSError):
             self.sock.close()
-
-
-class SessionLabels:
-    """A target's label and folder: its transcript's title, else the folder
-    name. Transcripts can be large, so each is reread at most once a minute."""
-
-    def __init__(self, config: DeskConfig, clock: Callable[[], float] = time.monotonic):
-        self.projects_dir = config.home / ".claude" / "projects"
-        self.sessions_dir = config.claude_sessions_dir
-        self._clock = clock
-        self._cache: dict[str, tuple[float, str, str]] = {}
-        self._lock = threading.Lock()
-
-    def describe(self, session_id: str, claude_pid: int | None = None) -> tuple[str, str]:
-        with self._lock:
-            cached = self._cache.get(session_id)
-            if cached and self._clock() - cached[0] < LABEL_TTL_SECONDS:
-                return cached[1], cached[2]
-        title, cwd = self._read(session_id, claude_pid)
-        label = title or (Path(cwd).name if cwd else "") or session_id[:8]
-        with self._lock:
-            self._cache[session_id] = (self._clock(), label, cwd)
-            for stale in list(self._cache)[:-256]:
-                del self._cache[stale]
-        return label, cwd
-
-    def _read(self, session_id: str, claude_pid: int | None) -> tuple[str, str]:
-        from .. import transcripts
-
-        title = cwd = ""
-        candidates = []
-        for path in self.projects_dir.glob(f"*/{session_id}.jsonl"):
-            with contextlib.suppress(OSError):
-                candidates.append((path.stat().st_mtime, path))
-        if candidates:
-            with contextlib.suppress(OSError, ValueError):
-                summary = transcripts.summarize(max(candidates)[1], metadata_only=True)
-                if summary:
-                    title, cwd = summary.title, summary.cwd
-        if not cwd and claude_pid:
-            with contextlib.suppress(OSError, ValueError, AttributeError):
-                cwd = str(json.loads((self.sessions_dir / f"{int(claude_pid)}.json").read_text()).get("cwd") or "")
-        return title, cwd
 
 
 class Hub:
@@ -160,6 +133,7 @@ class Hub:
         for directory in (self.config.config_dir, self.config.state_dir, self.config.runtime_dir):
             ensure_private_dir(directory)
         self.refresh_files()
+        self.refresh_labels()
         self._channel_listener = bind_private_socket(self.config.channel_socket)
         self._channel_listener.settimeout(_ACCEPT_POLL_SECONDS)
         try:
@@ -213,14 +187,22 @@ class Hub:
         self.state.set_enrolled(self.enrollment.sessions())
         self.state.set_sends_enabled(self.settings.sends_enabled())
 
+    def refresh_labels(self) -> None:
+        """Every target's label and folder, from bounded, cached transcript
+        reads; never run by the state long-poll."""
+        pids = {r.session_id: getattr(r.identity, "claude_pid", None) for r in self.state.registrations()}
+        self.state.set_labels({session_id: self.labels.describe(session_id, pids.get(session_id))
+                               for session_id in self.state.target_session_ids()})
+
     def recheck_now(self) -> None:
-        """One pass of the 5 s loop: files, expiry, identity rechecks."""
+        """One pass of the 5 s loop: files, expiry, identity rechecks, labels."""
         self.refresh_files()
         self.state.expire()
         for registration in self.state.registrations():
             reason = self._recheck(registration.identity)
             if reason:
                 self._drop_connection(registration.conn_id, f"recheck: {reason}")
+        self.refresh_labels()
 
     def _recheck(self, identity) -> str | None:
         try:
@@ -318,6 +300,7 @@ class Hub:
             self._drop_connection(conn_id, "welcome write failed")
             return None
         log.info("desk: channel registered: session %s generation %d", session_id[:8], generation)
+        self.refresh_labels()
         return connection
 
     def _read_channel(self, connection: ChannelConnection, stream) -> str:
@@ -338,7 +321,9 @@ class Hub:
             elif kind is MessageType.PONG:
                 pass
             elif kind is MessageType.DELIVERED:
-                log.info("desk: delivered %s", _loggable(message.get("request_id")))
+                log.info("desk: delivered %s", _logged_request_id(message.get("request_id")))
+            elif kind is MessageType.UNDELIVERABLE:
+                self._handle_undeliverable(connection, message)
             elif kind is MessageType.REPLY:
                 self._handle_reply(connection, message)
             else:
@@ -349,11 +334,24 @@ class Hub:
         request_id = message.get("request_id")
         reason = self.state.handle_reply(connection.conn_id, request_id, message.get("text"), message.get("spoken"))
         if reason:
-            log.info("desk: reply for %s dropped: %s", _loggable(request_id), reason)
+            log.info("desk: reply for %s dropped: %s", _logged_request_id(request_id), reason)
         else:
-            log.info("desk: reply for %s accepted", _loggable(request_id))
+            log.info("desk: reply for %s accepted", _logged_request_id(request_id))
         connection.send(MessageType.REPLY_RESULT, request_id=request_id if isinstance(request_id, str) else None,
                         ok=reason is None, reason=reason)
+
+    def _handle_undeliverable(self, connection: ChannelConnection, message: dict) -> None:
+        """The channel's check just before emitting failed. The request
+        becomes unknown with its lock kept, and the connection is rechecked
+        at once, since the usual cause (/clear, resume) also fails it."""
+        request_id = message.get("request_id")
+        changed = self.state.mark_undeliverable(connection.conn_id, request_id)
+        log.info("desk: channel could not deliver %s (%s)%s", _logged_request_id(request_id),
+                 _logged_channel_reason(message.get("reason")), "; now unknown" if changed else "")
+        registration = next((r for r in self.state.registrations() if r.conn_id == connection.conn_id), None)
+        reason = "connection gone" if registration is None else self._recheck(registration.identity)
+        if reason:
+            self._drop_connection(connection.conn_id, f"recheck after undeliverable: {reason}")
 
     def _drop_connection(self, conn_id: int, reason: str) -> None:
         with self._connections_lock:
@@ -365,7 +363,8 @@ class Hub:
         for request_id in lost:
             log.info("desk: request %s is now unknown", request_id)
 
-    # -- the HTTP API (each takes the parsed body; DeskError maps to a status) --
+    # -- the HTTP API (each takes the parsed body, and the protected ones the
+    # bearer token, rechecked with the mutation; DeskError maps to a status) --
 
     def authenticate(self, token) -> bool:
         return self.state.authenticate(token)
@@ -374,11 +373,7 @@ class Hub:
         return self.state.wait_for_change(after, token, timeout)
 
     def state_view(self) -> dict:
-        view = self.state.snapshot()
-        pids = {r.session_id: getattr(r.identity, "claude_pid", None) for r in self.state.registrations()}
-        for target in view["targets"]:
-            target["label"], target["cwd"] = self.labels.describe(target["session_id"], pids.get(target["session_id"]))
-        return view
+        return self.state.snapshot()
 
     def pair_start(self, body: dict) -> dict:
         return self.state.pair_start(body.get("secret_hash"))
@@ -386,40 +381,51 @@ class Hub:
     def pair_claim(self, body: dict) -> dict:
         return self.state.pair_claim(body.get("pair_id"), body.get("secret"))
 
-    def ticket(self, body: dict) -> dict:
-        return self.state.issue_ticket(body.get("session_id"), body.get("generation"), body.get("epoch"))
+    def ticket(self, body: dict, token: str) -> dict:
+        with self.state.authorized(token):
+            return self.state.issue_ticket(body.get("session_id"), body.get("generation"), body.get("epoch"))
 
-    def send(self, body: dict) -> dict:
-        request = self.state.begin_send(body.get("ticket"), body.get("text"))
+    def send(self, body: dict, token: str) -> dict:
+        request = self.state.begin_send(body.get("ticket"), body.get("text"), token)
         registration = next((r for r in self.state.registrations() if r.conn_id == request.conn_id), None)
         reason = "connection gone" if registration is None else self._recheck(registration.identity)
         if reason:
             self.state.expire_request(request.request_id)
             self._drop_connection(request.conn_id, f"dispatch recheck: {reason}")
             raise DeskError(409, "target changed; not sent")
+        # A CLI unenroll or sends change since the last 5 s pass counts too.
+        self.refresh_files()
         conn_id, content = self.state.hand_off(request.request_id)
-        with self._connections_lock:
-            connection = self._connections.get(conn_id)
-        if connection is None or not connection.send(MessageType.EVENT, request_id=request.request_id,
-                                                     content=content):
+        written = False
+        try:
+            with self._connections_lock:
+                connection = self._connections.get(conn_id)
+            written = connection is not None and connection.send(
+                MessageType.EVENT, request_id=request.request_id, content=content)
+        finally:
+            self.state.finish_write(request.request_id, written)
+        if not written:
             self._drop_connection(conn_id, "event write failed")
         log.info("desk: request %s handed off to session %s", request.request_id, request.session_id[:8])
         return {"request_id": request.request_id, "state": self.state.request_state(request.request_id)}
 
-    def clear(self, body: dict) -> dict:
-        self.state.clear_lock(body.get("session_id"), body.get("lock_id"))
+    def clear(self, body: dict, token: str) -> dict:
+        with self.state.authorized(token):
+            self.state.clear_lock(body.get("session_id"), body.get("lock_id"))
         return {"cleared": True}
 
-    def enroll(self, body: dict) -> dict:
+    def enroll(self, body: dict, token: str) -> dict:
         session_id = body.get("session_id")
-        self.enrollment.enroll(session_id, self._now())
-        self.refresh_files()
+        with self.state.authorized(token):
+            self.enrollment.enroll(session_id, self._now())
+            self.refresh_files()
         return {"session_id": session_id, "enrolled": True}
 
-    def unenroll(self, body: dict) -> dict:
+    def unenroll(self, body: dict, token: str) -> dict:
         session_id = body.get("session_id")
-        self.enrollment.unenroll(session_id)
-        self.refresh_files()
+        with self.state.authorized(token):
+            self.enrollment.unenroll(session_id)
+            self.refresh_files()
         # Routing stops at once, not at the next recheck.
         for registration in self.state.registrations():
             if registration.session_id == session_id:
@@ -452,7 +458,8 @@ class Hub:
         return {**self.state.status(), "enrolled": sorted(self.enrollment.sessions())}
 
     def _op_clear(self, message: dict) -> dict:
-        return self.clear(message)
+        self.state.clear_lock(message.get("session_id"), message.get("lock_id"))
+        return {"cleared": True}
 
     def _op_sends(self, message: dict) -> dict:
         enabled = message.get("enabled")

@@ -1,23 +1,30 @@
 """The target lock file (`DeskConfig.lock_file`): crash-durable locks that keep
 a target busy across hub restarts until its answer or Jacob's explicit clear.
 
-Every change rewrites the whole file: temp file (0600) -> fsync -> rename ->
-fsync the directory (0700), so a lock reported as added survives a crash.
-Anything unexpected (unreadable, corrupt, over the cap, unwritable) raises
-`LockStoreError`; the hub then refuses every send rather than guess.
+Every change rewrites the whole file: temp file (0600) -> every byte
+written -> fsync -> rename -> fsync the directory (0700), so a lock reported
+as added survives a crash. Anything unexpected (unreadable, over
+`MAX_LOCK_FILE_BYTES`, corrupt, an entry with a malformed field, over the
+cap, unwritable) raises `LockStoreError`; the hub then refuses every send
+rather than guess.
 """
 
 import contextlib
 import json
+import math
 import os
 from pathlib import Path
 
-from .model import MAX_LOCKS, Lock, LockStoreError
+from ..session_id import is_session_id
+from .model import (
+    KNOWN_HOSTS, LOCK_ID_PATTERN, MAX_LOCK_FILE_BYTES, MAX_LOCKS, SHA256_HEX_PATTERN, Lock, LockStoreError,
+    is_request_id,
+)
 
 __all__ = ["LockStore", "LockStoreError"]
 
 FILE_VERSION = 1
-_FIELDS = {"lock_id": str, "host": str, "session_id": str, "request_id": str, "ticket_hash": str}
+_STRING_FIELDS = ("lock_id", "host", "session_id", "request_id", "ticket_hash")
 
 
 class LockStore:
@@ -30,13 +37,17 @@ class LockStore:
 
     def load(self) -> list[Lock]:
         try:
-            raw = self.path.read_bytes()
+            with open(self.path, "rb") as f:
+                raw = f.read(MAX_LOCK_FILE_BYTES + 1)
         except FileNotFoundError:
             self._locks, self._broken = [], None
             return []
         except OSError as exc:
             self._broken = "lock file unreadable"
             raise LockStoreError(self._broken) from exc
+        if len(raw) > MAX_LOCK_FILE_BYTES:
+            self._broken = "lock file too large"
+            raise LockStoreError(self._broken)
         try:
             locks = _parse(raw, self.max_locks)
         except ValueError as exc:
@@ -48,6 +59,10 @@ class LockStore:
     def add(self, lock: Lock) -> None:
         """Returns only after the file holding `lock` is fsynced."""
         self._check_usable()
+        try:
+            _check_lock(lock)
+        except ValueError as exc:
+            raise LockStoreError(f"refusing a malformed lock: {exc}") from exc
         if len(self._locks) >= self.max_locks:
             raise LockStoreError("lock file full")
         if any(existing.lock_id == lock.lock_id for existing in self._locks):
@@ -80,7 +95,7 @@ class LockStore:
                 os.unlink(tmp)
             fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             try:
-                os.write(fd, payload)
+                _write_all(fd, payload)
                 os.fsync(fd)
             finally:
                 os.close(fd)
@@ -90,6 +105,16 @@ class LockStore:
             with contextlib.suppress(OSError):
                 os.unlink(tmp)
             raise LockStoreError("lock file unwritable") from exc
+
+
+def _write_all(fd: int, data: bytes) -> None:
+    """os.write may write less than asked (a full disk, a signal)."""
+    view = memoryview(data)
+    while view:
+        written = os.write(fd, view)
+        if written <= 0:
+            raise OSError("short write")
+        view = view[written:]
 
 
 def _fsync_dir(directory: Path) -> None:
@@ -117,12 +142,30 @@ def _parse(raw: bytes, max_locks: int) -> list[Lock]:
 
 
 def _parse_lock(entry) -> Lock:
-    if not isinstance(entry, dict):
-        raise ValueError("entry not an object")
-    for name, kind in _FIELDS.items():
-        if not isinstance(entry.get(name), kind) or not entry[name]:
-            raise ValueError(f"bad {name}")
-    since = entry.get("since")
+    if not isinstance(entry, dict) or set(entry) != {*_STRING_FIELDS, "since"}:
+        raise ValueError("entry not a lock")
+    since = entry["since"]
     if isinstance(since, bool) or not isinstance(since, (int, float)):
         raise ValueError("bad since")
-    return Lock(since=float(since), **{name: entry[name] for name in _FIELDS})
+    try:
+        since = float(since)
+    except OverflowError:
+        raise ValueError("bad since") from None
+    lock = Lock(since=since, **{name: entry[name] for name in _STRING_FIELDS})
+    _check_lock(lock)
+    return lock
+
+
+def _check_lock(lock: Lock) -> None:
+    """Every field has the shape the hub writes; raises ValueError naming the first bad one."""
+    checks = {
+        "lock_id": lambda v: isinstance(v, str) and LOCK_ID_PATTERN.fullmatch(v),
+        "host": lambda v: isinstance(v, str) and v in KNOWN_HOSTS,
+        "session_id": lambda v: isinstance(v, str) and is_session_id(v),
+        "request_id": is_request_id,
+        "ticket_hash": lambda v: isinstance(v, str) and SHA256_HEX_PATTERN.fullmatch(v),
+        "since": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) and v > 0,
+    }
+    for name, valid in checks.items():
+        if not valid(getattr(lock, name)):
+            raise ValueError(f"bad {name}")

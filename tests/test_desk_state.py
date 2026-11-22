@@ -6,12 +6,15 @@ import json
 import secrets
 import unittest
 
-from desk_fixtures import SESSION_A, SESSION_B, Clock, FakeIdentity, desk_config, make_home
+from desk_fixtures import (
+    SESSION_A, SESSION_B, Clock, FakeIdentity, desk_config, make_home, request_id, token_for,
+)
 
 from llm_switchboard.desk.hub_state import HubState
 from llm_switchboard.desk.locks import LockStore
 from llm_switchboard.desk.model import (
-    MAX_LOCKS, MAX_PAIR_SECRET_FAILURES, MAX_REGISTRATIONS, MAX_REPLY_RING_BYTES, MAX_REQUESTS, MAX_TICKETS,
+    MAX_LOCKS, MAX_PAIR_SECRET_FAILURES, MAX_REGISTRATIONS, MAX_REPLY_RING_BYTES, MAX_REQUEST_AGE_SECONDS,
+    MAX_REQUESTS, MAX_TICKETS,
     MAX_TOKENS, PAIR_TTL_SECONDS, TICKET_TTL_SECONDS, TOKEN_TTL_SECONDS, DeskError, Lock, LockStoreError,
 )
 from llm_switchboard.desk.protocol import DELIVERY_SUFFIX, MAX_REPLY_TEXT_BYTES
@@ -56,10 +59,16 @@ class StateCase(unittest.TestCase):
     def ticket(self, state, session_id, generation):
         return state.issue_ticket(session_id, generation, state.epoch)["ticket"]
 
+    def begin(self, state, ticket, text):
+        """A send from the tablet that paired with this state."""
+        return state.begin_send(ticket, text, token_for(state))
+
     def handed_off(self, state, conn_id, session_id, generation, text="hello there"):
-        request = state.begin_send(self.ticket(state, session_id, generation), text)
+        request = self.begin(state, self.ticket(state, session_id, generation), text)
         conn, content = state.hand_off(request.request_id)
         self.assertEqual(conn, conn_id)
+        # The hub wrote the event.
+        state.finish_write(request.request_id, True)
         return request.request_id, content
 
     def target(self, state, session_id):
@@ -87,7 +96,7 @@ class RegistrationTest(StateCase):
         generation = self.state.register(1, SESSION_A, identity(SESSION_A))
         ticket = self.ticket(self.state, SESSION_A, generation)
         self.state.register(2, SESSION_A, identity(SESSION_A, 200))
-        self.assertRefused(409, "ambiguous", self.state.begin_send, ticket, "hi")
+        self.assertRefused(409, "ambiguous", self.begin, self.state, ticket, "hi")
 
     def test_registrations_are_capped(self):
         for conn_id in range(MAX_REGISTRATIONS):
@@ -119,30 +128,30 @@ class TicketTest(StateCase):
         ticket = self.ticket(self.state, SESSION_A, self.generation)
         self.state.drop_registration(1)
         self.state.register(2, SESSION_A, identity(SESSION_A))
-        self.assertRefused(409, "stale generation", self.state.begin_send, ticket, "hi")
+        self.assertRefused(409, "stale generation", self.begin, self.state, ticket, "hi")
 
     def test_a_ticket_from_another_epoch_is_refused(self):
         other = self.new_state()
         other.register(1, SESSION_A, identity(SESSION_A))
         foreign = self.ticket(other, SESSION_A, 1)
-        self.assertRefused(409, "stale epoch", self.state.begin_send, foreign, "hi")
-        self.assertRefused(409, "unknown ticket", self.state.begin_send, self.state.epoch + ".nope", "hi")
+        self.assertRefused(409, "stale epoch", self.begin, self.state, foreign, "hi")
+        self.assertRefused(409, "unknown ticket", self.begin, self.state, self.state.epoch + ".nope", "hi")
 
     def test_tickets_are_one_use_and_a_delayed_duplicate_after_the_answer_is_refused(self):
         ticket = self.ticket(self.state, SESSION_A, self.generation)
-        request = self.state.begin_send(ticket, "first")
+        request = self.begin(self.state, ticket, "first")
         self.state.hand_off(request.request_id)
         self.assertIsNone(self.state.handle_reply(1, request.request_id, "done", "Done."))
-        self.assertRefused(409, "ticket already used", self.state.begin_send, ticket, "first")
+        self.assertRefused(409, "ticket already used", self.begin, self.state, ticket, "first")
 
     def test_tickets_expire(self):
         ticket = self.ticket(self.state, SESSION_A, self.generation)
         self.clock.advance(TICKET_TTL_SECONDS)
-        self.assertRefused(409, "ticket expired", self.state.begin_send, ticket, "hi")
+        self.assertRefused(409, "ticket expired", self.begin, self.state, ticket, "hi")
 
     def test_a_full_table_refuses_new_tickets_and_keeps_consumed_records_until_expiry(self):
         consumed = self.ticket(self.state, SESSION_A, self.generation)
-        request = self.state.begin_send(consumed, "hi")
+        request = self.begin(self.state, consumed, "hi")
         self.state.hand_off(request.request_id)
         self.state.handle_reply(1, request.request_id, "ok", "ok")
         live = [self.ticket(self.state, SESSION_A, self.generation) for _ in range(MAX_TICKETS - 1)]
@@ -150,8 +159,8 @@ class TicketTest(StateCase):
                            self.state.epoch)
         # The refusal evicted nothing: the consumed record still refuses its
         # duplicate and a live ticket still works.
-        self.assertRefused(409, "ticket already used", self.state.begin_send, consumed, "hi")
-        pending = self.state.begin_send(live[0], "again")
+        self.assertRefused(409, "ticket already used", self.begin, self.state, consumed, "hi")
+        pending = self.begin(self.state, live[0], "again")
         self.assertEqual(pending.state.value, "pending")
         self.state.expire_request(pending.request_id)
         self.clock.advance(TICKET_TTL_SECONDS)
@@ -159,13 +168,13 @@ class TicketTest(StateCase):
 
     def test_text_rule_refusals_and_sends_off(self):
         ticket = self.ticket(self.state, SESSION_A, self.generation)
-        self.assertRefused(400, "starts with a command character", self.state.begin_send, ticket, "/clear")
-        self.assertRefused(400, "leading or trailing whitespace", self.state.begin_send, ticket, " hi")
+        self.assertRefused(400, "starts with a command character", self.begin, self.state, ticket, "/clear")
+        self.assertRefused(400, "leading or trailing whitespace", self.begin, self.state, ticket, " hi")
         self.state.set_sends_enabled(False)
-        self.assertRefused(403, "sends off", self.state.begin_send, ticket, "hi")
+        self.assertRefused(403, "sends off", self.begin, self.state, ticket, "hi")
         self.state.set_sends_enabled(True)
         # Refused texts did not burn the ticket.
-        self.assertEqual(self.state.begin_send(ticket, "hi").state.value, "pending")
+        self.assertEqual(self.begin(self.state, ticket, "hi").state.value, "pending")
 
 
 class HandoffTest(StateCase):
@@ -197,18 +206,77 @@ class HandoffTest(StateCase):
     def test_a_failing_lock_store_refuses_the_send_with_503_and_nothing_is_handed_off(self):
         state = self.new_state(FailingLockStore())
         generation = state.register(1, SESSION_A, identity(SESSION_A))
-        request = state.begin_send(self.ticket(state, SESSION_A, generation), "hi")
+        request = self.begin(state, self.ticket(state, SESSION_A, generation), "hi")
         self.assertRefused(503, "lock file unwritable", state.hand_off, request.request_id)
         self.assertEqual(state.request_state(request.request_id), "expired")
         self.assertEqual(state.snapshot()["lock_store_error"], "lock file unwritable")
         self.assertRefused(503, "lock file unwritable", state.issue_ticket, SESSION_A, generation, state.epoch)
 
     def test_handoff_refuses_when_the_registration_changed_after_begin(self):
-        request = self.state.begin_send(self.ticket(self.state, SESSION_A, self.generation), "hi")
+        request = self.begin(self.state, self.ticket(self.state, SESSION_A, self.generation), "hi")
         self.state.drop_registration(1)
         self.state.register(2, SESSION_A, identity(SESSION_A))
         self.assertRefused(409, "request not pending", self.state.hand_off, request.request_id)
         self.assertEqual(self.lock_file_ids(), [])
+
+    def test_sends_off_unenroll_or_revoke_while_pending_never_reach_handed_off(self):
+        changes = [
+            (lambda: self.state.set_sends_enabled(False), (403, "sends off")),
+            (lambda: self.state.set_enrolled([SESSION_B]), (409, "not enrolled")),
+            (lambda: self.state.revoke(), (401, "unauthorized")),
+        ]
+        for change, refusal in changes:
+            with self.subTest(refusal=refusal):
+                self.state = self.new_state()
+                generation = self.state.register(1, SESSION_A, identity(SESSION_A))
+                request = self.begin(self.state, self.ticket(self.state, SESSION_A, generation), "hi")
+                change()
+                self.assertRefused(*refusal, self.state.hand_off, request.request_id)
+                self.assertEqual(self.state.request_state(request.request_id), "expired")
+                self.assertIsNone(self.target(self.state, SESSION_A)["lock"])
+                self.assertEqual(self.lock_file_ids(), [])
+
+    def test_a_revoked_token_is_refused_inside_the_mutation(self):
+        token = token_for(self.state)
+        with self.state.authorized(token):
+            self.ticket(self.state, SESSION_A, self.generation)
+        self.state.revoke()
+        with self.assertRaises(DeskError) as caught, self.state.authorized(token):
+            self.fail("ran with a revoked token")
+        self.assertEqual(caught.exception.status, 401)
+
+    def test_a_lock_cannot_be_cleared_while_its_event_write_is_under_way(self):
+        request = self.begin(self.state, self.ticket(self.state, SESSION_A, self.generation), "hi")
+        self.state.hand_off(request.request_id)
+        lock_id = self.target(self.state, SESSION_A)["lock"]["lock_id"]
+        # The writer is stalled; the tablet already sees handed_off.
+        self.assertEqual(self.state.request_state(request.request_id), "handed_off")
+        self.assertRefused(409, "delivery in progress", self.state.clear_lock, SESSION_A, lock_id)
+        self.state.finish_write(request.request_id, True)
+        self.state.clear_lock(SESSION_A, lock_id)
+        self.assertEqual(self.lock_file_ids(), [])
+
+    def test_a_failed_event_write_makes_the_request_unknown_and_keeps_its_lock(self):
+        request = self.begin(self.state, self.ticket(self.state, SESSION_A, self.generation), "hi")
+        self.state.hand_off(request.request_id)
+        lock_id = self.target(self.state, SESSION_A)["lock"]["lock_id"]
+        self.state.finish_write(request.request_id, False)
+        self.assertEqual(self.state.request_state(request.request_id), "unknown")
+        self.assertEqual(self.lock_file_ids(), [lock_id])
+        self.state.clear_lock(SESSION_A, lock_id)
+
+    def test_undeliverable_makes_the_request_unknown_and_keeps_its_lock(self):
+        request_id, _ = self.handed_off(self.state, 1, SESSION_A, self.generation)
+        other = self.state.register(2, SESSION_B, identity(SESSION_B))
+        self.assertFalse(self.state.mark_undeliverable(2, request_id))
+        self.assertFalse(self.state.mark_undeliverable(1, "not an id"))
+        self.assertEqual(self.state.request_state(request_id), "handed_off")
+        self.assertTrue(self.state.mark_undeliverable(1, request_id))
+        self.assertEqual(self.state.request_state(request_id), "unknown")
+        self.assertEqual(len(self.lock_file_ids()), 1)
+        self.assertEqual(self.state.handle_reply(1, request_id, "late", "late"), "request not outstanding")
+        self.assertRefused(409, "busy", self.state.issue_ticket, SESSION_A, self.generation, self.state.epoch)
+        self.assertTrue(self.ticket(self.state, SESSION_B, other))
 
     def test_disconnect_after_handoff_makes_the_request_unknown_and_keeps_the_lock(self):
         request_id, _ = self.handed_off(self.state, 1, SESSION_A, self.generation)
@@ -234,7 +302,7 @@ class HandoffTest(StateCase):
         self.assertEqual(self.lock_file_ids(), [])
         self.assertRefused(409, "no lock", restarted.clear_lock, SESSION_A, held_lock)
         ticket = self.ticket(restarted, SESSION_A, generation)
-        self.assertEqual(restarted.begin_send(ticket, "again").state.value, "pending")
+        self.assertEqual(self.begin(restarted, ticket, "again").state.value, "pending")
 
 
 class ReplyTest(StateCase):
@@ -265,7 +333,7 @@ class ReplyTest(StateCase):
         self.assertEqual((request["state"], request["reply"]),
                          ("answered", {"text": "the answer", "spoken": "Short answer."}))
         self.assertIsNone(self.target(self.state, SESSION_A)["lock"])
-        self.assertEqual(self.target(self.state, SESSION_A)["registration"], "verified")
+        self.assertEqual(self.target(self.state, SESSION_A)["registration"], "replied")
         self.assertEqual(self.lock_file_ids(), [])
 
     def test_a_reply_after_disconnect_or_clear_is_dropped(self):
@@ -300,15 +368,35 @@ class CapsTest(StateCase):
         self.assertLessEqual(sum(len(r["text"]) + len(r["spoken"]) for r in replies), MAX_REPLY_RING_BYTES)
         self.assertEqual(len(replies), MAX_REPLY_RING_BYTES // (MAX_REPLY_TEXT_BYTES + 1))
 
+    def test_completed_history_ages_out_after_a_day_but_locks_stay(self):
+        answered = self.answer("the reply", "spoken")
+        held, _ = self.handed_off(self.state, 1, SESSION_A, self.generation)
+        self.state.drop_registration(1)
+        self.assertEqual(self.state.request_state(held), "unknown")
+        self.clock.advance(MAX_REQUEST_AGE_SECONDS - 61)
+        self.state.expire()
+        self.assertEqual({r["request_id"] for r in self.state.snapshot()["requests"]}, {answered, held})
+        self.clock.advance(61)
+        self.state.expire()
+        self.assertEqual(self.state.snapshot()["requests"], [])
+        self.assertEqual(self.target(self.state, SESSION_A)["lock"]["request_id"], held)
+        self.assertEqual(len(self.lock_file_ids()), 1)
+
+    def test_a_request_still_handed_off_is_never_aged_out(self):
+        request_id, _ = self.handed_off(self.state, 1, SESSION_A, self.generation)
+        self.clock.advance(MAX_REQUEST_AGE_SECONDS * 2)
+        self.state.expire()
+        self.assertEqual(self.state.request_state(request_id), "handed_off")
+
     def test_a_full_lock_file_refuses_every_send(self):
-        locks = [Lock(f"{i:016x}", "pi", f"{i:08x}-0000-4000-8000-000000000000", f"old.{i}", "h", 1.0)
+        locks = [Lock(f"{i:016x}", "pi", f"{i:08x}-0000-4000-8000-000000000000", request_id(i), "ab" * 32, 1.0)
                  for i in range(MAX_LOCKS)]
         store = LockStore(self.config.lock_file)
         store.load()
         for lock in locks:
             store.add(lock)
         with self.assertRaises(LockStoreError):
-            store.add(Lock("f" * 16, "pi", SESSION_B, "old.x", "h", 1.0))
+            store.add(Lock("f" * 16, "pi", SESSION_B, request_id(999), "ab" * 32, 1.0))
         state = self.new_state()
         generation = state.register(1, SESSION_A, identity(SESSION_A))
         self.assertEqual(state.snapshot()["lock_store_error"], "lock file full")

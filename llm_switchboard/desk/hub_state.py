@@ -3,17 +3,22 @@
 No sockets, files, clock or randomness of its own: `now()` and
 `token_bytes(n)` are injected, and the lock store is a collaborator with
 `load()`, `add(lock)` (fsynced before it returns, raises `LockStoreError`)
-and `remove(lock_id)`. One mutex guards everything; a condition on it plus
-the `version` counter lets long-polls sleep until something visible changes.
+and `remove(lock_id)`. One re-entrant mutex guards everything; a condition
+on it plus the `version` counter lets long-polls sleep until something
+visible changes.
 
-A send runs in three steps so the hub can recheck the channel's identity
-(I/O, outside this module) between them: `begin_send` (pending) ->
-`hand_off` (the lock is persisted and the state recorded, then the caller
-writes the event) or `expire_request` when the recheck failed.
+A send runs in steps so the hub can recheck the channel's identity (I/O,
+outside this module) between them: `begin_send` (pending) -> `hand_off`
+(every routing rule checked again, the lock persisted, handed_off recorded
+and the write marked in progress) -> the caller writes the event ->
+`finish_write`; or `expire_request` when the recheck failed. HTTP callers
+run their mutation inside `authorized(token)`, so a token revoked while the
+request was in flight can't act.
 """
 
 import base64
 from collections import OrderedDict, deque
+import contextlib
 import hashlib
 import hmac
 import re
@@ -23,7 +28,8 @@ from typing import Callable
 from .model import (
     CROCKFORD_ALPHABET, EPOCH_BYTES, HOST, LOCK_ID_BYTES, MAX_LOCKS, MAX_PAIR_SECRET_FAILURES,
     MAX_PAIR_STARTS_PER_MINUTE, MAX_PENDING_PAIRINGS, MAX_REGISTRATIONS, MAX_REPLIES,
-    MAX_REPLY_RING_BYTES, MAX_REQUESTS, MAX_TICKETS, MAX_TOKENS, OUTSTANDING_STATES, PAIR_CODE_LENGTH,
+    MAX_REPLY_RING_BYTES, MAX_REQUEST_AGE_SECONDS, MAX_REQUESTS, MAX_TICKETS, MAX_TOKENS,
+    OUTSTANDING_STATES, PAIR_CODE_LENGTH,
     PAIR_ID_BYTES, PAIR_TTL_SECONDS, REQUEST_ID_RANDOM_BYTES, TICKET_RANDOM_BYTES, TICKET_TTL_SECONDS,
     TOKEN_BYTES, TOKEN_ID_LENGTH, TOKEN_TTL_SECONDS, DeskError, Lock, LockStoreError, Pairing,
     Registration, RegistrationState, Reply, Request, RequestState, Ticket, Token,
@@ -53,7 +59,8 @@ def _is_int(value) -> bool:
 class HubState:
     def __init__(self, lock_store, *, now: Callable[[], float], token_bytes: Callable[[int], bytes],
                  epoch: str | None = None):
-        self._mutex = threading.Lock()
+        # Re-entrant so `authorized()` can hold it around a method that takes it too.
+        self._mutex = threading.RLock()
         self._changed = threading.Condition(self._mutex)
         self._now = now
         self._token_bytes = token_bytes
@@ -73,6 +80,9 @@ class HubState:
         self._pairings: dict[str, Pairing] = {}
         self._pair_starts: deque[float] = deque()
         self._tokens: dict[str, Token] = {}
+        # Request ids whose event write is under way; their locks can't be cleared yet.
+        self._writing: set[str] = set()
+        self._labels: dict[str, tuple[str, str]] = {}
         try:
             self._locks = {lock.lock_id: lock for lock in lock_store.load()}
         except LockStoreError as exc:
@@ -115,6 +125,29 @@ class HubState:
         token = self._tokens.get(token_hash or "")
         return token is not None and self._now() < token.expires_at
 
+    def _finish(self, request: Request, state: RequestState) -> None:
+        request.state = state
+        request.finished = self._now()
+
+    def _check_routing(self, session_id: str, *, sending: bool) -> None:
+        """The rules every step of a send rechecks: sends on, a usable lock
+        store, the target still enrolled."""
+        if sending and not self._sends_enabled:
+            raise DeskError(403, "sends off")
+        if self._store_error():
+            raise DeskError(503, self._store_error())
+        if session_id not in self._enrolled:
+            raise DeskError(409, "not enrolled")
+
+    def _prune_history(self, now: float) -> bool:
+        old = [request_id for request_id, r in self._requests.items()
+               if r.state not in OUTSTANDING_STATES and r.finished is not None
+               and now - r.finished >= MAX_REQUEST_AGE_SECONDS]
+        for request_id in old:
+            del self._requests[request_id]
+            self._replies.pop(request_id, None)
+        return bool(old)
+
     def _prune_tickets(self, now: float) -> None:
         for key in [k for k, t in self._tickets.items() if now >= t.expires_at]:
             del self._tickets[key]
@@ -152,16 +185,16 @@ class HubState:
                 if request.conn_id != conn_id:
                     continue
                 if request.state is RequestState.HANDED_OFF:
-                    request.state = RequestState.UNKNOWN
+                    self._finish(request, RequestState.UNKNOWN)
                     lost.append(request.request_id)
                 elif request.state is RequestState.PENDING:
-                    request.state = RequestState.EXPIRED
+                    self._finish(request, RequestState.EXPIRED)
             self._bump()
             return lost
 
     def registrations(self) -> list[Registration]:
         with self._mutex:
-            return [Registration(r.conn_id, r.session_id, r.generation, r.identity, r.verified)
+            return [Registration(r.conn_id, r.session_id, r.generation, r.identity, r.replied)
                     for r in self._registrations.values()]
 
     # -- tickets and sends ---------------------------------------------------
@@ -174,8 +207,7 @@ class HubState:
         with self._mutex:
             if epoch != self.epoch:
                 raise DeskError(409, "stale epoch")
-            if self._store_error():
-                raise DeskError(503, self._store_error())
+            self._check_routing(session_id, sending=False)
             registration = self._routable(session_id)
             if registration.generation != generation:
                 raise DeskError(409, "stale generation")
@@ -190,9 +222,13 @@ class HubState:
             self._tickets[record.ticket_hash] = record
             return {"ticket": ticket, "expires_at": record.expires_at}
 
-    def begin_send(self, ticket, text) -> Request:
-        """Validate and consume the ticket; the request starts pending."""
+    def begin_send(self, ticket, text, token) -> Request:
+        """Validate and consume the ticket; the request starts pending and
+        remembers which token sent it."""
+        token_hash = self.token_hash(token)
         with self._mutex:
+            if not self._token_valid(token_hash):
+                raise DeskError(401, "unauthorized")
             if not self._sends_enabled:
                 raise DeskError(403, "sends off")
             if self._store_error():
@@ -201,6 +237,7 @@ class HubState:
             if reason:
                 raise DeskError(400, reason)
             record = self._ticket_for_send(ticket)
+            self._check_routing(record.session_id, sending=True)
             registration = self._routable(record.session_id)
             if registration.generation != record.generation:
                 raise DeskError(409, "stale generation")
@@ -212,7 +249,7 @@ class HubState:
                 request_id=f"{self.epoch}.{self._token_bytes(REQUEST_ID_RANDOM_BYTES).hex()}",
                 session_id=record.session_id, generation=record.generation,
                 conn_id=registration.conn_id, text=text, created=self._now(),
-                ticket_hash=record.ticket_hash)
+                ticket_hash=record.ticket_hash, token_hash=token_hash)
             self._requests[request.request_id] = request
             self._bump()
             return Request(**vars(request))
@@ -254,29 +291,32 @@ class HubState:
         with self._mutex:
             request = self._requests.get(request_id)
             if request and request.state is RequestState.PENDING:
-                request.state = RequestState.EXPIRED
+                self._finish(request, RequestState.EXPIRED)
                 self._bump()
 
     def hand_off(self, request_id: str) -> tuple[int, str]:
-        """Persist the target lock, record handed_off, and return the
-        connection and event content the caller must now write."""
+        """Recheck the sender's token and every routing rule, persist the
+        target lock, record handed_off and mark the write in progress, then
+        return the connection and event content the caller must now write
+        (and report with `finish_write`). Any failed check expires the
+        request: nothing was written."""
         with self._mutex:
             request = self._requests.get(request_id)
             if request is None or request.state is not RequestState.PENDING:
                 raise DeskError(409, "request not pending")
-            current = self._registrations.get(request.conn_id)
-            others = self._registrations_for(request.session_id)
-            if current is None or current.generation != request.generation or len(others) != 1:
-                request.state = RequestState.EXPIRED
+            try:
+                self._check_handoff(request)
+            except DeskError:
+                self._finish(request, RequestState.EXPIRED)
                 self._bump()
-                raise DeskError(409, "target changed; not sent")
+                raise
             lock = Lock(lock_id=self._token_bytes(LOCK_ID_BYTES).hex(), host=HOST,
                         session_id=request.session_id, request_id=request.request_id,
                         ticket_hash=request.ticket_hash, since=self._now())
             try:
                 self._lock_store.add(lock)
             except LockStoreError as exc:
-                request.state = RequestState.EXPIRED
+                self._finish(request, RequestState.EXPIRED)
                 reason = str(exc.args[0] if exc.args else "lock store error")
                 if reason != "lock file full":
                     self._lock_error = reason
@@ -285,8 +325,41 @@ class HubState:
             self._locks[lock.lock_id] = lock
             request.lock_id = lock.lock_id
             request.state = RequestState.HANDED_OFF
+            self._writing.add(request.request_id)
             self._bump()
             return request.conn_id, event_content(request.text, request.request_id)
+
+    def _check_handoff(self, request: Request) -> None:
+        if not self._token_valid(request.token_hash):
+            raise DeskError(401, "unauthorized")
+        self._check_routing(request.session_id, sending=True)
+        current = self._registrations.get(request.conn_id)
+        others = self._registrations_for(request.session_id)
+        if current is None or current.generation != request.generation or len(others) != 1:
+            raise DeskError(409, "target changed; not sent")
+
+    def finish_write(self, request_id: str, written: bool) -> None:
+        """The caller's event write is over. A failed write makes the request
+        unknown (part of it may have reached the channel); its lock stays."""
+        with self._mutex:
+            self._writing.discard(request_id)
+            request = self._requests.get(request_id)
+            if not written and request and request.state is RequestState.HANDED_OFF:
+                self._finish(request, RequestState.UNKNOWN)
+            self._bump()
+
+    def mark_undeliverable(self, conn_id: int, request_id) -> bool:
+        """The channel refused to emit the event (its own last check failed,
+        e.g. /clear changed the session). Nothing reached Claude as far as
+        the channel knows, but the hub can't prove it, so the request becomes
+        unknown and keeps its lock. True when a request changed."""
+        with self._mutex:
+            request = self._requests.get(request_id) if isinstance(request_id, str) else None
+            if request is None or request.conn_id != conn_id or request.state is not RequestState.HANDED_OFF:
+                return False
+            self._finish(request, RequestState.UNKNOWN)
+            self._bump()
+            return True
 
     # -- replies -------------------------------------------------------------
 
@@ -313,8 +386,8 @@ class HubState:
                     self._bump()
                     return "lock store error"
                 del self._locks[request.lock_id]
-            request.state = RequestState.ANSWERED
-            self._registrations[conn_id].verified = True
+            self._finish(request, RequestState.ANSWERED)
+            self._registrations[conn_id].replied = True
             self._remember_reply(Reply(request_id, text, spoken))
             self._bump()
             return None
@@ -328,7 +401,8 @@ class HubState:
     # -- locks ----------------------------------------------------------------
 
     def clear_lock(self, session_id, lock_id) -> None:
-        """Jacob checked the session: release exactly the lock he saw."""
+        """Jacob checked the session: release exactly the lock he saw. Refused
+        while that request's event write is still under way."""
         if not isinstance(session_id, str) or not isinstance(lock_id, str):
             raise DeskError(400, "bad session_id or lock_id")
         with self._mutex:
@@ -338,6 +412,8 @@ class HubState:
             lock = next((lock for lock in locks if lock.lock_id == lock_id), None)
             if lock is None:
                 raise DeskError(409, "lock id does not match")
+            if lock.request_id in self._writing:
+                raise DeskError(409, "delivery in progress")
             try:
                 self._lock_store.remove(lock.lock_id)
             except LockStoreError as exc:
@@ -348,7 +424,7 @@ class HubState:
             request = self._requests.get(lock.request_id)
             # Nobody waits for it any more, so a late reply is dropped.
             if request and request.state is RequestState.HANDED_OFF:
-                request.state = RequestState.UNKNOWN
+                self._finish(request, RequestState.UNKNOWN)
             self._bump()
 
     # -- settings fed by the hub ---------------------------------------------
@@ -365,6 +441,18 @@ class HubState:
             if enrolled != self._enrolled:
                 self._enrolled = enrolled
                 self._bump()
+
+    def set_labels(self, labels: dict[str, tuple[str, str]]) -> None:
+        """Each target's (label, cwd), worked out by the hub off the request path."""
+        labels = dict(labels)
+        with self._mutex:
+            if labels != self._labels:
+                self._labels = labels
+                self._bump()
+
+    def target_session_ids(self) -> set[str]:
+        with self._mutex:
+            return self._target_ids()
 
     # -- pairing and tokens --------------------------------------------------
 
@@ -453,6 +541,16 @@ class HubState:
         with self._mutex:
             return self._token_valid(token_hash)
 
+    @contextlib.contextmanager
+    def authorized(self, token):
+        """Hold the state's mutex around a mutation and refuse it (401) unless
+        `token` is valid now: a revoke can't race a request in flight."""
+        token_hash = self.token_hash(token)
+        with self._mutex:
+            if not self._token_valid(token_hash):
+                raise DeskError(401, "unauthorized")
+            yield
+
     def revoke(self, token_id: str | None = None) -> int:
         with self._mutex:
             doomed = [k for k, t in self._tokens.items() if token_id is None or t.token_id == token_id]
@@ -477,6 +575,8 @@ class HubState:
             now = self._now()
             self._prune_tickets(now)
             self._prune_pairings(now)
+            if self._prune_history(now):
+                self._bump()
             if self._prune_tokens(now):
                 self._changed.notify_all()
 
@@ -487,13 +587,14 @@ class HubState:
 
     # -- views ---------------------------------------------------------------
 
+    def _target_ids(self) -> set[str]:
+        return set(self._enrolled) | {r.session_id for r in self._registrations.values()} \
+            | {lock.session_id for lock in self._locks.values()}
+
     def snapshot(self) -> dict:
-        """The state API body, without each target's label and cwd (the hub
-        adds those from disk outside the lock)."""
+        """The state API body."""
         with self._mutex:
-            session_ids = set(self._enrolled) | {r.session_id for r in self._registrations.values()} \
-                | {lock.session_id for lock in self._locks.values()}
-            targets = [self._target(session_id) for session_id in sorted(session_ids)]
+            targets = [self._target(session_id) for session_id in sorted(self._target_ids())]
             requests = [self._request_view(r) for r in reversed(self._requests.values())]
             return {"version": self._version, "epoch": self.epoch, "sends_enabled": self._sends_enabled,
                     "lock_store_error": self._store_error(), "targets": targets, "requests": requests}
@@ -505,14 +606,16 @@ class HubState:
         elif len(found) > 1:
             registration, generation = RegistrationState.AMBIGUOUS, None
         else:
-            registration = RegistrationState.VERIFIED if found[0].verified else RegistrationState.REGISTERED
+            registration = RegistrationState.REPLIED if found[0].replied else RegistrationState.REGISTERED
             generation = found[0].generation
         locks = self._locks_for(session_id)
         lock = None
         if locks:
             lock = {"lock_id": locks[0].lock_id, "request_id": locks[0].request_id,
                     "since": locks[0].since, "earlier_run": self._earlier_run(locks[0])}
-        return {"host": HOST, "session_id": session_id, "enrolled": session_id in self._enrolled,
+        label, cwd = self._labels.get(session_id) or (session_id[:8], "")
+        return {"host": HOST, "session_id": session_id, "label": label, "cwd": cwd,
+                "enrolled": session_id in self._enrolled,
                 "registration": registration.value, "generation": generation, "lock": lock}
 
     def _request_view(self, request: Request) -> dict:

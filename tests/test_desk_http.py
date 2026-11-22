@@ -10,9 +10,10 @@ import ssl
 import threading
 import time
 import unittest
+from unittest import mock
 
 from desk_fixtures import (
-    SESSION_A, ChannelClient, FakePeer, HubCase, desk_config, install_cert, make_home, throwaway_cert,
+    SESSION_A, SESSION_B, ChannelClient, FakePeer, HubCase, desk_config, install_cert, make_home, throwaway_cert,
 )
 
 from llm_switchboard.desk.http_server import STATIC_ROUTES, TlsSetupError
@@ -21,6 +22,23 @@ from llm_switchboard.desk.model import MAX_BODY_BYTES, LockStoreError
 from llm_switchboard.desk.protocol import MessageType
 
 CSP = "default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+
+
+def browser_post_origin(referrer_policy: str, page_origin: str, target_origin: str) -> str:
+    """The Origin header a browser sends on the page's own fetch() POST, per the
+    Fetch standard's "serialize a request origin" for a same-origin request
+    (response tainting "basic"): the page's referrer policy decides whether it
+    is the page's origin or "null". Only the last policy token counts."""
+    tokens = [t.strip().lower() for t in referrer_policy.split(",") if t.strip()]
+    policy = tokens[-1] if tokens else "strict-origin-when-cross-origin"
+    downgrade = page_origin.startswith("https:") and not target_origin.startswith("https:")
+    if policy == "no-referrer":
+        return "null"
+    if policy in ("no-referrer-when-downgrade", "strict-origin", "strict-origin-when-cross-origin") and downgrade:
+        return "null"
+    if policy == "same-origin" and page_origin != target_origin:
+        return "null"
+    return page_origin
 
 
 class FailingLockStore:
@@ -38,7 +56,7 @@ class HttpCase(HubCase):
     def assertDeskHeaders(self, headers):
         self.assertEqual(headers["cache-control"], "no-store")
         self.assertEqual(headers["x-content-type-options"], "nosniff")
-        self.assertEqual(headers["referrer-policy"], "no-referrer")
+        self.assertEqual(headers["referrer-policy"], "same-origin")
         self.assertEqual(headers["content-security-policy"], CSP)
         self.assertFalse([name for name in headers if name.startswith("access-control-")])
 
@@ -99,8 +117,7 @@ class GuardTest(HttpCase):
     def test_static_files_are_a_fixed_list_with_their_content_types(self):
         for path, (file, content_type) in STATIC_ROUTES.items():
             with self.subTest(path=path):
-                if not file.exists():
-                    self.skipTest(f"{file.name} not written yet")
+                self.assertTrue(file.is_file(), f"{file} is missing")
                 status, headers, body = self.call("GET", path)
                 self.assertEqual(status, 200)
                 self.assertEqual(headers["content-type"], content_type)
@@ -121,6 +138,54 @@ class GuardTest(HttpCase):
 
     def test_the_listener_is_loopback_only(self):
         self.assertEqual(self.hub.http._server.server_address[0], "127.0.0.1")
+
+
+class ReferrerPolicyTest(HttpCase):
+    def test_the_page_s_own_pairing_post_carries_the_origin_the_guard_needs(self):
+        """A browser derives the POST's Origin from the page's referrer policy;
+        under no-referrer it would send "null" and pairing would fail."""
+        status, headers, _ = self.call("GET", "/desk")
+        self.assertEqual(status, 200)
+        origin = f"https://localhost:{self.port}"
+        sent = browser_post_origin(headers["referrer-policy"], origin, origin)
+        self.assertEqual(sent, origin)
+        body = {"secret_hash": hashlib.sha256(b"s").hexdigest()}
+        status, _, started = self.call("POST", "/desk/pair/start", body, headers={"Origin": sent})
+        self.assertEqual(status, 200, started)
+        self.assertEqual(browser_post_origin("no-referrer", origin, origin), "null")
+
+    def test_origin_null_is_still_refused(self):
+        body = {"secret_hash": hashlib.sha256(b"s").hexdigest()}
+        got = self.call("POST", "/desk/pair/start", body, headers={"Origin": "null"})
+        self.assertEqual(got[::2], (403, {"error": "wrong origin"}))
+
+
+class RevokedInFlightTest(HttpCase):
+    def test_a_token_revoked_after_the_header_check_cannot_mutate(self):
+        """The header check passes (as for a request already in flight at the
+        revoke), then the token is revoked: the mutation itself refuses."""
+        token = self.pair()
+        client, generation = self.registered_channel()
+        ticket = self.ticket(token, generation)
+        _, _, sent = self.call("POST", "/desk/api/send", {"ticket": ticket, "text": "hi"}, token=token)
+        lock = self.target(SESSION_A)["lock"]
+        other = "dddddddd-0000-4000-8000-000000000004"
+        self.hub.handle_operator({"op": "revoke"})
+        routes = [
+            ("/desk/api/ticket", {"session_id": SESSION_B, "generation": 1, "epoch": self.hub.epoch}),
+            ("/desk/api/send", {"ticket": ticket, "text": "again"}),
+            ("/desk/api/clear", {"session_id": SESSION_A, "lock_id": lock["lock_id"]}),
+            ("/desk/api/enroll", {"session_id": other}),
+            ("/desk/api/unenroll", {"session_id": SESSION_B}),
+        ]
+        with mock.patch.object(self.hub, "authenticate", return_value=True):
+            for path, body in routes:
+                with self.subTest(path=path):
+                    got = self.call("POST", path, body, token=token)
+                    self.assertEqual(got[::2], (401, {"error": "unauthorized"}))
+        self.assertEqual(self.target(SESSION_A)["lock"], lock)
+        self.assertFalse(self.hub.enrollment.is_enrolled(other))
+        self.assertTrue(self.hub.enrollment.is_enrolled(SESSION_B))
 
 
 class TlsSetupTest(unittest.TestCase):
