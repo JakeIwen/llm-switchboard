@@ -1,6 +1,10 @@
-"""install.sh's voice desk reconciliation, against fake systemctl/loginctl/uv/tailscale and a temp HOME."""
+"""install.sh's voice desk reconciliation, against fake systemctl/loginctl/uv/tailscale.
+
+Everything runs against a fixture: a temp HOME, fixture XDG roots, and a copy of
+the repo's files (regular files only, so no symlink can lead a write out of it)."""
 
 import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -44,17 +48,42 @@ class DeskInstallTest(unittest.TestCase):
         for name, body in scripts.items():
             (bin_dir / name).write_text(body)
             (bin_dir / name).chmod(0o755)
-        self.env = {**os.environ, "HOME": str(self.home), "FAKE_DIR": str(self.fake),
+        self.bin_dir = bin_dir
+        xdg = {f"XDG_{name}_HOME": str(self.root / f"xdg-{name.lower()}")
+               for name in ("CONFIG", "STATE", "DATA", "CACHE")}
+        xdg["XDG_RUNTIME_DIR"] = str(self.root / "xdg-runtime")
+        for path in xdg.values():
+            Path(path).mkdir()
+        self.env = {**os.environ, **xdg, "HOME": str(self.home), "FAKE_DIR": str(self.fake),
                     "PATH": f"{bin_dir}:{os.environ['PATH']}", "USER": "tester",
                     "LLM_SWITCHBOARD_CODEX_SOCKET": ""}
-        self.local_env = self.root / "local.env"
+        self.repo = self.root / "repo"
+        self.copy_repo_files(self.repo)
+        self.local_env = self.repo / "local.env"
         tls = self.home / ".config/llm-switchboard/desk/tls"
         tls.mkdir(parents=True)
         (tls / "leaf.pem").write_text("pem")
         (tls / "leaf.key").write_text("key")
 
+    @staticmethod
+    def copy_repo_files(dest):
+        """Copies tracked and untracked-not-ignored regular files, never following a symlink."""
+        listing = subprocess.run(["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+                                 cwd=REPO, capture_output=True, check=True).stdout
+        for name in filter(None, listing.decode().split("\0")):
+            source = REPO / name
+            if source.is_symlink() or not source.is_file():
+                continue
+            target = dest / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+
+    def add_fake_tool(self, name, body):
+        (self.bin_dir / name).write_text(body)
+        (self.bin_dir / name).chmod(0o755)
+
     def desk_units(self):
-        return subprocess.run([str(REPO / "scripts" / "desk-units.sh"), str(REPO), str(self.local_env)],
+        return subprocess.run([str(self.repo / "scripts" / "desk-units.sh"), str(self.repo), str(self.local_env)],
                               env=self.env, capture_output=True, text=True, timeout=60, check=False)
 
     def calls(self):
@@ -92,7 +121,7 @@ class DeskInstallTest(unittest.TestCase):
         self.clear_calls()
         result = self.desk_units()
         self.assertIn(f"--user restart {ADB}", self.calls())
-        self.assertIn("serial or unit changed", result.stdout)
+        self.assertIn("serial, script or unit changed", result.stdout)
 
     def test_changed_unit_file_restarts_adb_unit(self):
         self.set_serial("TAB1")
@@ -123,15 +152,14 @@ class DeskInstallTest(unittest.TestCase):
         self.set_serial("")
         result = self.desk_units()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertNotIn(HUB, " ".join(self.calls()).replace("daemon-reload", ""))
+        for verb in ("enable", "disable", "restart"):
+            self.assertNotIn(f"--user {verb} --now {HUB}", self.calls())
+            self.assertNotIn(f"--user {verb} {HUB}", self.calls())
         self.assertIn("Voice desk hub not enabled", result.stderr)
 
     def test_install_sh_runs_the_picker_steps_then_the_desk_reconcile(self):
         self.set_serial("TAB1")
-        # install.sh reads <repo>/local.env; a copy of the repo scripts keeps the checkout untouched.
-        copy = self.root / "repo"
-        subprocess.run(["rsync", "-a", "--exclude=.git", "--exclude=.venv", "--exclude=node_modules",
-                        f"{REPO}/", f"{copy}/"], check=True)
+        copy = self.repo
         (copy / "local.env").write_text("DESK_ADB_SERIAL=TAB1\n")
         result = subprocess.run([str(copy / "install.sh")], env=self.env, capture_output=True,
                                 text=True, timeout=120, check=False)
@@ -143,6 +171,76 @@ class DeskInstallTest(unittest.TestCase):
         self.assertIn(f"--user enable --now {ADB}", calls)
         self.assertIn("Tablet link: enabled and started", result.stdout)
         self.assertTrue((self.home / ".config/systemd/user/llm-switchboard.service").is_file())
+
+    def test_install_sh_writes_nothing_outside_the_fixture(self):
+        before = subprocess.run(["git", "status", "--porcelain"], cwd=REPO, capture_output=True,
+                                text=True, check=True).stdout
+        self.test_install_sh_runs_the_picker_steps_then_the_desk_reconcile()
+        after = subprocess.run(["git", "status", "--porcelain"], cwd=REPO, capture_output=True,
+                               text=True, check=True).stdout
+        self.assertEqual(before, after)
+        for path in self.root.rglob("*"):
+            self.assertTrue(path.is_relative_to(self.root))
+
+    def test_fixture_repo_has_no_symlinks(self):
+        self.assertEqual([p for p in self.repo.rglob("*") if p.is_symlink()], [])
+
+    def test_running_hub_is_stopped_when_its_leaf_goes_missing(self):
+        self.set_serial("")
+        self.desk_units()
+        self.assertTrue((self.fake / "active" / HUB).exists())
+        (self.home / ".config/llm-switchboard/desk/tls/leaf.key").unlink()
+        self.clear_calls()
+        self.desk_units()
+        self.assertIn(f"--user disable --now {HUB}", self.calls())
+        self.assertFalse((self.fake / "active" / HUB).exists())
+
+    def test_active_but_disabled_units_are_enabled(self):
+        self.set_serial("TAB1")
+        self.desk_units()
+        for unit in (HUB, ADB):
+            (self.fake / "enabled" / unit).unlink()
+        self.clear_calls()
+        self.desk_units()
+        for unit in (HUB, ADB):
+            self.assertTrue((self.fake / "enabled" / unit).exists(), unit)
+
+    def test_unchanged_active_disabled_adb_unit_is_still_enabled(self):
+        self.set_serial("TAB1")
+        self.desk_units()
+        (self.fake / "enabled" / ADB).unlink()
+        self.clear_calls()
+        self.desk_units()
+        self.assertNotIn(f"--user restart {ADB}", self.calls())
+        self.assertTrue((self.fake / "enabled" / ADB).exists())
+
+    def test_script_content_change_alone_restarts_adb_unit(self):
+        self.set_serial("TAB1")
+        self.desk_units()
+        link = self.repo / "bin" / "desk-adb-link"
+        link.write_text(link.read_text() + "# new behavior\n")
+        self.clear_calls()
+        result = self.desk_units()
+        self.assertIn(f"--user restart {ADB}", self.calls())
+        self.assertIn("script", result.stdout)
+
+    def test_failed_render_installs_nothing_and_does_not_reload(self):
+        self.add_fake_tool("sed", '#!/bin/bash\n'
+                           'case "$*" in *@REPO@*) exit 1;; esac\nexec /usr/bin/sed "$@"\n')
+        self.set_serial("TAB1")
+        result = self.desk_units()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("--user daemon-reload", self.calls())
+        installed = self.home / ".config/systemd/user"
+        self.assertEqual([p.name for p in installed.glob("llm-switchboard-desk*")], [])
+
+    def test_failed_replacement_is_an_error_not_unchanged(self):
+        self.add_fake_tool("mv", "#!/bin/bash\nexit 1\n")
+        self.set_serial("TAB1")
+        result = self.desk_units()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("--user daemon-reload", self.calls())
+        self.assertNotIn("enable", " ".join(self.calls()))
 
 
 if __name__ == "__main__":
