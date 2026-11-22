@@ -15,7 +15,7 @@ records is gone (`channel_process`, from `config.proc_dir`). Peer verification i
 The startup acknowledgement (`startup_ack.py`) reads the dedicated tmux
 server (`tmux=`, the supervisor's socket by default) and sends its one
 Enter there; it takes only the enrollment file's lock and never the state's
-across a tmux call.
+across a tmux call (a revoke waits on `token_in_use` instead).
 
 Logs carry ids and reasons only: a request id from the channel is logged
 only when it has the hub-issued shape, never as sent.
@@ -138,7 +138,8 @@ class Hub:
         self._policy_lock = threading.RLock()
         self.state = HubState(lock_store or LockStore(config.lock_file), now=now, token_bytes=token_bytes)
         self.labels = SessionLabels(config)
-        self.startup = StartupAck(config, self.enrollment, tmux or Tmux(timeout=STARTUP_TMUX_TIMEOUT_SECONDS), now=now)
+        self.startup = StartupAck(config, self.enrollment, tmux or Tmux(timeout=STARTUP_TMUX_TIMEOUT_SECONDS),
+                                  self.state.epoch, now=now)
         self.recheck_seconds = recheck_seconds
         self.heartbeat_seconds = heartbeat_seconds
         self.idle_timeout_seconds = idle_timeout_seconds
@@ -522,11 +523,10 @@ class Hub:
 
     def startup_ack(self, body: dict, token: str) -> dict:
         """One Enter at the warning. It sends no prompt, so it doesn't depend
-        on `sends`; the token is checked again just before the key."""
-        def authorize() -> None:
-            if not self.state.authenticate(token):
-                raise DeskError(401, "unauthorized")
-        return self.startup.acknowledge(body.get("session_id"), body.get("digest"), authorize)
+        on `sends`. The token is checked again after every other check, and
+        a revoke of it waits until the Enter is out (`token_in_use`)."""
+        return self.startup.acknowledge(body.get("session_id"), body.get("digest"),
+                                        lambda: self.state.token_in_use(token))
 
     # Enrollment edits, from the page or the operator socket, run under the
     # file locks and the policy lock: a send's handoff rereads the file under
@@ -561,7 +561,7 @@ class Hub:
         try:
             return {"ok": True, **self._operator_ops[op](message)}
         except DeskError as exc:
-            return {"ok": False, "error": exc.reason}
+            return {"ok": False, "error": exc.reason, **exc.fields}
 
     def _op_pair(self, message: dict) -> dict:
         self.state.pair_confirm(message.get("code"))
@@ -595,7 +595,7 @@ class Hub:
 
     def _op_startup_ack(self, message: dict) -> dict:
         # The operator socket is 0600 and local: Jacob at the Pi's shell.
-        return self.startup.acknowledge(message.get("session_id"), message.get("digest"), lambda: None)
+        return self.startup.acknowledge(message.get("session_id"), message.get("digest"), contextlib.nullcontext)
 
     def _op_sends(self, message: dict) -> dict:
         enabled = message.get("enabled")

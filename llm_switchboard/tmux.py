@@ -183,10 +183,6 @@ class Tmux:
         self._run(["send-keys", "-t", window_id, "-l", text])
         self._run(["send-keys", "-t", window_id, "Enter"])
 
-    def send_enter(self, pane_id: str) -> None:
-        """Press Enter once in one pane (a `%<n>` pane id), typing nothing else."""
-        self._run(["send-keys", "-t", pane_id, "Enter"])
-
     def send_enter_if(self, pane_id: str, guard: PaneGuard) -> GuardedSend:
         """Press Enter once in one pane only if `guard` holds there, decided
         by the server in one command: `if-shell -F` evaluates the format

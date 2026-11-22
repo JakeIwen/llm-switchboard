@@ -8,55 +8,71 @@ process with no authenticated path from the hub, and keys typed into a
 supervisor window from outside its loop already have a precedent (the
 picker types `/rename`). Only the supervisor starts or kills windows.
 
+Order of an acknowledgement: every identity, registry, enrollment and
+token check first; then the attempt is recorded (one Enter per displayed
+view, even when the outcome is unknown); then the final capture, the digest
+comparison and the guarded send, with nothing else between them. The send
+is one tmux command whose `if-shell -F` guard re-tests the pane (id, pid,
+window, tag, a single pane, not in a mode, input on) and the warning's rows
+on the server's own screen in the same pass as the key.
+
 Lock order (docs/voice-desk.md, "Hub state"): an acknowledgement takes its
 own `_sending` lock without waiting (another one in progress is refused),
 then `enrolled.json`'s lock, first in the hub's order and re-entrant in this
 process. It holds that file lock across its tmux calls and /proc reads, so
 an unenroll that has returned is never overtaken by an Enter that read the
-enrollment before it, and a second acknowledgement can't interleave. It
-never takes the policy lock, and takes the state's mutex only inside the
-token check (`authorize`), never across a tmux call or a lock wait. Every
-tmux call times out after STARTUP_TMUX_TIMEOUT_SECONDS, which bounds how
-long housekeeping and a send's handoff wait for that file lock.
+enrollment before it. It never takes the policy lock, and takes the state's
+mutex only briefly inside `authorize()`'s context (the hub's
+`token_in_use`), never across a tmux call or a lock wait; a revoke waits
+for that context to end instead. Every tmux call times out after
+STARTUP_TMUX_TIMEOUT_SECONDS, which bounds how long housekeeping and a
+send's handoff wait for that file lock.
 
-What stays non-atomic: tmux has no "send only if the screen still reads
-this", so between the last check (a capture, then the pane and the process
-read again) and `send-keys` Claude could redraw or the process could exit
-and the pane be respawned. The window is milliseconds; Claude is waiting for
-this key, and the supervisor alone respawns panes, always for the same
-session. The digest covers the process as well as the screen, so a view
-taken before a respawn never authorizes an Enter after it.
+What stays non-atomic, best-effort by Jacob's decision (2026-11-22): tmux
+can only test its own copy of the screen. A key that Jacob (attached) or
+Remote Control typed just before ours, and that Claude hasn't processed
+yet, leaves the warning on tmux's screen, so our Enter then lands on the
+next screen, normally Claude's empty prompt (where an empty Enter does
+nothing). Between the final capture and the guarded send is one tmux round
+trip; the guard covers the pane and the warning's rows there, not the
+claude process inside the pane, which was checked before the capture.
 
 Logs carry session ids and refusal reasons only, never screen content.
 """
 
-from collections import deque
+from collections import OrderedDict, deque
 from dataclasses import dataclass
 import logging
 import os
+from pathlib import Path
 import subprocess
 import threading
 import time
-from typing import Callable
+from typing import Callable, ContextManager
 
 from ..live_registry import managed_for
-from ..screen import DESK_WARNING_ACCEPT_OPTION, desk_startup_selection
+from ..screen import (
+    DESK_WARNING_ACCEPT_OPTION, DESK_WARNING_GUARD_ABSENT, DESK_WARNING_GUARD_PRESENT, desk_startup_selection,
+)
 from ..session_id import is_session_id
-from ..tmux import Pane, Tmux, TmuxError
+from ..tmux import GuardedSend, Pane, PaneGuard, Tmux, TmuxError
 from .config import DeskConfig
 from .enrollment import Enrollment
 from .model import (
-    MAX_STARTUP_ACKS_PER_MINUTE, MAX_STARTUP_VIEWS_PER_MINUTE, SHA256_HEX_PATTERN, DeskError,
+    MAX_STARTUP_ACKS_PER_MINUTE, MAX_STARTUP_ATTEMPTS, MAX_STARTUP_VIEWS_PER_MINUTE, SHA256_HEX_PATTERN,
+    DeskError,
 )
-from .peer import ProcessRecord, read_process, read_session_file
+from .peer import ProcessRecord, read_process
 from .startup_identity import (
     LaunchIdentity, StartupRefusal, check_launch_argv, check_session_file, foreground_claude, refused,
     view_digest,
 )
+from .startup_registry import read_session_entry
 
 log = logging.getLogger("llm_switchboard.desk")
 
 _RATE_WINDOW_SECONDS = 60
+_TMUX_ERRORS = (TmuxError, subprocess.SubprocessError, OSError)
 
 
 class _RateWindow:
@@ -79,6 +95,36 @@ class _RateWindow:
             return True
 
 
+class _Attempts:
+    """Digests of views that got (or may have got) their Enter in this hub
+    run. Recorded before the key, so a timeout or an ambiguous send still
+    counts; forgotten only when nothing was typed for certain. An entry
+    stays while its claude process lives, then is pruned."""
+
+    def __init__(self, proc_dir: Path):
+        self._proc_dir = proc_dir
+        self._seen: OrderedDict[str, LaunchIdentity] = OrderedDict()
+        self._lock = threading.Lock()
+
+    def __contains__(self, digest: str) -> bool:
+        with self._lock:
+            return digest in self._seen
+
+    def record(self, digest: str, identity: LaunchIdentity) -> None:
+        with self._lock:
+            for old, seen in list(self._seen.items()):
+                process = read_process(self._proc_dir, seen.claude_pid)
+                if process is None or process.start != seen.claude_start:
+                    del self._seen[old]
+            self._seen[digest] = identity
+            while len(self._seen) > MAX_STARTUP_ATTEMPTS:
+                self._seen.popitem(last=False)
+
+    def forget(self, digest: str) -> None:
+        with self._lock:
+            self._seen.pop(digest, None)
+
+
 @dataclass(frozen=True)
 class _Inspection:
     session_id: str
@@ -87,41 +133,43 @@ class _Inspection:
     selection: int | None
     identity: LaunchIdentity | None
     refusal: StartupRefusal | None
-
-    @property
-    def digest(self) -> str | None:
-        if self.refusal is not None or self.identity is None or self.capture is None:
-            return None
-        return view_digest(self.identity, self.capture)
-
-    def item(self) -> dict:
-        return {"session_id": self.session_id, "capture": self.capture, "digest": self.digest,
-                "refusal": self.refusal.value if self.refusal else None}
+    digest: str | None = None
 
 
 class StartupAck:
-    def __init__(self, config: DeskConfig, enrollment: Enrollment, tmux: Tmux,
+    def __init__(self, config: DeskConfig, enrollment: Enrollment, tmux: Tmux, epoch: str,
                  now: Callable[[], float] = time.monotonic):
         self.config = config
         self.enrollment = enrollment
         self.tmux = tmux
+        self.epoch = epoch
         self._views = _RateWindow(MAX_STARTUP_VIEWS_PER_MINUTE, now)
         self._acks = _RateWindow(MAX_STARTUP_ACKS_PER_MINUTE, now)
         self._sending = threading.Lock()
+        self._attempts = _Attempts(config.proc_dir)
 
     # -- public entry points ---------------------------------------------------
 
     def blocked(self) -> list[dict]:
         """Every enrolled session whose supervisor pane shows the warning, with
-        its capture and, when it may be acknowledged, the digest to send back."""
+        its capture and, when it may be acknowledged, the digest to send back.
+        The screen is read first; only a pane showing the warning gets the
+        process checks."""
         if not self._views.take():
             raise refused(StartupRefusal.TOO_MANY)
-        with_panes = {pane.session_id for pane in self._panes()}
+        try:
+            panes = self.tmux.panes()
+            enrolled = set(self.enrollment.sessions())
+            # A pane that closed since the listing reads as an empty screen.
+            showing = sorted({pane.session_id for pane in panes if pane.session_id in enrolled
+                              and desk_startup_selection(self.tmux.capture(pane.pane_id)) is not None})
+        except _TMUX_ERRORS:
+            raise refused(StartupRefusal.TMUX_FAILED) from None
         found = []
-        for session_id in sorted(set(self.enrollment.sessions()) & with_panes):
+        for session_id in showing:
             inspection = self._inspect(session_id)
             if inspection.selection is not None:
-                found.append(inspection.item())
+                found.append(self._item(inspection))
         return found
 
     def view(self, session_id) -> dict:
@@ -132,12 +180,13 @@ class StartupAck:
         inspection = self._inspect(session_id)
         if inspection.selection is None:
             raise refused(inspection.refusal or StartupRefusal.NOT_BLOCKED)
-        return inspection.item()
+        return self._item(inspection)
 
-    def acknowledge(self, session_id, digest, authorize: Callable[[], None]) -> dict:
+    def acknowledge(self, session_id, digest, authorize: Callable[[], ContextManager]) -> dict:
         """One Enter in the session's pane, only if everything the digest was
-        issued for still holds. `authorize` raises (401) when the caller's
-        token stopped being valid; the operator socket passes a no-op."""
+        issued for still holds. `authorize()` is a context that raises (401)
+        when the caller's token stopped being valid and holds off its revoke
+        until the Enter is out; the operator socket passes a no-op."""
         _check_session_id(session_id)
         if not isinstance(digest, str) or not SHA256_HEX_PATTERN.fullmatch(digest):
             raise DeskError(400, "bad digest")
@@ -147,9 +196,11 @@ class StartupAck:
             raise refused(StartupRefusal.BUSY)
         try:
             with self.enrollment.locked():
-                pane_id = self._final_check(session_id, digest)
-                authorize()
-                self._send_enter(session_id, pane_id)
+                identity = self._precheck(session_id, digest)
+                guard = _pane_guard(identity)
+                with authorize():
+                    self._attempts.record(digest, identity)
+                    self._capture_compare_send(identity, digest, guard)
         except DeskError as exc:
             log.info("desk: startup ack for session %s refused: %s", session_id[:8], exc.reason)
             raise
@@ -158,32 +209,52 @@ class StartupAck:
         log.info("desk: startup ack for session %s: Enter sent", session_id[:8])
         return {"session_id": session_id, "sent": True}
 
+    # -- the acknowledgement's steps ---------------------------------------------
+
+    def _precheck(self, session_id: str, digest: str) -> LaunchIdentity:
+        """Everything but the final screen: the pane, the process, the
+        session file and enrollment, read twice around a capture (a change
+        during it is a refusal), and the digest compared with that capture."""
+        inspection = self._inspect(session_id)
+        if inspection.refusal is not None:
+            raise refused(inspection.refusal)
+        if inspection.digest != digest:
+            raise refused(StartupRefusal.DIGEST_MISMATCH)
+        if digest in self._attempts:
+            raise refused(StartupRefusal.ALREADY_SENT)
+        return inspection.identity
+
+    def _capture_compare_send(self, identity: LaunchIdentity, digest: str, guard: PaneGuard) -> None:
+        """The final capture and the guarded key, with only the digest
+        comparison between them. A failure before the key is certain to have
+        typed nothing, so its attempt is forgotten; once tmux has the key
+        command, an unclear answer keeps the attempt and says so (503)."""
+        try:
+            capture = self.tmux.capture(identity.pane_id, check=True)
+        except _TMUX_ERRORS:
+            self._attempts.forget(digest)
+            raise refused(StartupRefusal.TMUX_FAILED) from None
+        if view_digest(identity, capture, self.epoch) != digest:
+            self._attempts.forget(digest)
+            raise refused(StartupRefusal.CHANGED)
+        try:
+            outcome = self.tmux.send_enter_if(identity.pane_id, guard)
+        except _TMUX_ERRORS as exc:
+            log.warning("desk: startup ack for session %s: tmux did not confirm the Enter (%s)",
+                        identity.session_id[:8], type(exc).__name__)
+            raise refused(StartupRefusal.DELIVERY_UNKNOWN) from None
+        if outcome is not GuardedSend.SENT:
+            self._attempts.forget(digest)
+            raise refused(StartupRefusal.CHANGED)
+
     # -- checks ------------------------------------------------------------------
 
-    def _final_check(self, session_id: str, digest: str) -> str:
-        """Inspect twice: the first answers why a stale view fails, the second
-        is the recheck immediately before the key and must see the same
-        process and the same screen. Returns the pane to send to."""
-        first = self._inspect(session_id)
-        if first.refusal is not None:
-            raise refused(first.refusal)
-        if first.digest != digest:
-            raise refused(StartupRefusal.DIGEST_MISMATCH)
-        final = self._inspect(session_id)
-        if final.refusal is not None:
-            raise refused(final.refusal)
-        if final.identity != first.identity or final.digest != digest:
-            raise refused(StartupRefusal.CHANGED)
-        return final.identity.pane_id
-
-    def _send_enter(self, session_id: str, pane_id: str) -> None:
-        try:
-            self.tmux.send_enter(pane_id)
-        except (TmuxError, subprocess.SubprocessError, OSError) as exc:
-            # A timed-out send-keys may still have delivered the key.
-            log.warning("desk: startup ack for session %s: send-keys failed (%s)", session_id[:8],
-                        type(exc).__name__)
-            raise DeskError(503, "tmux did not confirm the Enter; check the session") from None
+    def _item(self, inspection: _Inspection) -> dict:
+        digest, refusal = inspection.digest, inspection.refusal
+        if digest is not None and digest in self._attempts:
+            digest, refusal = None, StartupRefusal.ALREADY_SENT
+        return {"session_id": inspection.session_id, "capture": inspection.capture, "digest": digest,
+                "refusal": refusal.value if refusal else None}
 
     def _inspect(self, session_id: str) -> _Inspection:
         """Pane, process, then the screen, then pane and process again (a
@@ -195,22 +266,18 @@ class StartupAck:
             if isinstance(pane, StartupRefusal):
                 return _Inspection(session_id, None, None, None, pane)
             identity = self._identity(session_id, pane)
-            capture = self.tmux.capture(pane.pane_id)
+            capture = self.tmux.capture(pane.pane_id, check=True)
             selection = desk_startup_selection(capture)
             if isinstance(identity, StartupRefusal):
                 return _Inspection(session_id, capture, selection, None, identity)
             again = self._pane(session_id)
             if again != pane or self._identity(session_id, again) != identity:
                 return _Inspection(session_id, capture, selection, identity, StartupRefusal.CHANGED)
-            return _Inspection(session_id, capture, selection, identity, _screen_refusal(selection))
-        except (TmuxError, subprocess.SubprocessError, OSError):
+            refusal = _screen_refusal(selection)
+            digest = view_digest(identity, capture, self.epoch) if refusal is None else None
+            return _Inspection(session_id, capture, selection, identity, refusal, digest)
+        except _TMUX_ERRORS:
             return _Inspection(session_id, None, None, None, StartupRefusal.TMUX_FAILED)
-
-    def _panes(self) -> list[Pane]:
-        try:
-            return self.tmux.panes()
-        except (TmuxError, subprocess.SubprocessError, OSError):
-            raise refused(StartupRefusal.TMUX_FAILED) from None
 
     def _pane(self, session_id: str) -> Pane | StartupRefusal:
         """The supervisor's window for the session: the one tagged with its
@@ -236,16 +303,16 @@ class StartupAck:
         pane_process = read_process(proc, pane.pane_pid)
         if pane_process is None:
             return StartupRefusal.NO_FOREGROUND
-        claude = foreground_claude(pane_process, self._children(pane_process.pid))
+        versions_dir = Path(os.path.realpath(self.config.claude_versions_dir))
+        claude = foreground_claude(pane_process, self._children(pane_process.pid), versions_dir)
         if isinstance(claude, StartupRefusal):
             return claude
         if managed_for(proc / str(claude.pid)) != session_id:
             return StartupRefusal.NOT_SUPERVISED
         refusal = check_launch_argv(claude.argv, session_id, self.config)
         if refusal is None:
-            session_file = self.config.claude_sessions_dir / f"{claude.pid}.json"
-            refusal = check_session_file(os.path.lexists(session_file),
-                                         read_session_file(self.config.claude_sessions_dir, claude.pid), session_id)
+            entry = read_session_entry(self.config.claude_sessions_dir, claude.pid)
+            refusal = entry if isinstance(entry, StartupRefusal) else check_session_file(*entry, session_id)
         if refusal is not None:
             return refusal
         return LaunchIdentity(session_id=session_id, window_id=pane.window_id, pane_id=pane.pane_id,
@@ -261,6 +328,17 @@ class StartupAck:
                     if record is not None and record.ppid == pid:
                         found.append(record)
         return found
+
+
+def _pane_guard(identity: LaunchIdentity) -> PaneGuard:
+    """What tmux re-tests in the command that presses the key: the pane the
+    checks saw, still the session's only pane, live, taking input, and
+    showing the warning with the accept option selected."""
+    return PaneGuard(
+        expect=(("pane_id", identity.pane_id), ("pane_pid", str(identity.pane_pid)),
+                ("window_id", identity.window_id), ("@car_session", identity.session_id),
+                ("window_panes", "1"), ("pane_dead", "0"), ("pane_in_mode", "0"), ("pane_input_off", "0")),
+        present=DESK_WARNING_GUARD_PRESENT, absent=DESK_WARNING_GUARD_ABSENT)
 
 
 def _screen_refusal(selection: int | None) -> StartupRefusal | None:

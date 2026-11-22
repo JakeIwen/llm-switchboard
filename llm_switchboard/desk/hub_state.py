@@ -21,7 +21,10 @@ away first, the write failed part way, or the lock is from an earlier hub
 run) `clear_lock` asks the caller's `channel_process(pid, start)` about the
 channel recorded in the lock, and only `GONE` clears. HTTP callers
 run their mutation inside `authorized(token)`, so a token revoked while the
-request was in flight can't act.
+request was in flight can't act. The startup acknowledgement can't hold the
+mutex across its tmux calls, so it runs them inside `token_in_use(token)`
+instead: `revoke` waits (bounded) for those to finish, so a revoke that has
+returned is never followed by an Enter on that token.
 """
 
 import base64
@@ -39,7 +42,7 @@ from .model import (
     MAX_REPLY_RING_BYTES, MAX_REQUEST_AGE_SECONDS, MAX_REQUESTS, MAX_TICKETS, MAX_TOKENS,
     OUTSTANDING_STATES, PAIR_CODE_LENGTH,
     PAIR_ID_BYTES, PAIR_TTL_SECONDS, REQUEST_ID_RANDOM_BYTES, TICKET_RANDOM_BYTES, TICKET_TTL_SECONDS,
-    TOKEN_BYTES, TOKEN_ID_LENGTH, TOKEN_TTL_SECONDS, DeskError, Lock, LockStoreError, Pairing,
+    STARTUP_REVOKE_WAIT_SECONDS, TOKEN_BYTES, TOKEN_ID_LENGTH, TOKEN_TTL_SECONDS, DeskError, Lock, LockStoreError, Pairing,
     ChannelProcess, Registration, RegistrationState, Reply, Request, RequestState, Ticket, Token,
     valid_channel_identity,
 )
@@ -91,6 +94,8 @@ class HubState:
         self._pairings: dict[str, Pairing] = {}
         self._pair_starts: deque[float] = deque()
         self._tokens: dict[str, Token] = {}
+        # Token hash -> acknowledgements authorized with it and still running.
+        self._tokens_in_use: dict[str, int] = {}
         # Request id -> connection, for events the channel hasn't reported
         # emitted or refused yet; their locks can't be cleared.
         self._in_delivery: dict[str, int] = {}
@@ -620,12 +625,33 @@ class HubState:
                 raise DeskError(401, "unauthorized")
             yield
 
-    def revoke(self, token_id: str | None = None) -> int:
+    @contextlib.contextmanager
+    def token_in_use(self, token):
+        """Refuse (401) unless `token` is valid now; then, without holding the
+        mutex, keep a revoke of it waiting until the block ends."""
+        token_hash = self.token_hash(token)
+        with self._mutex:
+            if not self._token_valid(token_hash):
+                raise DeskError(401, "unauthorized")
+            self._tokens_in_use[token_hash] = self._tokens_in_use.get(token_hash, 0) + 1
+        try:
+            yield
+        finally:
+            with self._mutex:
+                left = self._tokens_in_use.pop(token_hash) - 1
+                if left:
+                    self._tokens_in_use[token_hash] = left
+                self._changed.notify_all()
+
+    def revoke(self, token_id: str | None = None, wait_seconds: float = STARTUP_REVOKE_WAIT_SECONDS) -> int:
+        """Delete the tokens, then wait for work already authorized with them
+        (`token_in_use`) to finish. Returns how many were revoked."""
         with self._mutex:
             doomed = [k for k, t in self._tokens.items() if token_id is None or t.token_id == token_id]
             for key in doomed:
                 del self._tokens[key]
             self._changed.notify_all()
+            self._changed.wait_for(lambda: not any(key in self._tokens_in_use for key in doomed), wait_seconds)
             return len(doomed)
 
     def wait_for_change(self, after, token, timeout: float) -> bool:

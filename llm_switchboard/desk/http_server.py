@@ -199,7 +199,7 @@ class _DeskHandler(BaseHTTPRequestHandler):
             route(self.path.partition("?")[0])
         except DeskError as exc:
             self._drain_unread_body()
-            self._json(exc.status, {"error": exc.reason},
+            self._json(exc.status, {"error": exc.reason, **exc.fields},
                        [("WWW-Authenticate", "Bearer")] if exc.status == 401 else [])
         except Exception:
             log.exception("desk http: %s %s failed", self.command, self.path.partition("?")[0][:64])

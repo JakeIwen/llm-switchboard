@@ -77,6 +77,15 @@ MAX_LABEL_CACHE = 256
 MAX_STARTUP_ACKS_PER_MINUTE = 6
 MAX_STARTUP_VIEWS_PER_MINUTE = 60
 STARTUP_TMUX_TIMEOUT_SECONDS = 3
+# How long a revoke waits for an acknowledgement already authorized with
+# that token to finish: it is in flight only across the final capture and the
+# guarded send, two tmux calls, so this bound is reached only if their
+# timeouts fail. It stays under the operator socket's 10 s, so `desk revoke`
+# gets its answer.
+STARTUP_REVOKE_WAIT_SECONDS = 2 * STARTUP_TMUX_TIMEOUT_SECONDS + 2
+# Views that already got their Enter, remembered for this hub run (pruned
+# once their claude process is gone; this is the memory backstop).
+MAX_STARTUP_ATTEMPTS = 1024
 
 # Operator socket: concurrent connections and the request line's size.
 MAX_OPERATOR_CONNECTIONS = 4
@@ -140,10 +149,12 @@ class DeskError(Exception):
     """A refusal with the HTTP status it maps to; `reason` goes back as
     `{"error": reason}` and into logs (never prompt or reply text)."""
 
-    def __init__(self, status: int, reason: str):
+    def __init__(self, status: int, reason: str, fields: dict | None = None):
         super().__init__(reason)
         self.status = status
         self.reason = reason
+        # Machine-readable extras sent beside `error` (ids and states, never text).
+        self.fields = dict(fields or {})
 
 
 @dataclass

@@ -25,7 +25,8 @@ round trip passes.
 | `desk/labels.py` | adapter | Target labels from a bounded, cached read of each transcript's head and tail |
 | `desk/peer.py` | rules + adapter | Channel identity: peer PID from the socket, `/proc` walk, session-file check and recheck |
 | `desk/startup_identity.py` | rules | Launch identity for the startup acknowledgement: `StartupRefusal` (reasons and statuses), argv, foreground and session-file rules, the view digest |
-| `desk/startup_ack.py` | adapter | The startup acknowledgement: reads the supervisor's tmux panes and `/proc`, lists blocked sessions, sends the one Enter; rate limits |
+| `desk/startup_ack.py` | adapter | The startup acknowledgement: reads the supervisor's tmux panes and `/proc`, lists blocked sessions, sends the one guarded Enter; one Enter per view; rate limits |
+| `desk/startup_registry.py` | adapter | The bounded, non-blocking read of claude's `sessions/<pid>.json` for the acknowledgement (absent vs. unreadable) |
 | `desk/channel.py` | runtime | The channel server: MCP over stdio plus the hub socket client |
 | `desk/hub.py` | runtime | Wires the state, the channel socket, the operator socket and HTTPS |
 | `desk/http_server.py` | adapter | HTTPS (stdlib `ssl` + `ThreadingHTTPServer`), Host/Origin/token guards, long-poll |
@@ -33,7 +34,7 @@ round trip passes.
 | `desk/cli.py` | entry | `llm-switchboard desk serve|pair|revoke|status|enroll|unenroll|sends|ack|flags|install-config` |
 | `launcher.py`, `supervisor.py` | runtime | Start a kept Pi session through `claudepd`, adding desk flags only if enrolled at launch |
 | `screen.py`, `supervisor_state.py` | rules | Identify the complete development-channel dialog and its selected option, and report `startup_blocked` without restarting the session |
-| `tmux.py` | adapter | `Tmux.panes()` (pane id, pid, copy mode, by `@car_session`) and `send_enter(pane_id)`, used by the acknowledgement |
+| `tmux.py` | adapter | `Tmux.panes()` (pane id, pid, copy mode, by `@car_session`; raises when tmux fails rather than reading as no panes), `capture(..., check=True)`, and `send_enter_if(pane_id, PaneGuard)`, the server-side guarded Enter the acknowledgement uses |
 | `desk/static/` | page | The tablet page: plain HTML/CSS/JS, no build step, Chrome 119; `startup.js` is the startup-blocked view |
 | `bin/desk-channel` | entry | Pinned channel server entry (`.venv/bin/python -I -B bin/desk-channel`) |
 | `bin/desk-adb-link` | entry | The USB reverse-forward loop for one tablet serial |
@@ -107,7 +108,8 @@ retention.
   `desk-settings.json`'s, then the hub's policy lock, then the state's
   lock; within the hub the file locks re-enter. The startup
   acknowledgement takes its own non-waiting lock before all of these and
-  then only `enrolled.json`'s (see "Startup acknowledgement"). Any failure before handoff,
+  then only `enrolled.json`'s, and the state's lock only briefly inside
+  `token_in_use` (see "Startup acknowledgement"). Any failure before handoff,
   expected or not, expires the pending request. One outstanding request per target: a target is **busy**
   while it has a lock. Answered, expired and unknown requests, with their
   reply text, are dropped 24 h after they finished (and beyond the last 20);
@@ -180,7 +182,10 @@ retention.
 - **Tokens**: 32 random bytes, base64url; the hub keeps only their SHA-256.
   Expire after 7 days, at most 4 (pairing a fifth drops the oldest). Each has a
   short id for `desk status` and `desk revoke --token <id>`. A revoked or
-  dropped token's long-polls return 401 at once.
+  dropped token's long-polls return 401 at once. A revoke deletes the
+  tokens, then waits (at most `STARTUP_REVOKE_WAIT_SECONDS`, 8 s) for any
+  startup acknowledgement already authorized with them to finish, so once
+  it returns no Enter follows on those tokens.
 
 ## Text rule
 
@@ -211,7 +216,9 @@ ticket or generation, not enrolled, delivery in progress, the session's
 channel still running, a startup acknowledgement whose checks fail), 413,
 429 (rate limit, or another startup acknowledgement in progress) or 503
 (lock store error, enrollment file unreadable, the session's channel or
-process can't be checked, tmux didn't answer).
+process can't be checked, tmux didn't answer). A 503 whose body also has
+`"delivery": "unknown"` (only from the startup acknowledgement) means tmux
+may have typed the key; every other error means nothing was typed.
 
 Unauthenticated:
 - `GET /desk`, `/desk/app.js`, `/desk/app.css`, `/desk/text_rule.js`,
@@ -251,12 +258,21 @@ while its request was in flight changes nothing):
   (only text the exact warning matcher accepted, so at most 16 KiB and no
   control characters; the page shows it through `textContent`), `digest`
   is the value to acknowledge it with, or `null` with `refusal` naming
-  the failed check. At most 60 views a minute across all callers (429).
+  the failed check (including **an Enter was already sent for this view**).
+  Each pane's screen is read first; only one showing the warning gets the
+  process checks. A tmux that fails (a socket it may not open, an error
+  other than "no server") answers 503 rather than an empty list. At most 60
+  views a minute across all callers (429).
 - `POST /desk/api/startup/ack {session_id, digest}` -> `{session_id, sent:
   true}`: presses Enter once in that session's pane (see "Startup
-  acknowledgement"). At most 6 a minute, one at a time (429). It sends no
+  acknowledgement"). At most 6 a minute, one at a time (429), and at most
+  one per view: a digest that already had an attempt is refused (409) even
+  when the outcome was unknown. When tmux doesn't confirm the key the
+  answer is 503 `{"error": "...", "delivery": "unknown"}`. It sends no
   prompt, so it does not depend on `sends on`, and works while sends are
-  off.
+  off. The page tells the three outcomes apart: sent, not sent (nothing
+  typed), and unknown (check the session), and keeps the outcome shown for
+  a minute after the session leaves the list.
 
 ## Operator socket and CLI
 
@@ -278,7 +294,8 @@ hub for the other commands, 1: refused). `ack <session id>` prints the warning s
 from `startup_view`, asks `Press Enter once in this session to accept the
 warning? [y/N]` when stdin is a terminal, and otherwise prints the command
 to send it; `ack <session id> --digest <hex>` sends at once with a digest
-it printed. Both go only through the hub (exit 3 without one), with the
+it printed, from this hub run only (a digest from before a hub restart is
+refused). It exits 4 when tmux didn't confirm the Enter. Both go only through the hub (exit 3 without one), with the
 same checks as the page. `flags` (prints the launch flags) and
 `install-config` (writes `mcp.json`) never need the hub.
 `serve` runs the hub. A request line is at most 4 KiB; at most 4 connections
@@ -352,9 +369,9 @@ appears before `~/.claude/sessions/<pid>.json` is written (for `--resume` and
 session") can't apply: nothing yet proves which conversation the process
 holds. Jacob approved (2026-11-22) this weaker identity for the one Enter,
 and accepted its risk: a resume of a bogus or missing id reaches the same
-warning, and the Enter then opens that empty or failed session. Rechecked
-immediately before the key, every one must hold (`desk/startup_identity.py`,
-`desk/startup_ack.py`):
+warning, and the Enter then opens that empty or failed session. Every one
+must hold (`desk/startup_identity.py`, `desk/startup_ack.py`,
+`desk/startup_registry.py`):
 
 - The window is the supervisor's for this session on the dedicated tmux
   server: the one window whose `@car_session` option (set by `Tmux.start`,
@@ -363,34 +380,71 @@ immediately before the key, every one must hold (`desk/startup_identity.py`,
   tagged windows are refused.
 - The pane's foreground process (the terminal's foreground group leader,
   from the pane process's `/proc` stat) is the pane program's only `claude`
-  child (`argv[0]` named `claude`), and its environment carries the
-  supervisor's `LLM_SWITCHBOARD_SESSION=<session id>` from `tmux new-window
-  -e`.
-- Its argv carries `--mcp-config <DeskConfig.mcp_config>` and
-  `--dangerously-load-development-channels server:desk` as adjacent pairs,
-  and exactly one session-choosing option (`--resume`, `--session-id`, `-r`,
-  `-c`, `--continue`, `--fork-session`, `--from-pr`, or `--resume=`/
-  `--session-id=`), which is `--resume` or `--session-id` followed by exactly
-  this id (never a substring).
+  child (`argv[0]` named `claude`), its resolved `/proc/<pid>/exe` is one
+  of the native installer's executables (a file directly in
+  `~/.local/share/claude/versions/`, `DeskConfig.claude_versions_dir`,
+  named for its version; on the Pi `~/.local/bin/claude` links there, and a
+  running claude may still be an older version), and its environment
+  carries the supervisor's `LLM_SWITCHBOARD_SESSION=<session id>` from
+  `tmux new-window -e`. Another program named `claude` is refused.
+- Its options (argv up to a `--`; what follows is a prompt) carry
+  `--mcp-config <DeskConfig.mcp_config>` and
+  `--dangerously-load-development-channels server:desk` each exactly once
+  (no second copy, no `--flag=value` form), with the value as the next
+  argument, and exactly one session-choosing option (`--resume`,
+  `--session-id`, `-r`, `-c`, `--continue`, `--fork-session`, `--from-pr`,
+  or `--resume=`/`--session-id=`), which is `--resume` or `--session-id`
+  followed by exactly this id (never a substring).
 - `sessions/<pid>.json`, if it exists, is readable and names this session; a
-  missing file is expected at this stage. Nothing writes or fakes one.
+  missing file is expected at this stage. Only a definitive "no such file"
+  counts as missing: the file is opened once, without following a link and
+  without blocking, must be a regular file of at most 64 KiB, and anything
+  else (permission denied, a FIFO, a link, oversize) refuses with 503.
+  Nothing writes or fakes one.
 - The session is enrolled (read fresh, under `enrolled.json`'s lock); the
   screen passes the exact warning matcher with option 1 (**I am using this
   for local development**) selected, never **Exit**; and the digest equals
   the one the page or CLI was shown. The digest is SHA-256 over the capture
-  together with the window id, pane id, pane pid and start time, and claude's
-  pid and start time, so a pane respawned with an identical screen needs a
-  fresh view. The supervisor's `startup_blocked` is this same matcher over
-  its own capture; the hub doesn't read the supervisor's memory.
+  together with the window id, pane id, pane pid and start time, claude's
+  pid and start time, and the hub's epoch, so a pane respawned with an
+  identical screen needs a fresh view, and a digest from before a hub
+  restart never matches. The supervisor's `startup_blocked` is this same
+  matcher over its own capture; the hub doesn't read the supervisor's
+  memory.
 
-The acknowledgement inspects the session twice (the first says why a stale
-view fails; the second, a capture followed by the pane and the process read
-again, is the recheck), requires the same identity and digest both times,
-checks the tablet token once more, and then runs `tmux send-keys -t <pane id>
-Enter`: one key, never text. Any mismatch, ambiguity or race is a 409 with
-its reason; a process tree or tmux it can't read is a 503. A `send-keys`
-that fails or times out answers 503 `tmux did not confirm the Enter; check
-the session`, since a timed-out key may still have been delivered.
+**The order of an acknowledgement.**
+
+1. All the checks above, with the screen read between two reads of the
+   pane and the process (a change during it is a refusal), and the digest
+   compared with that view. A digest that already had an attempt in this
+   hub run is refused (**an Enter was already sent for this view**).
+2. The tablet token, checked again and held (`token_in_use`): a revoke
+   from here on waits until step 5 is over.
+3. The attempt is recorded (digest, pane, process and epoch), before any key.
+4. The final capture (`tmux capture-pane -p -J -t <pane id>`), compared
+   with the digest. Nothing else runs between it and step 5.
+5. One tmux command presses the key only if tmux's own guard holds:
+   `tmux if-shell -t <pane id> -F '<guard>' 'send-keys -t <pane id> Enter ;
+   display-message -p desk-enter-sent' 'display-message -p
+   desk-enter-refused'`. The guard is a format condition (no shell) over the
+   pane as tmux sees it at that moment: its pane id, pane pid, window id and
+   `@car_session` tag equal the checked ones, its window has one pane, it is
+   not dead, not in a mode and takes input, and its visible rows contain
+   the warning's title, `Channels: server:desk`, `❯ 1. I am using this for
+   local development` and the footer, and not `❯ 2. Exit` (tmux's `#{C:}`
+   pane search). tmux evaluates the guard and runs its branch in the same
+   pass of its command queue, so no pane output is processed between the
+   test and the key. One key, never text.
+
+A failure at steps 1 to 4, or a false guard, typed nothing: it is a 409
+with its reason (503 when a process tree, the session file or tmux can't be
+read), and the attempt is forgotten. Once tmux has the step-5 command, an
+answer that isn't one of the two markers (a timeout, an error) is 503
+**tmux did not confirm the Enter; it may have been delivered, so check the
+session** with `"delivery": "unknown"`; the attempt stays recorded, so that
+view gets no second Enter even then. A fresh, different view (a redraw, a
+respawn, or the same screen after a hub restart) may be acknowledged again.
+Attempts are pruned once their claude process is gone.
 
 **Who sends, and the lock order.** The hub sends, over the dedicated tmux
 socket (the supervisor's, `LLM_SWITCHBOARD_TMUX_SOCKET` or
@@ -403,19 +457,29 @@ the hub unit has no `PrivateTmp`: it reaches the socket under
 (429 while another runs), then `enrolled.json`'s lock, which it holds across
 its tmux calls and `/proc` reads so an unenroll that has returned is never
 overtaken by an Enter that read the enrollment before it. It never takes the
-policy lock, and takes the state's mutex only inside the token check, never
-across a tmux call or a lock wait. Each tmux call times out after 3 s, which
-bounds how long the 5 s recheck and a send's handoff wait on that file lock.
-Having the supervisor send while the hub held its state mutex across the
-supervisor's enrollment-lock wait would deadlock with housekeeping (which
-takes the file lock first); this order has no cycle.
+policy lock, and takes the state's mutex only briefly to enter and leave
+`token_in_use`, never across a tmux call or a lock wait; a revoke waits on
+the state's condition (releasing the mutex) instead. Each tmux call times
+out after 3 s, which bounds how long the 5 s recheck and a send's handoff
+wait on that file lock, and the token stays in use across two tmux calls at
+most. Having the supervisor send while the hub held its state mutex across
+the supervisor's enrollment-lock wait would deadlock with housekeeping
+(which takes the file lock first); this order has no cycle.
 
-**What stays non-atomic.** tmux has no "send only if the screen still reads
-this", so between the last check and `send-keys` Claude could redraw, or the
-process could exit and the supervisor respawn the pane. The window is
-milliseconds; Claude is waiting for this key, and a respawned pane belongs to
-the same session. The hub logs session ids and refusal reasons only, never
-screen content.
+**What stays non-atomic (best-effort, Jacob's decision of 2026-11-22).**
+tmux can only test its own copy of the screen. If Jacob, attached to the
+pane, presses Enter himself, or Remote Control types into it, just before
+the desk's key, and Claude hasn't processed that key yet, the warning is
+still on tmux's screen, the guard passes, and the desk's Enter lands on the
+next screen: normally Claude's empty prompt, where an empty Enter does
+nothing. Between the final capture (step 4) and the guarded send (step 5)
+is one tmux round trip; in it the guard covers the pane and the warning's
+rows, while the claude process inside the pane was checked at step 1 (a
+claude replaced inside the same pane process without the pane changing
+would not be seen; the supervisor's pane program runs claude once). Jacob
+accepted this remaining race in exchange for at most one Enter per view and
+honest reporting of unknown outcomes. The hub logs session ids and refusal
+reasons only, never screen content.
 
 Hand-started sessions still use `claudepd $(llm-switchboard desk flags)
 --resume <session id>` (default Pi paths); they are not adopted into a

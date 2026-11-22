@@ -28,6 +28,10 @@ class DeskConfig:
     port: int
     # Claude Code's ~/.claude/sessions/<pid>.json registry.
     claude_sessions_dir: Path
+    # Where the native installer keeps claude's executables, one file per
+    # version (`~/.local/bin/claude` links to one): the startup
+    # acknowledgement requires the foreground process to run one of them.
+    claude_versions_dir: Path
     proc_dir: Path = Path("/proc")
 
     @classmethod
@@ -63,6 +67,7 @@ class DeskConfig:
             runtime_dir=runtime_dir,
             port=int(environ.get(PORT_ENV) or DEFAULT_DESK_PORT),
             claude_sessions_dir=home / ".claude" / "sessions",
+            claude_versions_dir=home / ".local" / "share" / "claude" / "versions",
         )
 
     # The only Host header and Origin the hub answers.

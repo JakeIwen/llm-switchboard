@@ -172,7 +172,8 @@ def _ack(args, config):
                                 digest=digest)
     if not response.get("ok"):
         print(f"desk: {response.get('error', 'refused')}", file=sys.stderr)
-        return EXIT_REFUSED
+        # The hub handed tmux the key but can't say whether it arrived.
+        return EXIT_UNKNOWN if response.get("delivery") == "unknown" else EXIT_REFUSED
     print(f"{args.session_id}: Enter sent; the session continues starting")
     return 0
 

@@ -6,7 +6,8 @@ Writes its pid to <state dir>/pid, then draws the warning from
 tests/screens/desk-channel-warning.txt with option 1 selected. Its terminal
 is raw, so every byte typed into the pane is appended to <state dir>/typed
 exactly as received. A carriage return (Enter) on option 1 replaces the
-screen with "accepted"; SIGUSR1 moves the selection to the other option, as
+screen with "accepted" (unless <state dir>/ignore-enter exists: then the
+screen stays, as when Claude hasn't processed a key yet); SIGUSR1 moves the selection to the other option, as
 an arrow key would in Claude, and SIGUSR2 redraws the warning with a longer
 rule (still the warning, but another screen), both without typing anything.
 """
@@ -64,7 +65,8 @@ def main() -> None:
             if not data:
                 return
             typed.write(data)
-            if b"\r" in data and selected[0] == 1 and not accepted[0]:
+            if b"\r" in data and selected[0] == 1 and not accepted[0] \
+                    and not (state_dir / "ignore-enter").exists():
                 accepted[0] = True
                 draw()
 
