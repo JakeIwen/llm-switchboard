@@ -1,0 +1,12 @@
+#!/usr/bin/env python3
+"""Pinned desk channel server entry. Run as `.venv/bin/python -I -B bin/desk-channel`:
+-I drops the script directory and PYTHONPATH, so the repo root is added here
+from this file's resolved path. Imports stay stdlib + llm_switchboard.desk."""
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
+
+from llm_switchboard.desk.channel import main  # noqa: E402
+
+sys.exit(main())
