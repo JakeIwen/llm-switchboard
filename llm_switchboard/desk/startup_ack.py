@@ -9,9 +9,10 @@ supervisor window from outside its loop already have a precedent (the
 picker types `/rename`). Only the supervisor starts or kills windows.
 
 Order of an acknowledgement: every identity, registry, enrollment and
-token check first; then the attempt is recorded (one Enter per displayed
-view, even when the outcome is unknown); then the final capture, the digest
-comparison and the guarded send, with nothing else between them. The send
+token check first, and room in the attempt table (its /proc reads stay
+outside the token hold); then the attempt is recorded (one Enter per
+displayed view, even when the outcome is unknown); then the final capture,
+the digest comparison and the guarded send, with nothing else between them. The send
 is one tmux command whose `if-shell -F` guard re-tests the pane (id, pid,
 window, tag, a single pane, not in a mode, input on) and the warning's rows
 on the server's own screen in the same pass as the key.
@@ -40,7 +41,7 @@ claude process inside the pane, which was checked before the capture.
 Logs carry session ids and refusal reasons only, never screen content.
 """
 
-from collections import OrderedDict, deque
+from collections import deque
 from dataclasses import dataclass
 import logging
 import os
@@ -60,9 +61,9 @@ from .config import DeskConfig
 from .enrollment import Enrollment
 from .model import (
     MAX_STARTUP_ACKS_PER_MINUTE, MAX_STARTUP_ATTEMPTS, MAX_STARTUP_VIEWS_PER_MINUTE, SHA256_HEX_PATTERN,
-    DeskError,
+    ChannelProcess, DeskError,
 )
-from .peer import ProcessRecord, read_process
+from .peer import ProcessRecord, process_presence, read_process
 from .startup_identity import (
     LaunchIdentity, StartupRefusal, check_launch_argv, check_session_file, foreground_claude, refused,
     view_digest,
@@ -95,30 +96,61 @@ class _RateWindow:
             return True
 
 
+@dataclass
+class _Attempt:
+    identity: LaunchIdentity
+    # tmux answered that the guarded Enter was sent; False while it is
+    # running or when its outcome is unknown.
+    confirmed: bool = False
+
+
 class _Attempts:
-    """Digests of views that got (or may have got) their Enter in this hub
-    run. Recorded before the key, so a timeout or an ambiguous send still
-    counts; forgotten only when nothing was typed for certain. An entry
-    stays while its claude process lives, then is pruned."""
+    """Views that got, or may have got, their Enter in this hub run.
+    Recorded before the key, so a timeout or an ambiguous send still
+    counts. A record is removed only on proof: `forget` when nothing was
+    typed for certain, or `make_room` once its claude process is proven gone
+    (`process_presence` says GONE). An unreadable process keeps its record,
+    and a full table refuses new acknowledgements rather than evicting one."""
 
     def __init__(self, proc_dir: Path):
         self._proc_dir = proc_dir
-        self._seen: OrderedDict[str, LaunchIdentity] = OrderedDict()
+        self._seen: dict[str, _Attempt] = {}
         self._lock = threading.Lock()
 
-    def __contains__(self, digest: str) -> bool:
+    def refusal_for(self, digest: str) -> StartupRefusal | None:
+        """Why this view gets no Enter, or None when it had no attempt."""
         with self._lock:
-            return digest in self._seen
+            attempt = self._seen.get(digest)
+        if attempt is None:
+            return None
+        return StartupRefusal.ALREADY_SENT if attempt.confirmed else StartupRefusal.ALREADY_ATTEMPTED
+
+    def make_room(self) -> None:
+        """Drop the records whose claude is proven gone, then refuse (503)
+        when the table is still full. It reads /proc once per record, so it
+        runs before the token is held, never inside `token_in_use`."""
+        with self._lock:
+            seen = list(self._seen.items())
+        gone = [digest for digest, attempt in seen
+                if process_presence(self._proc_dir, attempt.identity.claude_pid, attempt.identity.claude_start)
+                is ChannelProcess.GONE]
+        with self._lock:
+            for digest in gone:
+                self._seen.pop(digest, None)
+            if len(self._seen) >= MAX_STARTUP_ATTEMPTS:
+                raise refused(StartupRefusal.ATTEMPTS_FULL)
 
     def record(self, digest: str, identity: LaunchIdentity) -> None:
         with self._lock:
-            for old, seen in list(self._seen.items()):
-                process = read_process(self._proc_dir, seen.claude_pid)
-                if process is None or process.start != seen.claude_start:
-                    del self._seen[old]
-            self._seen[digest] = identity
-            while len(self._seen) > MAX_STARTUP_ATTEMPTS:
-                self._seen.popitem(last=False)
+            # `make_room` ran under the same `_sending` lock; this is its backstop.
+            if len(self._seen) >= MAX_STARTUP_ATTEMPTS:
+                raise refused(StartupRefusal.ATTEMPTS_FULL)
+            self._seen[digest] = _Attempt(identity)
+
+    def confirm(self, digest: str) -> None:
+        with self._lock:
+            if digest in self._seen:
+                self._seen[digest].confirmed = True
 
     def forget(self, digest: str) -> None:
         with self._lock:
@@ -198,6 +230,7 @@ class StartupAck:
             with self.enrollment.locked():
                 identity = self._precheck(session_id, digest)
                 guard = _pane_guard(identity)
+                self._attempts.make_room()
                 with authorize():
                     self._attempts.record(digest, identity)
                     self._capture_compare_send(identity, digest, guard)
@@ -220,8 +253,9 @@ class StartupAck:
             raise refused(inspection.refusal)
         if inspection.digest != digest:
             raise refused(StartupRefusal.DIGEST_MISMATCH)
-        if digest in self._attempts:
-            raise refused(StartupRefusal.ALREADY_SENT)
+        earlier = self._attempts.refusal_for(digest)
+        if earlier is not None:
+            raise refused(earlier)
         return inspection.identity
 
     def _capture_compare_send(self, identity: LaunchIdentity, digest: str, guard: PaneGuard) -> None:
@@ -246,13 +280,15 @@ class StartupAck:
         if outcome is not GuardedSend.SENT:
             self._attempts.forget(digest)
             raise refused(StartupRefusal.CHANGED)
+        self._attempts.confirm(digest)
 
     # -- checks ------------------------------------------------------------------
 
     def _item(self, inspection: _Inspection) -> dict:
         digest, refusal = inspection.digest, inspection.refusal
-        if digest is not None and digest in self._attempts:
-            digest, refusal = None, StartupRefusal.ALREADY_SENT
+        earlier = self._attempts.refusal_for(digest) if digest is not None else None
+        if earlier is not None:
+            digest, refusal = None, earlier
         return {"session_id": inspection.session_id, "capture": inspection.capture, "digest": digest,
                 "refusal": refusal.value if refusal else None}
 

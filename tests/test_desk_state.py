@@ -16,7 +16,7 @@ from llm_switchboard.desk.model import (
     MAX_LOCKS, MAX_PAIR_SECRET_FAILURES, MAX_REGISTRATIONS, MAX_REPLY_RING_BYTES, MAX_REQUEST_AGE_SECONDS,
     MAX_REQUESTS, MAX_TICKETS,
     MAX_TOKENS, PAIR_TTL_SECONDS, TICKET_TTL_SECONDS, TOKEN_TTL_SECONDS, ChannelProcess, DeskError, Lock,
-    LockStoreError,
+    LockStoreError, Revoked,
 )
 from llm_switchboard.desk.protocol import DELIVERY_SUFFIX, MAX_REPLY_TEXT_BYTES
 
@@ -572,9 +572,9 @@ class TokenTest(StateCase):
         self.assertTrue(all(self.state.authenticate(t) for t in tokens[1:]))
         ids = [t["token_id"] for t in self.state.status()["tokens"]]
         self.assertEqual(len(ids), MAX_TOKENS)
-        self.assertEqual(self.state.revoke(ids[0]), 1)
+        self.assertEqual(self.state.revoke(ids[0]), Revoked(1, settled=True))
         self.assertFalse(self.state.authenticate(tokens[1]))
-        self.assertEqual(self.state.revoke(), MAX_TOKENS - 1)
+        self.assertEqual(self.state.revoke(), Revoked(MAX_TOKENS - 1, settled=True))
         self.assertFalse(any(self.state.authenticate(t) for t in tokens))
 
 

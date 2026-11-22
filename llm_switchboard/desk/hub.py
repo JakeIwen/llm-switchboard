@@ -43,7 +43,7 @@ from .labels import SessionLabels, encodable
 from .locks import LockStore
 from .model import (
     HELLO_TIMEOUT_SECONDS, MAX_PENDING_CHANNEL_CONNECTIONS, RECHECK_SECONDS,
-    STARTUP_TMUX_TIMEOUT_SECONDS, ChannelProcess, DeskError, is_request_id,
+    REVOKE_IN_PROGRESS, STARTUP_TMUX_TIMEOUT_SECONDS, ChannelProcess, DeskError, is_request_id,
 )
 from .operator import OperatorOp, OperatorServer, bind_private_socket
 from .peer import process_presence
@@ -550,7 +550,10 @@ class Hub:
         token_id = message.get("token_id")
         if token_id is not None and not isinstance(token_id, str):
             raise DeskError(400, "bad token_id")
-        return {"revoked": self.state.revoke(token_id)}
+        revoked = self.state.revoke(token_id)
+        if not revoked.settled:
+            raise DeskError(503, REVOKE_IN_PROGRESS, {"revoked": revoked.count, "in_progress": True})
+        return {"revoked": revoked.count}
 
     def _op_status(self, message: dict) -> dict:
         return {**self.state.status(), "enrolled": sorted(self.enrollment.sessions())}

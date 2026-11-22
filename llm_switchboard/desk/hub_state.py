@@ -23,8 +23,10 @@ channel recorded in the lock, and only `GONE` clears. HTTP callers
 run their mutation inside `authorized(token)`, so a token revoked while the
 request was in flight can't act. The startup acknowledgement can't hold the
 mutex across its tmux calls, so it runs them inside `token_in_use(token)`
-instead: `revoke` waits (bounded) for those to finish, so a revoke that has
-returned is never followed by an Enter on that token.
+instead. `revoke` waits (bounded) for every one still running on a token
+it matches, valid or already deleted (so a second revoke during the first
+one's wait waits too), and says whether they all finished: only a settled
+revoke means no Enter can follow on that token.
 """
 
 import base64
@@ -43,7 +45,7 @@ from .model import (
     OUTSTANDING_STATES, PAIR_CODE_LENGTH,
     PAIR_ID_BYTES, PAIR_TTL_SECONDS, REQUEST_ID_RANDOM_BYTES, TICKET_RANDOM_BYTES, TICKET_TTL_SECONDS,
     STARTUP_REVOKE_WAIT_SECONDS, TOKEN_BYTES, TOKEN_ID_LENGTH, TOKEN_TTL_SECONDS, DeskError, Lock, LockStoreError, Pairing,
-    ChannelProcess, Registration, RegistrationState, Reply, Request, RequestState, Ticket, Token,
+    ChannelProcess, Registration, RegistrationState, Reply, Request, RequestState, Revoked, Ticket, Token,
     valid_channel_identity,
 )
 from .protocol import MAX_REPLY_TEXT_BYTES, MAX_SPOKEN_BYTES, event_content
@@ -94,8 +96,10 @@ class HubState:
         self._pairings: dict[str, Pairing] = {}
         self._pair_starts: deque[float] = deque()
         self._tokens: dict[str, Token] = {}
-        # Token hash -> acknowledgements authorized with it and still running.
+        # Token hash -> acknowledgements authorized with it and still running,
+        # kept apart from `_tokens` so they outlive the token's deletion.
         self._tokens_in_use: dict[str, int] = {}
+        self.revoke_wait_seconds = STARTUP_REVOKE_WAIT_SECONDS
         # Request id -> connection, for events the channel hasn't reported
         # emitted or refused yet; their locks can't be cleared.
         self._in_delivery: dict[str, int] = {}
@@ -643,16 +647,23 @@ class HubState:
                     self._tokens_in_use[token_hash] = left
                 self._changed.notify_all()
 
-    def revoke(self, token_id: str | None = None, wait_seconds: float = STARTUP_REVOKE_WAIT_SECONDS) -> int:
-        """Delete the tokens, then wait for work already authorized with them
-        (`token_in_use`) to finish. Returns how many were revoked."""
+    def revoke(self, token_id: str | None = None) -> Revoked:
+        """Delete the matching tokens (all when `token_id` is None), then wait,
+        at most `revoke_wait_seconds`, for every acknowledgement still running
+        on a matching token that is no longer valid: one this call deleted or
+        an earlier revoke did. `settled` is False when the wait ran out, so an
+        Enter may still follow."""
         with self._mutex:
             doomed = [k for k, t in self._tokens.items() if token_id is None or t.token_id == token_id]
             for key in doomed:
                 del self._tokens[key]
             self._changed.notify_all()
-            self._changed.wait_for(lambda: not any(key in self._tokens_in_use for key in doomed), wait_seconds)
-            return len(doomed)
+
+            def running() -> bool:
+                return any((token_id is None or key[:TOKEN_ID_LENGTH] == token_id) and key not in self._tokens
+                           for key in self._tokens_in_use)
+            settled = self._changed.wait_for(lambda: not running(), self.revoke_wait_seconds)
+            return Revoked(len(doomed), settled)
 
     def wait_for_change(self, after, token, timeout: float) -> bool:
         """Sleep until the version differs from `after`, the token stops being

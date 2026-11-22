@@ -26,7 +26,8 @@ from .protocol import SERVER_NAME
 EXIT_REFUSED = 1
 EXIT_SETUP = 2
 EXIT_NO_HUB = 3
-# The request may or may not have been applied.
+# The request may or may not have been applied (for `revoke`: the tokens
+# are gone, but an acknowledgement on one may still press its Enter).
 EXIT_UNKNOWN = 4
 
 
@@ -81,7 +82,10 @@ def _serve(args, config: DeskConfig) -> int:
 
 
 def _operator(config: DeskConfig, op: OperatorOp, **fields) -> int:
-    response = operator_request(config.operator_socket, op, **fields)
+    return _print_response(operator_request(config.operator_socket, op, **fields))
+
+
+def _print_response(response: dict) -> int:
     if not response.get("ok"):
         print(f"desk: {response.get('error', 'refused')}", file=sys.stderr)
         return EXIT_REFUSED
@@ -95,7 +99,13 @@ def _pair(args, config):
 
 
 def _revoke(args, config):
-    return _operator(config, OperatorOp.REVOKE, token_id=args.token_id)
+    response = operator_request(config.operator_socket, OperatorOp.REVOKE, token_id=args.token_id)
+    if not response.get("ok") and response.get("in_progress") is True:
+        # The tokens are gone, but an Enter authorized before may still follow.
+        again = " ".join(["llm-switchboard desk revoke", *(["--token", args.token_id] if args.token_id else [])])
+        print(f"desk: {response.get('error')}; run `{again}` again to wait for it", file=sys.stderr)
+        return EXIT_UNKNOWN
+    return _print_response(response)
 
 
 def _status(args, config):

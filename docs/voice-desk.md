@@ -183,9 +183,16 @@ retention.
   Expire after 7 days, at most 4 (pairing a fifth drops the oldest). Each has a
   short id for `desk status` and `desk revoke --token <id>`. A revoked or
   dropped token's long-polls return 401 at once. A revoke deletes the
-  tokens, then waits (at most `STARTUP_REVOKE_WAIT_SECONDS`, 8 s) for any
-  startup acknowledgement already authorized with them to finish, so once
-  it returns no Enter follows on those tokens.
+  tokens, then waits (at most `STARTUP_REVOKE_WAIT_SECONDS`, 8 s) for every
+  startup acknowledgement still running on a matching token that is no
+  longer valid, including one whose token an earlier revoke deleted (so a
+  second revoke during the first one's wait waits too). In-flight
+  acknowledgements are counted apart from the valid tokens for this. Only a
+  revoke whose wait finished reports success, and then no Enter can follow
+  on those tokens; when the wait runs out it answers `{"ok": false, "error":
+  "revoked for new requests; an acknowledgement is still in progress",
+  "revoked": <n>, "in_progress": true}` (`desk revoke` exits 4). There is no
+  HTTP revoke route.
 
 ## Text rule
 
@@ -258,7 +265,8 @@ while its request was in flight changes nothing):
   (only text the exact warning matcher accepted, so at most 16 KiB and no
   control characters; the page shows it through `textContent`), `digest`
   is the value to acknowledge it with, or `null` with `refusal` naming
-  the failed check (including **an Enter was already sent for this view**).
+  the failed check (including **an Enter was already sent for this view**,
+  or **already attempted** when tmux never confirmed it).
   Each pane's screen is read first; only one showing the warning gets the
   process checks. A tmux that fails (a socket it may not open, an error
   other than "no server") answers 503 rather than an empty list. At most 60
@@ -267,8 +275,9 @@ while its request was in flight changes nothing):
   true}`: presses Enter once in that session's pane (see "Startup
   acknowledgement"). At most 6 a minute, one at a time (429), and at most
   one per view: a digest that already had an attempt is refused (409) even
-  when the outcome was unknown. When tmux doesn't confirm the key the
-  answer is 503 `{"error": "...", "delivery": "unknown"}`. It sends no
+  when the outcome was unknown, and a full attempt table refuses (503).
+  When tmux doesn't confirm the key the answer is 503 `{"error": "...",
+  "delivery": "unknown"}`. It sends no
   prompt, so it does not depend on `sends on`, and works while sends are
   off. The page tells the three outcomes apart: sent, not sent (nothing
   typed), and unknown (check the session), and keeps the outcome shown for
@@ -279,7 +288,9 @@ while its request was in flight changes nothing):
 `llm-switchboard desk <command>` runs as `pi` and talks to the hub over
 `operator.sock` (same framing as the channel socket, request `{op, ...}`,
 response `{ok, ...}`): `pair <code>`, `revoke [--token <id>]` (all tokens when
-no id), `status` (epoch, registrations, locks, token ids and expiry, sends
+no id; exits 4 with **revoked for new requests; an acknowledgement is still
+in progress** when its bounded wait for one ran out, and running it again
+waits again), `status` (epoch, registrations, locks, token ids and expiry, sends
 flag), `clear <session id> <lock id>`, `sends on|off` (persisted in
 `desk-settings.json`), `enroll|unenroll <session id>` (the hub edits
 `enrolled.json` and publishes it under its policy lock; unenroll drops the
@@ -421,7 +432,11 @@ must hold (`desk/startup_identity.py`, `desk/startup_ack.py`,
 1. All the checks above, with the screen read between two reads of the
    pane and the process (a change during it is a refusal), and the digest
    compared with that view. A digest that already had an attempt in this
-   hub run is refused (**an Enter was already sent for this view**).
+   hub run is refused: **an Enter was already sent for this view** when
+   tmux confirmed that attempt's key, else **an Enter was already attempted
+   for this view and its delivery is unknown; don't retry**. Then room in
+   the attempt table (below), whose `/proc` reads stay out of the token
+   hold.
 2. The tablet token, checked again and held (`token_in_use`): a revoke
    from here on waits until step 5 is over.
 3. The attempt is recorded (digest, pane, process and epoch), before any key.
@@ -448,7 +463,14 @@ answer that isn't one of the two markers (a timeout, an error) is 503
 session** with `"delivery": "unknown"`; the attempt stays recorded, so that
 view gets no second Enter even then. A fresh, different view (a redraw, a
 respawn, or the same screen after a hub restart) may be acknowledged again.
-Attempts are pruned once their claude process is gone.
+An attempt record is removed only on proof: nothing was typed for certain
+(above), or its claude process is proven gone (no `/proc/<pid>` entry in a
+mounted tree, or another start time, `peer.process_presence`). An
+unreadable process keeps its record. Records are never evicted: when 1024
+are held for processes not proven gone, a new acknowledgement is refused
+with 503 (**the hub is tracking too many earlier acknowledgements**);
+restarting the hub clears them, since its new epoch invalidates every old
+digest.
 
 **Who sends, and the lock order.** The hub sends, over the dedicated tmux
 socket (the supervisor's, `LLM_SWITCHBOARD_TMUX_SOCKET` or

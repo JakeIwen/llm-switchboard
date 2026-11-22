@@ -48,6 +48,10 @@ class StartupRefusal(str, Enum):
     CHANGED = "the screen or the process changed; view it again"
     DIGEST_MISMATCH = "the screen changed since it was shown; view it again"
     ALREADY_SENT = "an Enter was already sent for this view; if the warning stays, attach to the session"
+    ALREADY_ATTEMPTED = ("an Enter was already attempted for this view and its delivery is unknown; "
+                         "don't retry: attach to the session to check")
+    ATTEMPTS_FULL = ("the hub is tracking too many earlier acknowledgements of running sessions to record "
+                     "another; nothing was sent (a hub restart clears them)")
     UNVERIFIABLE = "the session's process can't be checked"
     SESSION_FILE_UNREADABLE = "claude's session file can't be checked"
     TMUX_FAILED = "tmux did not answer"
@@ -63,6 +67,7 @@ _STATUS = {refusal: 409 for refusal in StartupRefusal} | {
     StartupRefusal.UNVERIFIABLE: 503,
     StartupRefusal.SESSION_FILE_UNREADABLE: 503,
     StartupRefusal.TMUX_FAILED: 503,
+    StartupRefusal.ATTEMPTS_FULL: 503,
     StartupRefusal.BUSY: 429,
     StartupRefusal.TOO_MANY: 429,
     StartupRefusal.DELIVERY_UNKNOWN: 503,

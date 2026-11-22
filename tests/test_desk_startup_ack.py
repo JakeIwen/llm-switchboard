@@ -265,7 +265,9 @@ class AcknowledgeTest(StartupCase):
         self.tmux.after_send = [timed_out]
         self.assertEqual(self.ack(SESSION_A, digest),
                          (503, {"error": StartupRefusal.DELIVERY_UNKNOWN.value, "delivery": "unknown"}))
-        self.assertEqual(self.ack(SESSION_A, digest), (409, {"error": StartupRefusal.ALREADY_SENT.value}))
+        # Attempted, not sent: nothing claims the Enter arrived.
+        self.assertEqual(self.ack(SESSION_A, digest), (409, {"error": StartupRefusal.ALREADY_ATTEMPTED.value}))
+        self.assertEqual(self.view()[SESSION_A]["refusal"], StartupRefusal.ALREADY_ATTEMPTED.value)
         wait_until(lambda: launch.typed() == b"\r")
         self.assertOneGuardedEnter(launch)
 
