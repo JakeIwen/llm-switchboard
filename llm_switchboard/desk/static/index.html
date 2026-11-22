@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Voice desk</title>
+<link rel="stylesheet" href="/desk/app.css">
+</head>
+<body>
+<header class="bar">
+  <h1>Voice desk</h1>
+  <span id="conn" class="conn" data-testid="conn" data-state="offline" role="status">Not connected</span>
+  <button id="settings-toggle" type="button" class="btn quiet" aria-expanded="false" aria-controls="settings">Settings</button>
+</header>
+
+<div id="banner-sends" class="banner warn" data-testid="banner-sends" hidden>Sends are off</div>
+<div id="banner-lock-store" class="banner bad" data-testid="banner-lock-store" hidden></div>
+
+<section id="settings" class="panel" hidden>
+  <h2>Enrollment</h2>
+  <ul id="enroll-list" class="plain"></ul>
+  <form id="enroll-form" class="row">
+    <input id="enroll-input" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Session id to enroll" aria-label="Session id to enroll">
+    <button id="enroll-btn" type="submit" class="btn">Enroll</button>
+  </form>
+  <p id="settings-note" class="note" role="status"></p>
+</section>
+
+<main id="pairing" class="panel pairing" data-testid="pairing" hidden>
+  <h2>Pair this tablet</h2>
+  <p id="pair-code" class="code" data-testid="pair-code" aria-live="polite">...</p>
+  <p id="pair-instruction">On the Pi run: llm-switchboard desk pair <span id="pair-code-inline"></span></p>
+  <p id="pair-status" class="note" role="status"></p>
+  <button id="pair-new" type="button" class="btn" hidden>New code</button>
+  <p class="note">Reloading this page means pairing again.</p>
+</main>
+
+<main id="desk" class="desk" hidden>
+  <nav class="targets" aria-label="Targets">
+    <ul id="targets" class="plain" data-testid="targets"></ul>
+    <p id="targets-empty" class="note" hidden>No targets. Enroll a session in Settings.</p>
+  </nav>
+
+  <section id="detail" class="detail" hidden>
+    <div class="detail-head">
+      <h2 id="detail-title"></h2>
+      <span id="detail-badge" class="badge" data-testid="detail-badge"></span>
+    </div>
+    <p id="detail-folder" class="note"></p>
+
+    <div id="clear-area" class="clear" hidden>
+      <button id="clear-btn" type="button" class="btn warnbtn" data-testid="clear-btn">Clear after checking the session</button>
+      <div id="clear-confirm" class="confirm" hidden>
+        <p id="clear-text"></p>
+        <button id="clear-yes" type="button" class="btn warnbtn" data-testid="clear-confirm">Clear this lock</button>
+        <button id="clear-no" type="button" class="btn quiet">Cancel</button>
+      </div>
+    </div>
+
+    <div id="compose" class="compose">
+      <label for="draft" class="label">Message</label>
+      <textarea id="draft" data-testid="draft" rows="5" autocomplete="off" spellcheck="true"></textarea>
+      <p id="interim" class="interim" aria-live="polite"></p>
+      <div class="row">
+        <button id="dictate" type="button" class="btn" data-testid="dictate">Dictate</button>
+        <button id="review-btn" type="button" class="btn primary" data-testid="review-btn">Review</button>
+        <button id="test-btn" type="button" class="btn quiet" data-testid="test-btn">Test</button>
+      </div>
+      <p id="compose-note" class="note" data-testid="compose-note" role="status"></p>
+    </div>
+
+    <div id="review" class="review" data-testid="review" hidden>
+      <h3>Review</h3>
+      <dl id="review-dest" class="dest"></dl>
+      <pre id="review-text" class="text" data-testid="review-text"></pre>
+      <p id="review-problem" class="problem" data-testid="review-problem" hidden></p>
+      <div class="row">
+        <button id="send-btn" type="button" class="btn primary" data-testid="send-btn">Send</button>
+        <button id="edit-btn" type="button" class="btn">Edit</button>
+        <button id="discard-btn" type="button" class="btn quiet">Discard</button>
+      </div>
+    </div>
+
+    <p id="send-result" class="result" data-testid="send-result" role="status" hidden></p>
+
+    <h3>Replies</h3>
+    <ol id="replies" class="plain replies" data-testid="replies"></ol>
+  </section>
+  <p id="pick-note" class="note pick">Pick a target.</p>
+</main>
+
+<script src="/desk/text_rule.js"></script>
+<script src="/desk/app.js"></script>
+</body>
+</html>
