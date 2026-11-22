@@ -3,6 +3,8 @@ and refusing to trust anything unreadable."""
 
 import json
 import os
+from pathlib import Path
+import pwd
 import secrets
 import select
 import stat
@@ -18,6 +20,7 @@ from desk_fixtures import (
 )
 
 from llm_switchboard.desk.enrollment import DeskSettings, Enrollment
+from llm_switchboard.desk.config import DeskConfig
 from llm_switchboard.json_file import JsonFile
 from llm_switchboard.desk.hub_state import HubState
 from llm_switchboard.desk.locks import LockStore, LockStoreError
@@ -281,6 +284,35 @@ with enrollment.locked():
 """
 
 
+_MARKER_TIMEOUT_SECONDS = 10
+
+
+def read_marker(process, timeout: float = _MARKER_TIMEOUT_SECONDS) -> str:
+    """The child's next stdout line, read unbuffered from the pipe; fails the
+    test (so its cleanup kills the child) instead of hanging on a deadlock."""
+    fd, line, deadline = process.stdout.fileno(), b"", time.monotonic() + timeout
+    while not line.endswith(b"\n"):
+        left = deadline - time.monotonic()
+        if left <= 0 or not select.select([fd], [], [], left)[0]:
+            raise AssertionError(f"no marker from the child within {timeout} s (got {line!r})")
+        chunk = os.read(fd, 1)
+        if not chunk:
+            raise AssertionError(f"the child closed stdout (got {line!r})")
+        line += chunk
+    return line.decode().strip()
+
+
+class SocketPathTest(unittest.TestCase):
+    def test_the_operator_socket_ignores_xdg_runtime_dir_for_the_account_home(self):
+        # The one HOME for which the runtime dir could follow XDG_RUNTIME_DIR;
+        # nothing is created, only paths compared.
+        home = Path(pwd.getpwuid(os.getuid()).pw_dir)
+        plain = DeskConfig.from_env(environ={"HOME": str(home)})
+        with_runtime = DeskConfig.from_env(environ={"HOME": str(home), "XDG_RUNTIME_DIR": "/run/user/elsewhere"})
+        self.assertEqual(with_runtime.operator_socket, plain.operator_socket)
+        self.assertEqual(with_runtime.channel_socket, plain.channel_socket)
+
+
 class PolicyFileLockTest(HubCase):
     """The hub and the CLI's offline edits share the policy files' locks."""
 
@@ -300,7 +332,7 @@ class PolicyFileLockTest(HubCase):
                                    SESSION_A], cwd=REPO, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
         self.addCleanup(editor.wait)
         self.addCleanup(editor.kill)
-        self.assertEqual(editor.stdout.readline().strip(), "locked")
+        self.assertEqual(read_marker(editor), "locked")
         outcome = {}
 
         def send():
@@ -336,7 +368,7 @@ class PolicyFileLockTest(HubCase):
                                    SESSION_A], cwd=REPO, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
         self.addCleanup(editor.wait)
         self.addCleanup(editor.kill)
-        self.assertEqual(editor.stdout.readline().strip(), "ready")
+        self.assertEqual(read_marker(editor), "ready")
         real_hand_off, seen = self.hub.state.hand_off, {}
 
         def hand_off_while_an_edit_tries(request_id):
@@ -351,7 +383,7 @@ class PolicyFileLockTest(HubCase):
             sent = self.hub.send({"ticket": ticket, "text": "hi"}, self.token)
         self.assertEqual((seen, sent["state"]), ({"edit got in": False}, "handed_off"))
         # The edit lands once the target lock is persisted.
-        self.assertEqual(editor.stdout.readline().strip(), "locked")
+        self.assertEqual(read_marker(editor), "locked")
         self.assertEqual(editor.wait(timeout=10), 0)
         self.assertFalse(Enrollment(self.config.enrolled_file).is_enrolled(SESSION_A))
 

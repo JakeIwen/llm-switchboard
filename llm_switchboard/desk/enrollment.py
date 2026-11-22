@@ -26,6 +26,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import stat
 import threading
 import weakref
 
@@ -38,7 +39,10 @@ log = logging.getLogger("llm_switchboard.desk")
 
 def ensure_private_dir(path: Path) -> None:
     path.mkdir(mode=0o700, parents=True, exist_ok=True)
-    os.chmod(path, 0o700)
+    # Only when it differs: the hub takes the policy locks every 5 s, and a
+    # needless chmod is still a metadata write on the SD card.
+    if stat.S_IMODE(os.stat(path).st_mode) != 0o700:
+        os.chmod(path, 0o700)
 
 
 class _FileLock:
