@@ -12,7 +12,7 @@ import time
 import unittest
 
 from llm_switchboard.desk import protocol
-from llm_switchboard.desk.channel import MAX_MCP_LINE_BYTES
+from llm_switchboard.desk.channel import MAX_MCP_LINE_BYTES, REPLY_WAIT_SECONDS
 from llm_switchboard.desk.config import DeskConfig
 from llm_switchboard.desk.protocol import MessageType
 
@@ -29,6 +29,11 @@ def wait_for(condition, what="condition"):
             return value
         time.sleep(0.01)
     raise AssertionError(f"timed out waiting for {what}")
+
+
+def channel_wait_limit():
+    """Longer than the channel's own reply wait, which is what these tests wait out."""
+    return REPLY_WAIT_SECONDS + TIMEOUT
 
 
 class HubConnection:
@@ -334,6 +339,33 @@ class ChannelServerTest(unittest.TestCase):
         self.assertNotIn("isError", first["result"])
         conn.send(MessageType.PING)
         self.assertEqual(conn.receive()[0], MessageType.PONG)
+
+    def test_unconfirmed_reply_resets_the_link_so_a_late_ack_cannot_confirm_a_retry(self):
+        hub, channel, old = self.connected()
+        self.reply_call(channel, 1, "r-1")
+        self.assertEqual(old.receive()[0], MessageType.REPLY)
+        timed_out = channel.lines.get(timeout=channel_wait_limit())  # the hub never answers within the wait
+        channel.assert_id(timed_out, 1)
+        text = timed_out["result"]["content"][0]["text"]
+        self.assertTrue(timed_out["result"]["isError"])
+        self.assertIn("link was reset", text)
+        with self.assertRaises(EOFError):
+            old.receive()
+        new = hub.next_connection()
+        self.reply_call(channel, 2, "r-1")
+        kind, message = new.receive()
+        self.assertEqual((kind, message["request_id"]), (MessageType.REPLY, "r-1"))
+        try:  # the first attempt's delayed success, on the connection that was dropped
+            old.send(MessageType.REPLY_RESULT, request_id="r-1", ok=True, reason="")
+        except OSError:
+            pass
+        channel.request(50, "ping")  # nothing may have answered call 2 from that ack
+        self.assertTrue(channel.lines.empty())
+        new.send(MessageType.REPLY_RESULT, request_id="r-1", ok=False, reason="wrong connection")
+        retry = channel.read()
+        channel.assert_id(retry, 2)
+        self.assertTrue(retry["result"]["isError"])
+        self.assertIn("wrong connection", retry["result"]["content"][0]["text"])
 
     def test_reply_after_the_first_finished_goes_to_the_hub_again(self):
         _, channel, conn = self.connected()

@@ -125,9 +125,23 @@ class HubLink:
             return "not connected to the desk hub; the reply was not delivered"
         if not waiter["done"].wait(REPLY_WAIT_SECONDS):
             self._forget(request_id)
-            return "the desk hub did not confirm the reply in time; delivery unconfirmed"
+            self._reset_link(sock)
+            return "the desk hub did not confirm the reply in time; delivery unconfirmed; the hub link was reset"
         self._forget(request_id)
         return None if waiter["ok"] else (waiter["reason"] or "the desk hub refused the reply")
+
+    def _reset_link(self, sock: socket.socket) -> None:
+        """Drop the hub link after an uncertain reply. The hub's reply_result carries only
+        the request id, so a late ack from this attempt could otherwise be taken for a
+        retry's; the hub marks the request unknown on disconnect and refuses a retry
+        from the new connection."""
+        with self._lock:
+            if self._sock is sock:
+                self._sock, self._welcomed = None, False
+        try:
+            sock.shutdown(socket.SHUT_RDWR)  # wakes the serve loop; it closes and reconnects
+        except OSError:
+            pass
 
     # --- connection loop ---
 
