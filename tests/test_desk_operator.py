@@ -462,8 +462,12 @@ class LabelFailureTest(ChannelHubCase):
         with mock.patch.object(SessionLabels, "describe", side_effect=RuntimeError("boom")):
             with self.assertLogs("llm_switchboard.desk", "WARNING"):
                 client, _ = self.registered(SESSION_A)
-            client.send(MessageType.PING)
-            self.assertIs(client.read()[0], MessageType.PONG)
+                # The hub sends welcome before it works out labels on the same
+                # thread, and answers pings only after: a pong means the warning
+                # is logged. Failure-only deadline, generous for a loaded Pi.
+                client.sock.settimeout(30)
+                client.send(MessageType.PING)
+                self.assertIs(client.read()[0], MessageType.PONG)
         self.assertEqual(self.target(SESSION_A)["label"], SESSION_A[:8])
         self.assertEqual(self.target(SESSION_A)["registration"], "registered")
 
