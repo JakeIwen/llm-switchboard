@@ -30,6 +30,7 @@ describe('session badges', () => {
   it('mirrors every supervisor state', () => {
     const expected = [
       ['running', 'Remote Control on', 'ok'], ['starting', 'Starting', 'info'],
+      ['startup_blocked', 'Startup blocked', 'warn'],
       ['attention', 'Needs attention', 'warn'], ['elsewhere', 'Waiting: open elsewhere', 'idle'],
       ['offline', 'Waiting for network', 'idle'], ['backoff', 'Exited, relaunching', 'warn'],
       ['missing', 'Transcript missing', 'bad'], ['error', 'Error', 'bad'],

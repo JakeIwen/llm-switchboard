@@ -23,7 +23,7 @@ it('running without a URL has no stale toast action', () => {
   expect(state.toasts).toEqual([{ message: '“New one” is ready with Remote Control.', durationMs: 20000 }])
 })
 
-it.each(['attention', 'backoff', 'error', 'missing'] as const)('%s stops watching, preserves detail and exposes the Details action', (problem) => {
+it.each(['startup_blocked', 'attention', 'backoff', 'error', 'missing'] as const)('%s stops watching, preserves detail and exposes the Details action', (problem) => {
   const { ctx, state } = actionHarness([session('a', { enabled: true, status: status({ state: problem, detail: 'Accept the prompt.' }) })])
   ctx.watching.set('a', 'Created')
   checkClaudeReadiness(ctx)

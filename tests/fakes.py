@@ -2,12 +2,19 @@
 
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 from llm_switchboard.tmux import Window
 from llm_switchboard.transcripts import Transcript
 
 SID = "c96934f7-dd47-4470-a139-7d699146f4de"
 SID2 = "0c598c4d-e1af-4b9a-a82e-1e348a4a1424"
+
+
+def isolated_home(home: Path):
+    """Keep the supervisor and picker away from the operator's real desk policy."""
+    return patch.dict("os.environ", {"HOME": str(home), "XDG_CONFIG_HOME": str(home / "config"),
+                                     "XDG_DATA_HOME": str(home / "data"), "XDG_STATE_HOME": str(home / "state")})
 
 
 def transcript(sid=SID, title="Telemetrics app changes", cwd="/home/pi/dev/obd-things"):

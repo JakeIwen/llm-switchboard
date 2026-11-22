@@ -109,6 +109,10 @@ class _CachedJson:
             key = (stat.st_mtime_ns, stat.st_size, stat.st_ino)
         except FileNotFoundError:
             key = None
+        except OSError:
+            self._key = None
+            log.warning("desk: %s cannot be inspected; treating it as empty", self.file.path.name)
+            return {}
         if key != self._key or key is None:
             self._data = self._load()
             self._key = key
@@ -117,7 +121,7 @@ class _CachedJson:
     def _load(self) -> dict:
         try:
             data = self.file.load()
-        except (OSError, ValueError):
+        except (OSError, ValueError, RecursionError):
             log.warning("desk: %s unreadable; treating it as empty", self.file.path.name)
             return {}
         if not isinstance(data, dict) or not self._valid(data):
@@ -128,7 +132,7 @@ class _CachedJson:
     def _load_for_edit(self) -> dict:
         try:
             data = self.file.load()
-        except (OSError, ValueError) as exc:
+        except (OSError, ValueError, RecursionError) as exc:
             raise DeskError(503, f"{self.file.path.name} unreadable; not changed") from exc
         if not isinstance(data, dict) or not self._valid(data):
             raise DeskError(503, f"{self.file.path.name} malformed; not changed")

@@ -10,6 +10,7 @@ from pathlib import Path
 import tempfile
 from unittest.mock import patch
 
+from fakes import isolated_home
 from llm_switchboard.catalog import session_rows
 from llm_switchboard.live_registry import LiveProcess
 from llm_switchboard.store import Store
@@ -255,7 +256,8 @@ def capture_unavailable():
 
 
 def capture():
-    with patch("llm_switchboard.store.time.time", return_value=1_700_000_000.0):
+    with (tempfile.TemporaryDirectory() as tmp, isolated_home(Path(tmp)),
+          patch("llm_switchboard.store.time.time", return_value=1_700_000_000.0)):
         return {**capture_running_and_new(), **capture_duplicate_process(), **capture_backoff(),
                 **capture_restart_and_disable(), **capture_unavailable()}
 

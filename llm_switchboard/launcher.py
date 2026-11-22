@@ -14,18 +14,21 @@ from .settings import DEFAULTS, Settings
 LAUNCH_FUNCTION = "claudepd"
 
 
-def pane_command(session_id: str, cwd: str, rc_name: str) -> str:
-    # Manual resume settings must never change the Remote Control launch path.
-    command = _resume(session_id, cwd, LAUNCH_FUNCTION, "--resume")
-    inner = f"{command} --remote-control {shlex.quote(rc_name)}"
+def _pane(command: str, rc_name: str, launch_flags: tuple[str, ...]) -> str:
+    inner = f"{command} {shlex.join(('--remote-control', rc_name, *launch_flags))}"
     return f"exec bash -lic {shlex.quote(inner)}"
 
 
-def new_session_command(session_id: str, cwd: str, title: str, rc_name: str) -> str:
+def pane_command(session_id: str, cwd: str, rc_name: str, launch_flags: tuple[str, ...] = ()) -> str:
+    # Manual resume settings must never change the Remote Control launch path.
+    return _pane(_resume(session_id, cwd, LAUNCH_FUNCTION, "--resume"), rc_name, launch_flags)
+
+
+def new_session_command(session_id: str, cwd: str, title: str, rc_name: str,
+                        launch_flags: tuple[str, ...] = ()) -> str:
     """Start a conversation that doesn't exist yet, under a chosen id and title."""
-    claude = (f"{LAUNCH_FUNCTION} --session-id {shlex.quote(session_id)} --name {shlex.quote(title)}"
-              f" --remote-control {shlex.quote(rc_name)}")
-    return f"exec bash -lic {shlex.quote(f'cd -- {shlex.quote(cwd)} && {claude}')}"
+    claude = shlex.join((LAUNCH_FUNCTION, "--session-id", session_id, "--name", title))
+    return _pane(f"cd -- {shlex.quote(cwd)} && {claude}", rc_name, launch_flags)
 
 
 def _resume(session_id: str, cwd: str, command: str, action: str) -> str:

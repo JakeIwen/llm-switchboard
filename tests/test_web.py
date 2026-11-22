@@ -18,13 +18,14 @@ from llm_switchboard.trash import Trash
 from llm_switchboard.web import App, make_app, make_server
 
 from fake_codex import FakeCodexDaemon, thread
-from fakes import SID, SID2, Clock, FakeConnectivity, FakeIndex, FakeTmux, transcript
+from fakes import SID, SID2, Clock, FakeConnectivity, FakeIndex, FakeTmux, transcript, isolated_home
 
 
 class WebTest(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
+        self.enterContext(isolated_home(Path(tmp.name)))
         self.store = Store(Path(tmp.name) / "sessions.json")
         index = FakeIndex(transcript())
         self.tmux = FakeTmux()

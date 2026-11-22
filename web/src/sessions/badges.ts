@@ -6,6 +6,7 @@ export interface Badge { label: string; tone: BadgeTone }
 export const STATE: Record<SupervisorState, Badge> = {
   running: { label: 'Remote Control on', tone: 'ok' },
   starting: { label: 'Starting', tone: 'info' },
+  startup_blocked: { label: 'Startup blocked', tone: 'warn' },
   attention: { label: 'Needs attention', tone: 'warn' },
   elsewhere: { label: 'Waiting: open elsewhere', tone: 'idle' },
   offline: { label: 'Waiting for network', tone: 'idle' },

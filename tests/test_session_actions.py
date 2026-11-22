@@ -12,7 +12,7 @@ from llm_switchboard.supervisor import Supervisor
 from llm_switchboard.transcripts import TranscriptIndex
 from llm_switchboard.trash import RETENTION_S, Trash
 
-from fakes import SID, Clock, FakeConnectivity, FakeTmux
+from fakes import SID, Clock, FakeConnectivity, FakeTmux, isolated_home
 
 
 def line(record):
@@ -26,6 +26,7 @@ class Fixture(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         root = Path(tmp.name)
+        self.enterContext(isolated_home(root))
         self.work = root / "work"
         self.work.mkdir()
         self.path = root / "projects" / project_dir_name(str(self.work)) / f"{SID}.jsonl"

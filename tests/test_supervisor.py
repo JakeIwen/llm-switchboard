@@ -1,8 +1,13 @@
 from dataclasses import replace
+import json
 import shlex
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+
+from llm_switchboard.desk.config import PORT_ENV, DeskConfig
+from llm_switchboard.desk.enrollment import Enrollment
 
 from llm_switchboard.live_registry import LiveProcess
 from llm_switchboard.paths import MANAGED_ENV_VAR
@@ -10,13 +15,14 @@ from llm_switchboard.store import Store
 from llm_switchboard.supervisor import RC_GRACE_S, State, Supervisor
 from llm_switchboard.supervisor_state import NO_RC_RESTART_S
 
-from fakes import SID, SID2, Clock, FakeConnectivity, FakeIndex, FakeTmux, transcript
+from fakes import SID, SID2, Clock, FakeConnectivity, FakeIndex, FakeTmux, transcript, isolated_home
 
 
 class SupervisorTest(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
+        self.enterContext(isolated_home(Path(tmp.name)))
         self.store = Store(Path(tmp.name) / "sessions.json")
         self.tmux = FakeTmux()
         self.net = FakeConnectivity()
@@ -42,6 +48,57 @@ class SupervisorTest(unittest.TestCase):
         self.assertEqual(inner[inner.index("--resume") + 1], SID)
         self.assertEqual(inner[inner.index("--remote-control") + 1], "Telemetrics app changes")
         self.assertEqual(inner[:3], ["cd", "--", "/home/pi/dev/obd-things"])
+
+    def test_enrollment_edits_only_affect_subsequent_launches_of_that_session(self):
+        self.store.set_enabled(SID, True)
+        self.sup.reconcile()
+        _, plain, _ = self.tmux.started[-1]
+        first = self.tmux.window_for(SID).window_id
+        config = DeskConfig.from_env()
+        enrollment = Enrollment(config.enrolled_file)
+        enrollment.enroll(SID, self.clock())
+        self.store.set_enabled(SID2, True)
+        self.sup.reconcile()
+        [(other, other_command, _)] = self.tmux.started[1:]
+        self.assertEqual(other, SID2)
+        self.assertNotIn("--mcp-config", other_command)
+        self.assertEqual(self.tmux.killed, [])
+
+        self.sup.request_restart(SID)
+        self.sup.reconcile()
+        self.assertEqual(self.tmux.killed, [first])
+        args = shlex.split(shlex.split(self.tmux.started[-1][1])[3])
+        self.assertEqual(args[-len(config.launch_flags):], list(config.launch_flags))
+        enrollment.unenroll(SID)
+        self.sup.reconcile()
+        self.assertEqual(len(self.tmux.started), 3)
+        self.assertEqual(self.tmux.killed, [first])
+        self.sup.request_restart(SID)
+        self.sup.reconcile()
+        self.assertEqual(self.tmux.started[-1][1], plain)
+
+    def test_bad_hub_port_and_unreadable_or_malformed_enrollment_do_not_block_launch(self):
+        config = DeskConfig.from_env()
+        Enrollment(config.enrolled_file).enroll(SID, self.clock())
+        self.store.set_enabled(SID, True)
+        with patch.dict("os.environ", {PORT_ENV: "not-a-port"}):
+            sup = Supervisor(self.store, self.sup.index, self.tmux, self.net, registry=lambda: [], clock=self.clock)
+            sup.reconcile()
+        self.assertIn("--mcp-config", self.tmux.started[-1][1])
+
+        with patch.object(Path, "stat", side_effect=PermissionError):
+            sup.request_restart(SID)
+            sup.reconcile()
+        self.assertNotIn("--mcp-config", self.tmux.started[-1][1])
+        invalid_record = json.dumps({"sessions": {SID: {"since": 1}, SID2: None}})
+        for malformed in ("{", invalid_record, "[" * 2000 + "]" * 2000):
+            with self.subTest(prefix=malformed[:20]):
+                config.enrolled_file.write_text(malformed)
+                before = len(self.tmux.started)
+                sup.request_restart(SID)
+                sup.reconcile()
+                self.assertEqual(len(self.tmux.started), before + 1)
+                self.assertNotIn("--mcp-config", self.tmux.started[-1][1])
 
     def test_custom_name_is_used_for_remote_control(self):
         self.store.set_enabled(SID, True)

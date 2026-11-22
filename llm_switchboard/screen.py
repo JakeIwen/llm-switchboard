@@ -21,6 +21,34 @@ _BLOCKING_PROMPTS = {
 }
 
 
+# Ink reflows paragraph text, but the header, two selectable options and
+# footer are separate rows. A quoted paragraph in a normal prompt isn't a dialog.
+_WARNING_TEXT = ("--dangerously-load-development-channels is for local channel development only. "
+                 "Do not use this option to run channels you have downloaded off the internet.")
+_WARNING_OPTIONS = {
+    "❯ 1. I am using this for local development\n2. Exit",
+    "1. I am using this for local development\n❯ 2. Exit",
+}
+
+
+def desk_startup_warning(screen: str) -> bool:
+    """A display-only observation: matching pixels do not authorize sending a key."""
+    title = "WARNING: Loading development channels"
+    if len(screen) > 16_384 or title not in screen:
+        return False
+    rows = "\n".join(line.strip(" ") for line in screen.strip(" \n").split("\n"))
+    blocks = re.split(r"\n{2,}", rows)
+    if len(blocks) != 6:
+        return False
+    header, description, advice, channels, options, footer = blocks
+    return (re.fullmatch("─{12,}\n" + title, header) is not None
+            and description.replace("\n", " ") == _WARNING_TEXT
+            and advice.replace("\n", " ") == "Please use --channels to run a list of approved channels."
+            and channels == "Channels: server:desk"
+            and options in _WARNING_OPTIONS
+            and footer == "Enter to confirm · Esc to cancel")
+
+
 class Rc(str, Enum):
     ACTIVE = "active"
     CONNECTING = "connecting"

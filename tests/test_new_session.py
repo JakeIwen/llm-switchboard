@@ -3,12 +3,15 @@ transcript exists, ready notifications, and deleting one that never started."""
 
 import json
 import shlex
+import subprocess
 import tempfile
 import time
 import unittest
 from pathlib import Path
 
 from llm_switchboard.catalog import session_rows
+from llm_switchboard.desk.config import DeskConfig
+from llm_switchboard.desk.enrollment import Enrollment
 from llm_switchboard.folders import new_session_folders
 from llm_switchboard.live_registry import LiveProcess
 from llm_switchboard.notify import Notifier
@@ -17,7 +20,7 @@ from llm_switchboard.store import Store
 from llm_switchboard.supervisor import RC_GRACE_S, State, Supervisor
 from llm_switchboard.trash import Trash
 
-from fakes import Clock, FakeConnectivity, FakeIndex, FakeTmux, transcript
+from fakes import Clock, FakeConnectivity, FakeIndex, FakeTmux, transcript, isolated_home
 
 SID_A = "aaaaaaaa-0000-4000-8000-000000000001"
 SID_B = "bbbbbbbb-0000-4000-8000-000000000002"
@@ -37,7 +40,8 @@ class Fixture(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         root = Path(tmp.name)
-        self.home = root / "home"
+        self.home = root / "demo's $HOME"
+        self.enterContext(isolated_home(self.home))
         self.trusted = self.home / "dev" / "proj"
         self.untrusted = root / "elsewhere"
         for d in (self.trusted, self.untrusted):
@@ -98,15 +102,34 @@ class CreateTest(Fixture):
         self.assertEqual(argv[argv.index("--remote-control") + 1], "van logger")
         self.assertNotIn("--resume", argv)
 
-    def test_after_claude_writes_the_transcript_restarts_resume(self):
-        sid = self.create(str(self.trusted), "logger")["id"]
+    def launched_arguments(self):
+        outer = shlex.split(self.tmux.started[-1][1])
+        self.assertEqual(outer[:3], ["exec", "bash", "-lic"])
+        # Run only the inner command: a fixture function records its real argv,
+        # without sourcing the operator's login scripts or starting Claude.
+        record = r'''claudepd() { printf '%s\0' "$PWD" "$@"; }'''
+        result = subprocess.run(["/bin/bash", "--noprofile", "--norc", "-c", record + "\n" + outer[3]],
+                                env={"HOME": str(self.home)}, capture_output=True, check=True)
+        return result.stdout.decode().split("\0")[:-1]
+
+    def test_enrolled_new_session_resumes_with_the_same_quoted_flags_after_an_exit(self):
+        title = "logger's $HOME"
+        sid = self.create(str(self.trusted), title)["id"]
+        config = DeskConfig.from_env()
+        Enrollment(config.enrolled_file).enroll(sid, self.clock())
         self.sup.reconcile()
-        self.index.items[sid] = transcript(sid, "logger", str(self.trusted))
+        # Bash's PWD may use the physical spelling on hosts where /tmp is a symlink.
+        cwd, *argv = self.launched_arguments()
+        self.assertEqual(Path(cwd).resolve(), self.trusted.resolve())
+        suffix = ["--remote-control", title, *config.launch_flags]
+        self.assertEqual(argv, ["--session-id", sid, "--name", title, *suffix])
+
+        self.index.items[sid] = transcript(sid, title, str(self.trusted))
         self.tmux.exit(sid, 1)
         self.sup.reconcile()
         self.clock.t = self.sup.snapshot()[sid].next_attempt
         self.sup.reconcile()
-        self.assertIn("--resume", self.tmux.started[1][1])
+        self.assertEqual(self.launched_arguments(), [cwd, "--resume", sid, *suffix])
 
     def test_create_rejects_unlisted_blocked_and_unnamed(self):
         with self.assertRaises(ValueError):

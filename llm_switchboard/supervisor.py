@@ -13,6 +13,8 @@ import threading
 import time
 
 from .connectivity import Connectivity
+from .desk.config import DeskConfig
+from .desk.enrollment import Enrollment
 from .launcher import new_session_command, pane_command
 from .live_registry import LiveProcess, live_processes
 from .notify import Notifier
@@ -50,6 +52,7 @@ class Supervisor:
         self.store = store
         self.index = index
         self.tmux = tmux
+        self._desk = DeskConfig.for_launch()
         self.connectivity = connectivity
         self.registry = registry
         self.clock = clock
@@ -136,7 +139,7 @@ class Supervisor:
                 self.notifier.send(f"Claude session ready: {status.rc_name}",
                                    f"Remote Control is on.{' ' + link if link else ''}", "default", "white_check_mark")
                 done = True
-            elif status.state in (State.ATTENTION, State.BACKOFF, State.ERROR, State.MISSING):
+            elif status.state in (State.STARTUP_BLOCKED, State.ATTENTION, State.BACKOFF, State.ERROR, State.MISSING):
                 self.notifier.send(f"Claude session needs attention: {status.rc_name}", status.detail, "high", "warning")
                 done = True
             else:
@@ -181,14 +184,17 @@ class Supervisor:
             status.state, status.detail = State.OFFLINE, "Waiting for api.anthropic.com to be reachable."
             return
 
+        # Read policy only when actually starting a pane, not when adopting or
+        # observing one. Re-open it even if a previous launch could read it.
+        flags = self._desk.launch_flags if Enrollment(self._desk.enrolled_file).is_enrolled(sid) else ()
         if transcript:
             status.rc_name = entry.name or transcript.title or os.path.basename(transcript.cwd) or short_id(sid)
-            cwd, command = transcript.cwd, pane_command(sid, transcript.cwd, status.rc_name)
+            cwd, command = transcript.cwd, pane_command(sid, transcript.cwd, status.rc_name, flags)
         else:
             # Created here and not yet written to disk by Claude Code: start it fresh.
             status.rc_name = entry.name or entry.title or short_id(sid)
             cwd = entry.cwd
-            command = new_session_command(sid, cwd, entry.title or status.rc_name, status.rc_name)
+            command = new_session_command(sid, cwd, entry.title or status.rc_name, status.rc_name, flags)
         label = _window_label(display_path(cwd), sid)
         log.info("launching %s in %s as %r%s", short_id(sid), cwd, status.rc_name, "" if transcript else " (new)")
         status.window_id = self.tmux.start(sid, label, command, {MANAGED_ENV_VAR: sid})

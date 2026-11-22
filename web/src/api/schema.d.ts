@@ -1014,7 +1014,7 @@ export interface components {
          * State
          * @enum {string}
          */
-        State: "running" | "starting" | "attention" | "elsewhere" | "offline" | "backoff" | "missing" | "error";
+        State: "running" | "starting" | "startup_blocked" | "attention" | "elsewhere" | "offline" | "backoff" | "missing" | "error";
         /** ToggleResponse */
         ToggleResponse: {
             /** Enabled */

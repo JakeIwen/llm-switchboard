@@ -1,7 +1,7 @@
 import type { SupervisorState } from '../api/sessionRow'
 import type { ActionContext } from './context'
 
-const TROUBLE = new Set<SupervisorState>(['attention', 'backoff', 'error', 'missing'])
+const TROUBLE = new Set<SupervisorState>(['startup_blocked', 'attention', 'backoff', 'error', 'missing'])
 
 /** Run after each successful catalogue refresh, including while viewing transcripts. */
 export function checkClaudeReadiness(ctx: ActionContext): void {

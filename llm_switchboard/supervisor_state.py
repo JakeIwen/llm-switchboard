@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from enum import Enum
 
-from .screen import Rc, blocking_prompt, rc_indicator
+from .screen import Rc, blocking_prompt, desk_startup_warning, rc_indicator
 
 RC_GRACE_S = 45
 # A run at least this long counts as healthy and resets the backoff.
@@ -21,6 +21,7 @@ NO_RC_RESTART_MAX_S = 3600
 class State(str, Enum):
     RUNNING = "running"  # window up, Remote Control connected
     STARTING = "starting"  # window up, Remote Control not seen yet
+    STARTUP_BLOCKED = "startup_blocked"  # Claude is waiting at the desk channel warning
     ATTENTION = "attention"  # window up, but something on screen needs a human
     ELSEWHERE = "elsewhere"  # open in another claude process; waits for it to close
     OFFLINE = "offline"  # no route to the API; waits for the network
@@ -93,6 +94,10 @@ def no_rc_restart_delay_s(auto_restarts: int) -> float:
 
 def observe_screen(observation: ScreenInput) -> ScreenObservation:
     """Describe a running pane from captured text and elapsed run time."""
+    if desk_startup_warning(observation.screen):
+        return ScreenObservation(State.STARTUP_BLOCKED,
+                                 "Development channel warning; attach to acknowledge it before Remote Control starts.",
+                                 rc_active=False)
     rc = rc_indicator(observation.screen)
     prompt = blocking_prompt(observation.screen)
     lost = False

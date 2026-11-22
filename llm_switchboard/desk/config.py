@@ -30,14 +30,17 @@ class DeskConfig:
     claude_sessions_dir: Path
     proc_dir: Path = Path("/proc")
 
-    @staticmethod
-    def enrolled_file_from_env(environ=None, home: Path | None = None) -> Path:
-        """The enrollment list's path alone, for readers (the picker) that
-        must not fail on an unrelated desk setting such as a bad port."""
+    @classmethod
+    def for_launch(cls, environ=None, home: Path | None = None) -> "DeskConfig":
+        """A kept-session launch needs only config paths. Don't let a bad hub
+        setting (e.g. its port) break an otherwise ordinary Claude launch."""
         environ = os.environ if environ is None else environ
-        home = Path(home or environ.get("HOME") or Path.home())
-        config_home = Path(environ.get("XDG_CONFIG_HOME") or home / ".config")
-        return config_home / "llm-switchboard" / "desk" / "enrolled.json"
+        paths = {key: environ[key] for key in ("HOME", "XDG_CONFIG_HOME") if key in environ}
+        return cls.from_env(paths, home)
+
+    @classmethod
+    def enrolled_file_from_env(cls, environ=None, home: Path | None = None) -> Path:
+        return cls.for_launch(environ, home).enrolled_file
 
     @classmethod
     def from_env(cls, environ=None, home: Path | None = None, repo: Path = REPO) -> "DeskConfig":
@@ -55,7 +58,7 @@ class DeskConfig:
         return cls(
             home=home,
             repo=Path(repo),
-            config_dir=config_dir,  # enrolled_file_from_env mirrors this
+            config_dir=config_dir,
             state_dir=state_dir,
             runtime_dir=runtime_dir,
             port=int(environ.get(PORT_ENV) or DEFAULT_DESK_PORT),

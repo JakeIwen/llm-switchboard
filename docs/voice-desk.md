@@ -29,6 +29,8 @@ round trip passes.
 | `desk/http_server.py` | adapter | HTTPS (stdlib `ssl` + `ThreadingHTTPServer`), Host/Origin/token guards, long-poll |
 | `desk/operator.py` | adapter | The 0600 operator socket and its client (`pair`, `revoke`, `sends`, `status`, `clear`) |
 | `desk/cli.py` | entry | `llm-switchboard desk serve|pair|revoke|status|enroll|unenroll|sends|flags|install-config` |
+| `launcher.py`, `supervisor.py` | runtime | Start a kept Pi session through `claudepd`, adding desk flags only if enrolled at launch |
+| `screen.py`, `supervisor_state.py` | rules | Identify the complete development-channel dialog and report `startup_blocked` without restarting the session |
 | `desk/static/` | page | The tablet page: plain HTML/CSS/JS, no build step, Chrome 119 |
 | `bin/desk-channel` | entry | Pinned channel server entry (`.venv/bin/python -I -B bin/desk-channel`) |
 | `bin/desk-adb-link` | entry | The USB reverse-forward loop for one tablet serial |
@@ -298,6 +300,27 @@ when `DESK_ADB_SERIAL` is empty. Each action is printed.
 
 ## Enrollment and launch
 
-Phase 1 enrolls sessions Jacob starts by hand: `claudepd $(llm-switchboard
-desk flags) --resume <id>`. Launching enrolled kept sessions from the
-supervisor waits on Jacob's decision about the dev-channels startup warning.
+For a kept Pi session, `llm-switchboard desk enroll <session id>` adds the
+pinned flags to its **next launch** through `claudepd`, whether new or resumed.
+It does not restart a running session. `desk unenroll <session id>` stops hub
+routing immediately; the next launch omits the flags. If enrollment cannot
+be read, the supervisor launches normally without desk flags. The prompt-send
+switch (`desk sends on|off`) does not control enrollment or launching.
+
+Claude waits at **Loading development channels** before Remote Control starts.
+The picker shows **Startup blocked**; expand the row for its attach command
+(`llm-switchboard attach <session id>`). Read the warning in the terminal and
+acknowledge it there if intended. The supervisor neither sends Enter nor
+restarts the pane while this dialog is on screen. A resize may reflow the
+text; a changed or unrecognized dialog is not identified by a substring.
+
+There is no tablet or CLI startup acknowledgement in this version. On Claude
+Code 2.1.330 the foreground process has its launch arguments at the warning,
+but its `sessions/<pid>.json` does not yet exist, for both `--session-id`
+and `--resume`. Launch arguments identify the *requested* session, not one
+Claude has opened. A screen digest alone cannot establish that identity or
+make checking a terminal screen and delivering a subsequent key atomic.
+
+Hand-started sessions still use `claudepd $(llm-switchboard desk flags)
+--resume <session id>` (default Pi paths); they are not adopted into a
+supervisor tmux window. Acknowledge in the terminal that launched them.
