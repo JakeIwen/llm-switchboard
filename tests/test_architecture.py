@@ -88,7 +88,7 @@ class LaunchContractTest(unittest.TestCase):
                 self.assertTrue(os.access(REPO / target, os.X_OK))
         adb_unit = (REPO / "systemd" / "llm-switchboard-desk-adb.service").read_text(encoding="utf-8")
         self.assertIn("EnvironmentFile=@REPO@/local.env", adb_unit)
-        self.assertIn("RestartPreventExitStatus=3 4 5", adb_unit)
+        self.assertIn("RestartPreventExitStatus=2 4", adb_unit)
 
     def test_checkout_wrapper_runs_from_an_unrelated_directory(self):
         with tempfile.TemporaryDirectory() as tmp:

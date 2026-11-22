@@ -87,6 +87,17 @@ class DeskCaTest(unittest.TestCase):
                                       capture_output=True, text=True, check=True).stdout
         self.assertEqual(pub_from_cert, pub_from_key)
 
+    def test_next_steps_send_only_public_files_to_the_pi_and_push_from_there(self):
+        out = self.root / "out"
+        result = self.run_ca(str(out))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        steps = result.stdout.split("Next steps", 1)[1]
+        self.assertIn(f"scp {out}/leaf.pem {out}/leaf.key vanpi:", steps)
+        self.assertIn(f"scp {out}/desk-ca.crt vanpi:", steps)
+        self.assertIn("adb -s <serial> push desk-ca.crt /sdcard/Download/", steps)
+        self.assertNotIn(f"adb push {out}", steps)
+        self.assertNotIn("ca.key", steps)
+
     def test_constraint_test_leaf_is_outside_the_ca_constraints(self):
         out = self.root / "ct"
         result = self.run_ca("--constraint-test", str(out))

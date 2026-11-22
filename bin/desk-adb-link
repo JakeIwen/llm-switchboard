@@ -1,11 +1,22 @@
 #!/bin/bash
 # Keeps the voice desk's USB reverse forward (tablet tcp:PORT -> Pi tcp:PORT)
 # in place for one adb device. Run under systemd: llm-switchboard-desk-adb.service.
-# Only wait-for-*, get-state and reverse (--list, --no-rebind) are ever used:
-# no server restarts, no shell, no removal of mappings, and only the named
-# serial is touched.
-# Exit codes: 2 bad arguments, 3 device unauthorized/offline, 4 port mapped
-# elsewhere, 5 reverse failed. The unit doesn't restart on 3, 4 or 5.
+# Only devices, reverse (--list, --no-rebind) and wait-for-disconnect are ever
+# used: no server restarts, no shell, no removal of mappings, and only the
+# named serial is touched.
+#
+# The tablet's state comes from `adb devices`, polled every
+# DESK_ADB_POLL_SECONDS (default 3). `get-state` and `wait-for-device` don't
+# fit: wait-for-device only returns for state "device", and get-state fails
+# the same way (exit 1) for an absent serial ("error: device 'S' not found")
+# and an unauthorized one ("error: device unauthorized."), so they can't tell
+# a cable that is out from a prompt nobody accepted. `adb devices` lists
+# "<serial><TAB>device|unauthorized|offline|..." and omits an absent serial.
+# Absent, unauthorized and offline all wait (the person may plug in or accept
+# the prompt) and log once per change. A reverse failure is a disconnect when
+# the serial has since left the list, else it is retried at the same pace.
+# Exit codes: 2 bad arguments, 4 port mapped elsewhere. Only those stop the
+# unit for good; everything else loops.
 set -euo pipefail
 
 log() { echo "desk-adb-link: $*" >&2; }
@@ -25,15 +36,41 @@ if ! [[ $port =~ ^[0-9]{1,5}$ ]] || [ "$port" -lt 1024 ] || [ "$port" -gt 65535 
   exit 2
 fi
 mapping="tcp:$port"
+poll=${DESK_ADB_POLL_SECONDS:-3}
+
+# Prints the serial's state from `adb devices`, or "absent".
+device_state() {
+  local state
+  state=$(adb devices 2>/dev/null | awk -v s="$serial" '$1 == s { print $2; exit }' || true)
+  echo "${state:-absent}"
+}
+
+# Logs a status line only when it differs from the previous one.
+last_note=""
+note() {
+  if [ "$1" != "$last_note" ]; then
+    log "$1"
+    last_note=$1
+  fi
+}
 
 while true; do
-  log "waiting for device"
-  adb -s "$serial" wait-for-device
-  state=$(adb -s "$serial" get-state 2>/dev/null || true)
-  if [ "$state" != "device" ]; then
-    log "device state is '${state:-unknown}', not 'device'; authorize it on the tablet and restart the unit"
-    exit 3
-  fi
+  state=$(device_state)
+  case $state in
+    device) ;;
+    absent)
+      note "waiting for device"
+      sleep "$poll"
+      continue ;;
+    unauthorized)
+      note "device unauthorized; accept the USB debugging prompt on the tablet (still waiting)"
+      sleep "$poll"
+      continue ;;
+    *)
+      note "device state is '$state'; waiting for 'device'"
+      sleep "$poll"
+      continue ;;
+  esac
 
   # The first column is the serial or "(reverse)" depending on the adb version,
   # so read the last two fields: remote then local.
@@ -54,14 +91,21 @@ while true; do
 
   if [ "$action" = adopt ]; then
     log "adopted existing $mapping mapping"
-  else
-    if ! adb -s "$serial" reverse --no-rebind "$mapping" "$mapping" >/dev/null; then
-      log "reverse $mapping failed"
-      exit 5
+  elif ! adb -s "$serial" reverse --no-rebind "$mapping" "$mapping" >/dev/null 2>&1; then
+    if [ "$(device_state)" = device ]; then
+      note "reverse $mapping failed with the device present; retrying"
+    else
+      note "device disconnected during setup; waiting for device"
     fi
+    sleep "$poll"
+    continue
+  else
     log "created $mapping mapping"
   fi
+  last_note=""
 
-  adb -s "$serial" wait-for-disconnect || true
+  adb -s "$serial" wait-for-disconnect >/dev/null 2>&1 || true
   log "device disconnected"
+  # Pace the loop even if wait-for-disconnect returns at once.
+  sleep "$poll"
 done

@@ -121,15 +121,17 @@ echo "CA $fingerprint"
 if [ "$mode" = real ]; then
   cat <<NEXT
 
-Next steps:
-  1. Pi: scp the leaf files (key and cert stay mode 0600):
+Next steps (the tablet is attached to the Pi, not this Mac):
+  1. Mac to Pi: copy the leaf pair (mode 0600) and only the public CA cert:
        ssh vanpi 'mkdir -p -m 700 ~/.config/llm-switchboard/desk/tls'
        scp $out_dir/leaf.pem $out_dir/leaf.key vanpi:.config/llm-switchboard/desk/tls/
        ssh vanpi 'chmod 600 ~/.config/llm-switchboard/desk/tls/leaf.*'
-  2. Tablet: adb push $out_dir/desk-ca.crt /sdcard/Download/
+       scp $out_dir/$ca_name vanpi:
+  2. On the Pi: adb -s <serial> push $ca_name /sdcard/Download/
+     (adb devices lists the serial)
   3. Tablet: Settings > Security > Install from storage (a screen lock is required);
      compare the SHA-256 fingerprint Android shows with the one printed above.
-  4. Delete $out_dir from the Mac once the tablet and Pi have them.
+  4. Delete $out_dir from the Mac (and $ca_name from the Pi's home) once the tablet and Pi have them.
 NEXT
 else
   echo "Constraint test: serve $out_dir/constraint-test-leaf.* for localhost on the tablet after installing $ca_name; a client enforcing name constraints must reject it."

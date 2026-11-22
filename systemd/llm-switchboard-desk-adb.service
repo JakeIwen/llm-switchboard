@@ -8,11 +8,11 @@ Type=simple
 # install.sh enables this unit only when DESK_ADB_SERIAL is set there.
 EnvironmentFile=@REPO@/local.env
 ExecStart=@REPO@/bin/desk-adb-link ${DESK_ADB_SERIAL} 8796
-# Exit 3 (unauthorized), 4 (port taken) and 5 (reverse failed) need a person;
-# retrying would only repeat them. Plain failures (adb server hiccups) retry.
+# Exit 2 (bad arguments) and 4 (port mapped elsewhere) need a person;
+# retrying would only repeat them. Unplugs, prompts and adb hiccups never exit.
 Restart=on-failure
 RestartSec=5
-RestartPreventExitStatus=3 4 5
+RestartPreventExitStatus=2 4
 UMask=0077
 NoNewPrivileges=yes
 PrivateTmp=yes
