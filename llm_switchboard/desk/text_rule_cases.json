@@ -1,0 +1,29 @@
+{
+  "check": [
+    {"text": "what changed in the build?", "reason": null},
+    {"text": "line one\nline two\twith a tab", "reason": null},
+    {"text": "", "reason": "empty"},
+    {"text": " padded", "reason": "leading or trailing whitespace"},
+    {"text": "padded\n", "reason": "leading or trailing whitespace"},
+    {"text": "/clear", "reason": "starts with a command character"},
+    {"text": "+cp now", "reason": "starts with a command character"},
+    {"text": "!touch x", "reason": "starts with a command character"},
+    {"text": "a\u0007bell", "reason": "control character"},
+    {"text": "a\rb", "reason": "control character"},
+    {"text": "del\u007f", "reason": "control character"},
+    {"text": "c1\u0085x", "reason": "control character"},
+    {"text": "bidi‮x", "reason": "control character"},
+    {"text": "iso⁦x", "reason": "control character"},
+    {"text": "sep x", "reason": "control character"},
+    {"text": "café — 🚐", "reason": null},
+    {"text": "ok / not leading", "reason": null},
+    {"repeat": "a", "count": 4096, "reason": null},
+    {"repeat": "a", "count": 4097, "reason": "too long"},
+    {"repeat": "é", "count": 2049, "reason": "too long"}
+  ],
+  "normalize": [
+    {"text": "  hello\r\nthere\r", "normalized": "hello\nthere"},
+    {"text": "\tx\ry ", "normalized": "x\ny"},
+    {"text": "plain", "normalized": "plain"}
+  ]
+}
