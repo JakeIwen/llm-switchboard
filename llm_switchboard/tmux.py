@@ -5,6 +5,7 @@ session ids regardless of their visible names.
 """
 
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 import os
 import shutil
@@ -46,6 +47,55 @@ class TmuxError(RuntimeError):
     pass
 
 
+class GuardedSend(str, Enum):
+    """What `send_enter_if` reports: the server pressed the key, or its
+    guard was false and nothing was typed."""
+    SENT = "desk-enter-sent"
+    REFUSED = "desk-enter-refused"
+
+
+@dataclass(frozen=True)
+class PaneGuard:
+    """A condition the tmux server evaluates on a pane in the same command
+    as the key, so no pane output is processed between the test and the
+    send. `expect` maps format variables (`pane_pid`, `@car_session`, ...)
+    to their exact values; `present` and `absent` are visible rows the
+    screen must and must not contain (tmux's `#{C:}` pane search)."""
+    expect: tuple[tuple[str, str], ...]
+    present: tuple[str, ...] = ()
+    absent: tuple[str, ...] = ()
+
+    def format(self) -> str:
+        terms = [f"#{{==:#{{{name}}},{_format_literal(value)}}}" for name, value in self.expect]
+        terms += [f"#{{C:{_search_literal(row)}}}" for row in self.present]
+        terms += [f"#{{==:#{{C:{_search_literal(row)}}},0}}" for row in self.absent]
+        if not terms:
+            raise ValueError("an empty guard")
+        condition = terms[-1]
+        for term in reversed(terms[:-1]):
+            condition = f"#{{&&:{term},{condition}}}"
+        return condition
+
+
+def _format_literal(text: str) -> str:
+    """Text taken literally inside a tmux format argument."""
+    return text.replace("#", "##").replace(",", "#,").replace("}", "#}")
+
+
+def _search_literal(text: str) -> str:
+    """A `#{C:}` term: tmux wraps it as the fnmatch pattern `*term*` over each visible row."""
+    escaped = "".join("\\" + c if c in "*?[\\" else c for c in text)
+    return _format_literal(escaped)
+
+
+def _no_server(stderr: str) -> bool:
+    """tmux's answers when nothing serves the socket: the normal empty state,
+    unlike a socket it may not open (permission denied) or another failure."""
+    return ("no server running" in stderr
+            or ("error connecting to" in stderr and ("No such file or directory" in stderr
+                                                     or "Connection refused" in stderr)))
+
+
 class Tmux:
     def __init__(self, socket: str = TMUX_SOCKET, session: str = TMUX_SESSION, conf: Path = TMUX_CONF,
                  timeout: float = 20):
@@ -84,11 +134,15 @@ class Tmux:
         return found
 
     def panes(self) -> list[Pane]:
-        """Every pane of a tagged window; none when there is no server."""
+        """Every pane of a tagged window; none when there is no server. Any
+        other failure (a socket it may not open, a tmux error) raises
+        TmuxError: the desk must not read it as "nothing is waiting"."""
         fmt = "\t".join("#{%s}" % f for f in _PANE_FIELDS)
         result = self._run(["list-panes", "-a", "-F", fmt], check=False)
         if result.returncode != 0:
-            return []
+            if _no_server(result.stderr):
+                return []
+            raise TmuxError(f"list-panes failed: {result.stderr.strip()}")
         found = []
         for line in result.stdout.splitlines():
             parts = line.split("\t")
@@ -115,12 +169,13 @@ class Tmux:
     def kill(self, window_id: str) -> None:
         self._run(["kill-window", "-t", window_id], check=False)
 
-    def capture(self, window_id: str, history: int = 0) -> str:
-        """The pane's visible text, plus up to `history` lines of scrollback."""
+    def capture(self, window_id: str, history: int = 0, check: bool = False) -> str:
+        """The pane's visible text, plus up to `history` lines of scrollback.
+        A failure reads as an empty screen, or raises TmuxError with `check`."""
         args = ["capture-pane", "-p", "-J", "-t", window_id]
         if history:
             args += ["-S", f"-{history}"]
-        result = self._run(args, check=False)
+        result = self._run(args, check=check)
         return result.stdout if result.returncode == 0 else ""
 
     def send_line(self, window_id: str, text: str) -> None:
@@ -131,6 +186,22 @@ class Tmux:
     def send_enter(self, pane_id: str) -> None:
         """Press Enter once in one pane (a `%<n>` pane id), typing nothing else."""
         self._run(["send-keys", "-t", pane_id, "Enter"])
+
+    def send_enter_if(self, pane_id: str, guard: PaneGuard) -> GuardedSend:
+        """Press Enter once in one pane only if `guard` holds there, decided
+        by the server in one command: `if-shell -F` evaluates the format
+        without a shell and runs its branch in the same command queue pass,
+        so the pane's screen and process can't change between the test and
+        the key. Raises TmuxError (or a timeout) when the outcome is unknown;
+        a key may then have been delivered."""
+        marker = "display-message -p {}"
+        sent = f"send-keys -t {pane_id} Enter ; {marker.format(GuardedSend.SENT.value)}"
+        result = self._run(["if-shell", "-t", pane_id, "-F", guard.format(), sent,
+                            marker.format(GuardedSend.REFUSED.value)], check=False)
+        answer = result.stdout.strip()
+        if result.returncode == 0 and answer in (GuardedSend.SENT.value, GuardedSend.REFUSED.value):
+            return GuardedSend(answer)
+        raise TmuxError(f"if-shell: exit {result.returncode}: {result.stderr.strip()[:120]}")
 
     def kill_server(self) -> None:
         self._run(["kill-server"], check=False)

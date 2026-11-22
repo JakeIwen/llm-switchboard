@@ -32,6 +32,18 @@ _WARNING_OPTIONS = {
 }
 # Enter on this option accepts the warning; on the other it exits Claude.
 DESK_WARNING_ACCEPT_OPTION = 1
+_DESK_WARNING_TITLE = "WARNING: Loading development channels"
+_DESK_WARNING_CHANNELS = "Channels: server:desk"
+_DESK_WARNING_FOOTER = "Enter to confirm · Esc to cancel"
+_ACCEPT_SELECTED = next(key for key, option in _WARNING_OPTIONS.items()
+                        if option == DESK_WARNING_ACCEPT_OPTION).split("\n")[0]
+# Rows tmux checks on its own screen in the same command as the desk's Enter
+# (`tmux.PaneGuard`): the warning with the accept option selected must show,
+# and the Exit option must not be the selected one. Ink doesn't reflow these
+# rows, so each is one visible line.
+DESK_WARNING_GUARD_PRESENT = (_DESK_WARNING_TITLE, _DESK_WARNING_CHANNELS, _ACCEPT_SELECTED, _DESK_WARNING_FOOTER)
+DESK_WARNING_GUARD_ABSENT = (next(key for key, option in _WARNING_OPTIONS.items()
+                                  if option != DESK_WARNING_ACCEPT_OPTION).split("\n")[1],)
 
 
 def desk_startup_selection(screen: str) -> int | None:
@@ -39,7 +51,7 @@ def desk_startup_selection(screen: str) -> int | None:
     warning, else None. A display-only observation: matching text does not
     by itself authorize sending a key (the desk's acknowledgement adds its
     launch-identity checks)."""
-    title = "WARNING: Loading development channels"
+    title = _DESK_WARNING_TITLE
     if len(screen) > 16_384 or title not in screen:
         return None
     rows = "\n".join(line.strip(" ") for line in screen.strip(" \n").split("\n"))
@@ -50,8 +62,8 @@ def desk_startup_selection(screen: str) -> int | None:
     matches = (re.fullmatch("─{12,}\n" + title, header) is not None
                and description.replace("\n", " ") == _WARNING_TEXT
                and advice.replace("\n", " ") == "Please use --channels to run a list of approved channels."
-               and channels == "Channels: server:desk"
-               and footer == "Enter to confirm · Esc to cancel")
+               and channels == _DESK_WARNING_CHANNELS
+               and footer == _DESK_WARNING_FOOTER)
     return _WARNING_OPTIONS.get(options) if matches else None
 
 
