@@ -9,6 +9,7 @@ server imports this on every Claude launch.
 from dataclasses import dataclass
 import os
 from pathlib import Path
+import pwd
 
 DEFAULT_DESK_PORT = 8796
 PORT_ENV = "LLM_SWITCHBOARD_DESK_PORT"
@@ -30,6 +31,15 @@ class DeskConfig:
     claude_sessions_dir: Path
     proc_dir: Path = Path("/proc")
 
+    @staticmethod
+    def enrolled_file_from_env(environ=None, home: Path | None = None) -> Path:
+        """The enrollment list's path alone, for readers (the picker) that
+        must not fail on an unrelated desk setting such as a bad port."""
+        environ = os.environ if environ is None else environ
+        home = Path(home or environ.get("HOME") or Path.home())
+        config_home = Path(environ.get("XDG_CONFIG_HOME") or home / ".config")
+        return config_home / "llm-switchboard" / "desk" / "enrolled.json"
+
     @classmethod
     def from_env(cls, environ=None, home: Path | None = None, repo: Path = REPO) -> "DeskConfig":
         environ = os.environ if environ is None else environ
@@ -39,13 +49,15 @@ class DeskConfig:
         state_dir = state_home / "llm-switchboard" / "desk"
         runtime = environ.get("XDG_RUNTIME_DIR")
         # A shared XDG_RUNTIME_DIR would let a test instance reach the real
-        # hub's sockets, so a non-default HOME keeps them under its own tree.
+        # hub's sockets, so any HOME other than the account's own (from the
+        # password database: Path.home() just follows $HOME) keeps them under
+        # its own tree.
         runtime_dir = (Path(runtime) / "llm-switchboard-desk"
-                       if runtime and home == Path.home() else state_dir / "run")
+                       if runtime and home == _account_home() else state_dir / "run")
         return cls(
             home=home,
             repo=Path(repo),
-            config_dir=config_home / "llm-switchboard" / "desk",
+            config_dir=config_home / "llm-switchboard" / "desk",  # enrolled_file_from_env mirrors this
             state_dir=state_dir,
             runtime_dir=runtime_dir,
             port=int(environ.get(PORT_ENV) or DEFAULT_DESK_PORT),
@@ -105,3 +117,10 @@ class DeskConfig:
     def launch_flags(self) -> tuple[str, ...]:
         """What an enrolled session's claude is started with."""
         return ("--mcp-config", str(self.mcp_config), "--dangerously-load-development-channels", "server:desk")
+
+
+def _account_home() -> Path | None:
+    try:
+        return Path(pwd.getpwuid(os.getuid()).pw_dir)
+    except KeyError:
+        return None
