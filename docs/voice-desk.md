@@ -292,7 +292,8 @@ while its request was in flight changes nothing):
   keeps it shown for a minute from when it was drawn, even after the
   session leaves the list. After a sent or unknown outcome that view's
   button stays disabled on the page until a listing shows the session with
-  a different view.
+  a different digest, or leaves it out; a listing of the session with
+  `digest: null` (its pane briefly couldn't be inspected) keeps it disabled.
 
 ## Operator socket and CLI
 

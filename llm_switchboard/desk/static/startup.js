@@ -141,11 +141,15 @@
 
     // A local attempt is cleared once the listing shows its session with
     // another view (or not at all); until then that view's button stays off.
+    // A listed session with no digest (its pane briefly couldn't be
+    // inspected) is no evidence of another view: the attempt stays, so the
+    // same view coming back keeps its button off.
     function dropStaleAttempts() {
       var current = {};
       sessions.forEach(function (s) { current[s.session_id] = s.digest; });
       Object.keys(attempted).forEach(function (id) {
-        if (current[id] !== attempted[id]) delete attempted[id];
+        var listed = Object.prototype.hasOwnProperty.call(current, id);
+        if (!listed || (current[id] != null && current[id] !== attempted[id])) delete attempted[id];
       });
     }
 
