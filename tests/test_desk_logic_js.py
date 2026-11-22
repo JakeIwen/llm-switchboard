@@ -52,18 +52,24 @@ class DeskLogicJsTests(unittest.TestCase):
             {"status": 500, "data": None},
             {"status": 409, "data": {"error": "something new"}},                    # unrecognised 4xx
             {"status": 502, "data": {"error": "busy"}},                             # a 5xx never counts as refusal
+            {"status": 409, "data": {"error": "ticket already used"}},              # first attempt may have gone through
         ]
         got = [g["outcome"] for g in self.run_node(sends=sends)["sends"]]
         self.assertEqual(got, ["unknown", "handed_off", "unknown", "answered", "unknown", "not_sent",
-                               "not_sent", "not_sent", "not_sent", "unknown", "unknown", "unknown", "unknown"])
+                               "not_sent", "not_sent", "not_sent", "unknown", "unknown", "unknown", "unknown", "ticket_used"])
 
     def test_wording(self):
         out = self.run_node(sends=[{"status": 200, "data": {"request_id": "r", "state": "handed_off"}}, None])
-        self.assertIn("waiting for its reply", out["sends"][0]["text"])
-        self.assertTrue(out["sends"][1]["text"].startswith("Result unknown"))
-        self.assertEqual(self.run_node(state="unknown")["describe"],
-                         "Result unknown: delivered, no reply recorded")
-        self.assertIn("waiting", self.run_node(state="handed_off")["describe"])
+        self.assertEqual(out["sends"][0]["text"], "Handed off; waiting for the reply.")
+        self.assertTrue(out["sends"][1]["text"].startswith("Delivery unknown"))
+        self.assertEqual(self.run_node(state="unknown")["describe"], "Delivery unknown")
+        self.assertEqual(self.run_node(state="handed_off")["describe"], "Handed off; waiting for the reply")
+        ticket = self.run_node(sends=[{"status": 409, "data": {"error": "ticket already used"}}])["sends"][0]
+        self.assertEqual(ticket["text"], "Ticket already used; check the original request.")
+        self.assertNotIn("Not sent", ticket["text"])
+        every = self.run_node(sends=[None, {"status": 200, "data": None}], state="unknown")
+        for text in [s["text"] for s in every["sends"]] + [every["describe"]]:
+            self.assertNotIn("delivered", text.lower())
 
     def test_clear_confirmation_is_frozen_and_dismissed_on_change(self):
         out = self.run_node(target=A, valid=[[{"session_id": "s1", "lock_id": "L1"}, A],

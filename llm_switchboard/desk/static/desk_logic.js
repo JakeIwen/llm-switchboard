@@ -8,32 +8,37 @@
   // 5xx, an unrecognised body) leaves the outcome open.
   var REFUSALS = [
     "sends off", "busy", "bad ticket", "stale epoch", "stale generation", "unknown ticket",
-    "ticket expired", "ticket already used", "not registered", "ambiguous",
+    "ticket expired", "not registered", "ambiguous",
     "target changed; not sent", "too many outstanding requests",
     // text_rule.py reasons
     "empty", "too long", "invalid character", "leading or trailing whitespace",
     "control character", "starts with a command character"
   ];
 
-  var UNKNOWN_TEXT = "Result unknown: the request may have been delivered. Check the target and its replies. It is not retried.";
+  var UNKNOWN_TEXT = "Delivery unknown: the hub did not confirm the hand-off. Check the target and its replies. It is not retried.";
+  var TICKET_USED_TEXT = "Ticket already used; check the original request.";
 
   // r is {status, data} from the send call, or null when no response arrived.
   function classifySend(r) {
     if (!r) {
       return { outcome: "unknown", tone: "warn",
-        text: "Result unknown: no answer from the hub (timeout or dropped connection), so the request may have been delivered. Check the target and its replies. It is not retried." };
+        text: "Delivery unknown: no answer from the hub (timeout or dropped connection). Check the target and its replies. It is not retried." };
     }
     var err = r.data && typeof r.data.error === "string" ? r.data.error : null;
     if (r.status === 200) {
       var d = r.data;
       if (d && typeof d.request_id === "string" && d.state === "handed_off") {
         return { outcome: "handed_off", tone: "ok", request_id: d.request_id,
-          text: "Delivered to the session, waiting for its reply." };
+          text: "Handed off; waiting for the reply." };
       }
       if (d && typeof d.request_id === "string" && d.state === "answered") {
         return { outcome: "answered", tone: "ok", request_id: d.request_id, text: "Answered." };
       }
       return { outcome: "unknown", tone: "warn", text: UNKNOWN_TEXT };
+    }
+    // A consumed ticket says nothing about the first attempt, which may have gone through.
+    if (r.status === 409 && err === "ticket already used") {
+      return { outcome: "ticket_used", tone: "warn", text: TICKET_USED_TEXT };
     }
     if (r.status === 401) {
       return { outcome: "not_sent", tone: "bad", text: "Not sent: this tablet is not authorised." };
@@ -47,10 +52,10 @@
   function describeRequestState(state) {
     var map = {
       pending: "Accepted, not yet delivered",
-      handed_off: "Delivered to the session, waiting for its reply",
+      handed_off: "Handed off; waiting for the reply",
       answered: "Answered",
-      unknown: "Result unknown: delivered, no reply recorded",
-      expired: "Not delivered (safe to send again)"
+      unknown: "Delivery unknown",
+      expired: "Not handed off (safe to send again)"
     };
     return map[state] || state;
   }
