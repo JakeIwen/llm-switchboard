@@ -4,13 +4,21 @@ and refusing to trust anything unreadable."""
 import json
 import os
 import secrets
+import select
 import stat
+import subprocess
+import sys
+import threading
+import time
 import unittest
 from unittest import mock
 
-from desk_fixtures import SESSION_A, SESSION_B, Clock, FakeIdentity, desk_config, make_home, request_id
+from desk_fixtures import (
+    REPO, SESSION_A, SESSION_B, Clock, FakeIdentity, HubCase, desk_config, make_home, request_id, run_desk_cli,
+)
 
 from llm_switchboard.desk.enrollment import DeskSettings, Enrollment
+from llm_switchboard.json_file import JsonFile
 from llm_switchboard.desk.hub_state import HubState
 from llm_switchboard.desk.locks import LockStore, LockStoreError
 from llm_switchboard.desk.model import MAX_ENROLLED, MAX_LOCK_FILE_BYTES, MAX_LOCKS, DeskError, Lock
@@ -243,6 +251,135 @@ class EnrollmentFilesTest(unittest.TestCase):
         self.assertEqual(mode(self.config.settings_file), 0o600)
         self.config.settings_file.write_text('{"sends_enabled": "yes"}')
         self.assertFalse(settings.sends_enabled())
+
+
+# An offline `desk unenroll` paused inside its read-modify-write: it holds
+# enrolled.json's lock (as Enrollment.unenroll takes it) until told to go on.
+_PAUSED_OFFLINE_UNENROLL = """
+import sys
+from pathlib import Path
+from llm_switchboard.desk.enrollment import Enrollment
+enrollment = Enrollment(Path(sys.argv[1]))
+with enrollment.locked():
+    print("locked", flush=True)
+    sys.stdin.readline()
+    enrollment.unenroll(sys.argv[2])
+"""
+
+
+# An offline `desk unenroll` that starts its edit when told to.
+_OFFLINE_UNENROLL_ON_CUE = """
+import sys
+from pathlib import Path
+from llm_switchboard.desk.enrollment import Enrollment
+enrollment = Enrollment(Path(sys.argv[1]))
+print("ready", flush=True)
+sys.stdin.readline()
+with enrollment.locked():
+    print("locked", flush=True)
+    enrollment.unenroll(sys.argv[2])
+"""
+
+
+class PolicyFileLockTest(HubCase):
+    """The hub and the CLI's offline edits share the policy files' locks."""
+
+    def test_a_cli_with_another_runtime_dir_finds_the_running_hub(self):
+        other_runtime = make_home(self)
+        done = run_desk_cli(self.home, "unenroll", SESSION_A, env={"XDG_RUNTIME_DIR": str(other_runtime)})
+        self.assertEqual(done.returncode, 0, done.stderr)
+        # Through the hub, not an offline edit: its state changed without a recheck.
+        self.assertNotIn(SESSION_A, self.hub.state.target_session_ids())
+
+    def test_an_offline_edit_holding_the_file_lock_holds_a_handoff_until_it_is_written(self):
+        client = self.channel(SESSION_A)
+        generation = client.first[1]["generation"]
+        ticket = self.hub.ticket({"session_id": SESSION_A, "generation": generation, "epoch": self.hub.epoch},
+                                 self.token)["ticket"]
+        editor = subprocess.Popen([sys.executable, "-c", _PAUSED_OFFLINE_UNENROLL, str(self.config.enrolled_file),
+                                   SESSION_A], cwd=REPO, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        self.addCleanup(editor.wait)
+        self.addCleanup(editor.kill)
+        self.assertEqual(editor.stdout.readline().strip(), "locked")
+        outcome = {}
+
+        def send():
+            try:
+                outcome["sent"] = self.hub.send({"ticket": ticket, "text": "hi"}, self.token)
+            except DeskError as exc:
+                outcome["refused"] = (exc.status, exc.reason)
+
+        sender = threading.Thread(target=send)
+        sender.start()
+        # A bounded wait for something that must not happen: the handoff waits on the lock.
+        sender.join(0.5)
+        self.assertTrue(sender.is_alive())
+        self.assertEqual([r["state"] for r in self.hub.state_view()["requests"]], ["pending"])
+        editor.stdin.write("go\n")
+        editor.stdin.flush()
+        self.assertEqual(editor.wait(timeout=10), 0)
+        sender.join(10)
+        # The handoff reread the file after the edit landed.
+        self.assertEqual(outcome, {"refused": (409, "not enrolled")})
+        self.assertEqual([r["state"] for r in self.hub.state_view()["requests"]], ["expired"])
+        # Nothing was written to the channel.
+        client.sock.settimeout(0.2)
+        with self.assertRaises(TimeoutError):
+            client.read()
+
+    def test_an_offline_edit_cannot_land_between_the_reread_and_the_target_lock(self):
+        client = self.channel(SESSION_A)
+        generation = client.first[1]["generation"]
+        ticket = self.hub.ticket({"session_id": SESSION_A, "generation": generation, "epoch": self.hub.epoch},
+                                 self.token)["ticket"]
+        editor = subprocess.Popen([sys.executable, "-c", _OFFLINE_UNENROLL_ON_CUE, str(self.config.enrolled_file),
+                                   SESSION_A], cwd=REPO, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        self.addCleanup(editor.wait)
+        self.addCleanup(editor.kill)
+        self.assertEqual(editor.stdout.readline().strip(), "ready")
+        real_hand_off, seen = self.hub.state.hand_off, {}
+
+        def hand_off_while_an_edit_tries(request_id):
+            # The files were just reread; the edit starts now and must wait.
+            editor.stdin.write("go\n")
+            editor.stdin.flush()
+            ready, _, _ = select.select([editor.stdout], [], [], 0.5)
+            seen["edit got in"] = bool(ready)
+            return real_hand_off(request_id)
+
+        with mock.patch.object(self.hub.state, "hand_off", hand_off_while_an_edit_tries):
+            sent = self.hub.send({"ticket": ticket, "text": "hi"}, self.token)
+        self.assertEqual((seen, sent["state"]), ({"edit got in": False}, "handed_off"))
+        # The edit lands once the target lock is persisted.
+        self.assertEqual(editor.stdout.readline().strip(), "locked")
+        self.assertEqual(editor.wait(timeout=10), 0)
+        self.assertFalse(Enrollment(self.config.enrolled_file).is_enrolled(SESSION_A))
+
+
+class OfflineEditLockTest(unittest.TestCase):
+    def test_the_offline_cli_edit_waits_for_the_files_lock(self):
+        home = make_home(self)
+        config = desk_config(home)
+        Enrollment(config.enrolled_file).enroll(SESSION_A, 1.0)
+        before = config.enrolled_file.read_text()
+        # Held through a separate open of the lock file, as another process would.
+        with JsonFile(config.enrolled_file).locked():
+            cli = subprocess.Popen([sys.executable, "-m", "llm_switchboard", "desk", "unenroll", SESSION_A],
+                                   cwd=REPO, env={**os.environ, "HOME": str(home), "XDG_CONFIG_HOME": "",
+                                                  "XDG_STATE_HOME": "", "XDG_RUNTIME_DIR": "",
+                                                  "LLM_SWITCHBOARD_DESK_PORT": ""},
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            self.addCleanup(cli.wait)
+            self.addCleanup(cli.kill)
+            # A bounded wait for something that must not happen: the edit waits on the lock.
+            deadline = time.monotonic() + 1.5
+            while time.monotonic() < deadline and cli.poll() is None:
+                time.sleep(0.05)
+            self.assertIsNone(cli.poll())
+            self.assertEqual(config.enrolled_file.read_text(), before)
+        out, err = cli.communicate(timeout=30)
+        self.assertEqual(cli.returncode, 0, err)
+        self.assertFalse(Enrollment(config.enrolled_file).is_enrolled(SESSION_A))
 
 
 if __name__ == "__main__":

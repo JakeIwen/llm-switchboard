@@ -15,6 +15,7 @@ import shutil
 import socket
 import ssl
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -27,6 +28,7 @@ from llm_switchboard.desk.protocol import MessageType, decode, encode, read_line
 SESSION_A = "aaaaaaaa-0000-4000-8000-000000000001"
 SESSION_B = "bbbbbbbb-0000-4000-8000-000000000002"
 SESSION_C = "cccccccc-0000-4000-8000-000000000003"
+REPO = Path(__file__).resolve().parents[1]
 
 _CERT_CONFIG = """[req]
 distinguished_name = dn
@@ -213,6 +215,14 @@ def write_fake_process(proc_dir: Path, pid: int, start: str) -> None:
     (entry / "cmdline").write_bytes(b"channel\0")
 
 
+def run_desk_cli(home, *args, env=None):
+    """`llm-switchboard desk ...` as a separate process under this HOME."""
+    environ = {**os.environ, "HOME": str(home), "XDG_CONFIG_HOME": "", "XDG_STATE_HOME": "",
+               "XDG_RUNTIME_DIR": "", "LLM_SWITCHBOARD_DESK_PORT": "", **(env or {})}
+    return subprocess.run([sys.executable, "-m", "llm_switchboard", "desk", *args], cwd=REPO, env=environ,
+                          capture_output=True, text=True, timeout=30)
+
+
 def enroll_file(config: DeskConfig, *session_ids: str) -> None:
     config.config_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     payload = {"sessions": {sid: {"since": 1} for sid in session_ids}}
@@ -232,7 +242,8 @@ class HubCase(unittest.TestCase):
         # An empty process tree of its own: whether a dropped channel still
         # runs never depends on the host's real /proc.
         self.config = dataclasses.replace(desk_config(self.home), proc_dir=self.home / "proc")
-        self.config.proc_dir.mkdir()
+        # `self` marks it as a mounted tree, so a missing pid there means a gone process.
+        (self.config.proc_dir / "self").mkdir(parents=True)
         self.cert = install_cert(self.config)
         enroll_file(self.config, SESSION_A, SESSION_B)
         DeskSettings(self.config.settings_file).set_sends_enabled(self.sends_enabled)

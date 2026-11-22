@@ -92,7 +92,15 @@ retention.
   publish a stale value over a newer change; the CLI's `desk enroll` and
   `desk unenroll` go through the same lock on the operator socket while the
   hub runs, so an unenroll that has returned is never overtaken by a
-  handoff that read the file before it. Any failure before handoff,
+  handoff that read the file before it. Every edit of either file, the
+  CLI's offline one included, holds that file's cross-process lock (the
+  `<name>.lock` flock `JsonFile` takes) for its whole read-modify-write, and
+  the hub holds both files' locks from rereading them through persisting
+  the target lock, so an offline edit is either seen by the handoff or
+  waits for it (a hub starting meanwhile rereads under the same locks).
+  Lock order, everywhere: `enrolled.json`'s lock, then
+  `desk-settings.json`'s, then the hub's policy lock, then the state's
+  lock; within the hub the file locks re-enter. Any failure before handoff,
   expected or not, expires the pending request. One outstanding request per target: a target is **busy**
   while it has a lock. Answered, expired and unknown requests, with their
   reply text, are dropped 24 h after they finished (and beyond the last 20);
@@ -126,7 +134,9 @@ retention.
   write failed part way; or the lock is from an earlier hub run, whose
   reports this run never saw) the request is unknown, never a success, and
   the hub reads the start time of the lock's `channel_pid` from `/proc`:
-  no such process, or one with another start time (a reused pid), allows
+  no such process in a mounted process tree (`/proc/self` present; a
+  missing or unmounted `/proc` proves nothing), or one with another start
+  time (a reused pid), allows
   the clear; the same start time refuses it with 409 `the session's channel
   is still running; stop the session, then clear`; an entry whose start
   time can't be read or parsed refuses it with 503 `the session's channel
@@ -240,7 +250,8 @@ flag), `clear <session id> <lock id>`, `sends on|off` (persisted in
 session's registrations at once). `sends`, `enroll` and `unenroll` edit their
 file directly only when the connect proves no hub listens (no socket file,
 or nothing accepting on it), and the hub reads it at its next recheck or
-start. Once connected, a missing, reset, timed-out or garbled answer means
+start. Once connected, a missing, reset, timed-out or garbled answer (or
+one without a boolean `ok`) means
 the hub may have applied the change: the command writes nothing, prints
 ``result unknown; run `llm-switchboard desk status` ``, and exits 4 (3: no
 hub for the other commands, 1: refused). `flags` (prints the launch flags) and `install-config` (writes

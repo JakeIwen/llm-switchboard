@@ -70,12 +70,16 @@ def _logged_channel_reason(value) -> str:
 def channel_process(proc_dir: Path, pid: int, start: str) -> ChannelProcess:
     """Whether the process a lock's event was handed to may still run, from
     its start time alone (/proc/<pid>/stat field 22, parsed as
-    `peer.read_process` does). Only a missing entry or another start time
-    (a reused pid) is evidence it is gone; anything unreadable is not."""
+    `peer.read_process` does). Only a missing entry in a mounted process
+    tree (`<proc>/self` present) or another start time (a reused pid) is
+    evidence it is gone; anything unreadable is not."""
+    root = Path(proc_dir)
     try:
-        stat = (Path(proc_dir) / str(pid) / "stat").read_text()
+        stat = (root / str(pid) / "stat").read_text()
     except (FileNotFoundError, ProcessLookupError):
-        return ChannelProcess.GONE
+        # A missing entry means a missing process only in a mounted process
+        # tree; with no tree at all (or no /proc mounted) nothing is known.
+        return ChannelProcess.GONE if (root / "self").is_dir() else ChannelProcess.UNVERIFIABLE
     except (OSError, ValueError):
         return ChannelProcess.UNVERIFIABLE
     fields = stat.rsplit(")", 1)[1].split() if ")" in stat else []
@@ -121,7 +125,8 @@ class Hub:
         self.settings = DeskSettings(config.settings_file)
         # Reading the policy files and publishing them into the state, and
         # changing them, happen under this lock so a stale read can't be
-        # published over a newer change. Order: this lock, then the state's.
+        # published over a newer change. Lock order, everywhere: the files'
+        # cross-process locks (`_policy_files`), this lock, the state's.
         self._policy_lock = threading.RLock()
         self.state = HubState(lock_store or LockStore(config.lock_file), now=now, token_bytes=token_bytes)
         self.labels = SessionLabels(config)
@@ -209,8 +214,16 @@ class Hub:
 
     # -- files and rechecks ----------------------------------------------------
 
+    @contextlib.contextmanager
+    def _policy_files(self):
+        """Hold both policy files' cross-process locks, the ones the CLI's
+        offline edit takes, in the fixed order: enrolled.json, then
+        desk-settings.json. Re-entrant in this process."""
+        with self.enrollment.locked(), self.settings.locked():
+            yield
+
     def refresh_files(self) -> None:
-        with self._policy_lock:
+        with self._policy_files(), self._policy_lock:
             self.state.set_enrolled(self.enrollment.sessions())
             self.state.set_sends_enabled(self.settings.sends_enabled())
 
@@ -466,8 +479,11 @@ class Hub:
             self._drop_connection(request.conn_id, f"dispatch recheck: {reason}")
             raise DeskError(409, "target changed; not sent")
         # A CLI unenroll or sends change since the last 5 s pass counts too.
-        self.refresh_files()
-        return self.state.hand_off(request.request_id)
+        # The file locks stay held until the target lock is persisted, so an
+        # offline edit either lands before this reread or waits for the handoff.
+        with self._policy_files(), self._policy_lock:
+            self.refresh_files()
+            return self.state.hand_off(request.request_id)
 
     def clear(self, body: dict, token: str) -> dict:
         with self.state.authorized(token):
@@ -479,30 +495,30 @@ class Hub:
 
     def enroll(self, body: dict, token: str) -> dict:
         session_id = body.get("session_id")
-        with self._policy_lock, self.state.authorized(token):
+        with self._policy_files(), self._policy_lock, self.state.authorized(token):
             self._enroll(session_id)
         return {"session_id": session_id, "enrolled": True}
 
     def unenroll(self, body: dict, token: str) -> dict:
         session_id = body.get("session_id")
-        with self._policy_lock, self.state.authorized(token):
+        with self._policy_files(), self._policy_lock, self.state.authorized(token):
             self._unenroll(session_id)
         self._drop_unenrolled(session_id)
         return {"session_id": session_id, "enrolled": False}
 
     # Enrollment edits, from the page or the operator socket, run under the
-    # policy lock: a send's handoff rereads the file under it too, so an
-    # unenroll that has returned is never overtaken by a handoff that read
-    # the file before it.
+    # file locks and the policy lock: a send's handoff rereads the file under
+    # them too, so an unenroll that has returned is never overtaken by a
+    # handoff that read the file before it.
 
     def _enroll(self, session_id) -> bool:
-        with self._policy_lock:
+        with self._policy_files(), self._policy_lock:
             added = self.enrollment.enroll(session_id, self._now())
             self.refresh_files()
             return added
 
     def _unenroll(self, session_id) -> bool:
-        with self._policy_lock:
+        with self._policy_files(), self._policy_lock:
             removed = self.enrollment.unenroll(session_id)
             self.refresh_files()
             return removed
@@ -556,7 +572,7 @@ class Hub:
         enabled = message.get("enabled")
         if not isinstance(enabled, bool):
             raise DeskError(400, "enabled must be true or false")
-        with self._policy_lock:
+        with self._policy_files(), self._policy_lock:
             self.settings.set_sends_enabled(enabled)
             self.state.set_sends_enabled(enabled)
         return {"sends_enabled": enabled}

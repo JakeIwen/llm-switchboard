@@ -1,6 +1,7 @@
 """The desk's HTTPS API through a real TLS client that trusts only a
 throwaway leaf: guards, headers, pairing, sends, long-polls and refusals."""
 
+import dataclasses
 import hashlib
 import http.client
 import os
@@ -14,11 +15,12 @@ from unittest import mock
 
 from desk_fixtures import (
     SESSION_A, SESSION_B, ChannelClient, FakeIdentity, FakePeer, HubCase, desk_config, install_cert, make_home,
-    throwaway_cert,
+    throwaway_cert, wait_until,
 )
 
 from llm_switchboard.desk.http_server import STATIC_ROUTES, TlsSetupError
 from llm_switchboard.desk.hub import Hub
+from llm_switchboard.desk.hub_state import CHANNEL_UNVERIFIABLE
 from llm_switchboard.desk.labels import SessionLabels
 from llm_switchboard.desk.model import MAX_BODY_BYTES, LockStoreError
 from llm_switchboard.desk.protocol import MessageType
@@ -280,6 +282,36 @@ class SendsOffTest(HttpCase):
         ticket = self.ticket(token, generation)
         got = self.call("POST", "/desk/api/send", {"ticket": ticket, "text": "hi"}, token=token)
         self.assertEqual(got[::2], (403, {"error": "sends off"}))
+
+
+class ProcessTreeHttpTest(HttpCase):
+    def test_a_missing_process_tree_is_no_evidence_the_channel_is_gone(self):
+        token = self.pair()
+        client, generation = self.registered_channel()
+        status, _, sent = self.call("POST", "/desk/api/send", {"ticket": self.ticket(token, generation), "text": "hi"},
+                                    token=token)
+        self.assertEqual(status, 200, sent)
+        # The channel goes away without reporting on the event.
+        client.close()
+        wait_until(lambda: self.hub.state.request_state(sent["request_id"]) == "unknown")
+        lock = next(t for t in self.hub.state_view()["targets"] if t["session_id"] == SESSION_A)["lock"]
+        clear = {"session_id": SESSION_A, "lock_id": lock["lock_id"]}
+        tree = self.config.proc_dir
+        for root, why in ((self.home / "no-proc", "no process tree at all"), (self.home / "empty-proc", "not mounted")):
+            with self.subTest(why):
+                if why == "not mounted":
+                    root.mkdir()
+                self.hub.close()
+                self.config = dataclasses.replace(self.config, proc_dir=root)
+                self.hub = self.start_hub()
+                status, _, body = self.call("POST", "/desk/api/clear", clear, token=self.pair())
+                self.assertEqual((status, body), (503, {"error": CHANNEL_UNVERIFIABLE}))
+        # A mounted tree without that pid: the channel is gone.
+        self.hub.close()
+        self.config = dataclasses.replace(self.config, proc_dir=tree)
+        self.hub = self.start_hub()
+        status, _, body = self.call("POST", "/desk/api/clear", clear, token=self.pair())
+        self.assertEqual((status, body), (200, {"cleared": True}))
 
 
 class LockStoreFailureHttpTest(HttpCase):

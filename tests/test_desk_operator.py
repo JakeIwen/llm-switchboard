@@ -18,7 +18,8 @@ import unittest
 from unittest import mock
 
 from desk_fixtures import (
-    SESSION_A, SESSION_B, SESSION_C, FakeIdentity, HubCase, desk_config, make_home, wait_until, write_fake_process,
+    SESSION_A, SESSION_B, SESSION_C, FakeIdentity, HubCase, desk_config, make_home, run_desk_cli, wait_until,
+    write_fake_process,
 )
 
 from llm_switchboard.desk.enrollment import Enrollment
@@ -34,15 +35,6 @@ from llm_switchboard.desk.operator import (
 from llm_switchboard.desk.peer import read_process
 from llm_switchboard.desk.protocol import DELIVERY_SUFFIX, MAX_REPLY_TEXT_BYTES, MessageType, encode
 
-REPO = Path(__file__).resolve().parents[1]
-
-
-def run_desk_cli(home, *args):
-    """`llm-switchboard desk ...` as a separate process under this HOME."""
-    env = {**os.environ, "HOME": str(home), "XDG_CONFIG_HOME": "", "XDG_STATE_HOME": "",
-           "XDG_RUNTIME_DIR": "", "LLM_SWITCHBOARD_DESK_PORT": ""}
-    return subprocess.run([sys.executable, "-m", "llm_switchboard", "desk", *args], cwd=REPO, env=env,
-                          capture_output=True, text=True, timeout=30)
 
 
 class ChannelHubCase(HubCase):
@@ -634,12 +626,14 @@ class OperatorAdmissionTest(ChannelHubCase):
 class SilentOperator:
     """Something listening on the operator socket that reads each request and
     never answers (the hub may or may not have applied it): it closes
-    (`eof`), resets (`reset`) or keeps the connection open (`hold`)."""
+    (`eof`), resets (`reset`) or keeps the connection open (`hold`), after
+    writing `answer` when one is given."""
 
-    def __init__(self, path: Path, end: str = "eof"):
+    def __init__(self, path: Path, end: str = "eof", answer: bytes = b""):
         self.listener = bind_private_socket(path)
         self.listener.settimeout(0.2)
         self.end = end
+        self.answer = answer
         self.requests: list[bytes] = []
         self._held: list[socket.socket] = []
         self._stop = threading.Event()
@@ -657,6 +651,8 @@ class SilentOperator:
             conn.settimeout(5)
             with conn.makefile("rb") as stream:
                 self.requests.append(stream.readline())
+            if self.answer:
+                conn.sendall(self.answer)
             if self.end == "hold":
                 self._held.append(conn)
                 continue
@@ -706,6 +702,19 @@ class OperatorFallbackTest(unittest.TestCase):
         self.assertEqual(len(silent.requests), 3)
         self.assertFalse(self.config.enrolled_file.exists())
         self.assertFalse(self.config.settings_file.exists())
+
+    def test_an_answer_without_a_boolean_ok_is_no_acknowledgment(self):
+        for answer in (b"{}\n", b'{"ok":"false"}\n'):
+            with self.subTest(answer=answer):
+                silent = SilentOperator(self.config.operator_socket, answer=answer)
+                try:
+                    with self.assertRaises(HubResultUnknown):
+                        operator_request(self.config.operator_socket, OperatorOp.STATUS)
+                    done = run_desk_cli(self.home, "unenroll", SESSION_A)
+                    self.assertEqual(done.returncode, 4, done.stderr)
+                finally:
+                    silent.close()
+        self.assertFalse(self.config.enrolled_file.exists())
 
     def test_a_reset_or_a_timeout_after_connecting_is_a_result_unknown(self):
         for end in ("reset", "hold"):

@@ -214,7 +214,8 @@ def operator_request(path: Path, op: OperatorOp, timeout: float = OPERATOR_TIMEO
         response = json.loads(line) if line else None
     except ValueError:
         response = None
-    if not isinstance(response, dict):
+    # Only an answer saying whether it was applied acknowledges the request.
+    if not isinstance(response, dict) or not isinstance(response.get("ok"), bool):
         raise HubResultUnknown(f"the desk hub gave no answer; {RESULT_UNKNOWN}")
     return response
 
