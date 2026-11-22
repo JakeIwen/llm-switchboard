@@ -1,13 +1,16 @@
 from dataclasses import replace
 import json
+import os
 import shlex
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from llm_switchboard.desk.config import PORT_ENV, DeskConfig
 from llm_switchboard.desk.enrollment import Enrollment
+from llm_switchboard.desk.model import MAX_DESK_FILE_BYTES
 
 from llm_switchboard.live_registry import LiveProcess
 from llm_switchboard.paths import MANAGED_ENV_VAR
@@ -99,6 +102,35 @@ class SupervisorTest(unittest.TestCase):
                 sup.reconcile()
                 self.assertEqual(len(self.tmux.started), before + 1)
                 self.assertNotIn("--mcp-config", self.tmux.started[-1][1])
+
+    def test_an_enrollment_fifo_or_oversize_file_never_stalls_a_launch(self):
+        config = DeskConfig.from_env()
+        Enrollment(config.enrolled_file).enroll(SID, self.clock())
+        self.store.set_enabled(SID, True)
+        self.sup.reconcile()
+        self.assertIn("--mcp-config", self.tmux.started[-1][1])
+        # A valid enrollment, padded past the cap with JSON whitespace.
+        oversize = json.dumps({"sessions": {SID: {"since": 1}}}) + " " * MAX_DESK_FILE_BYTES
+        for name, replace_file in (("FIFO with no writer", lambda: os.mkfifo(config.enrolled_file)),
+                                   ("oversize", lambda: config.enrolled_file.write_text(oversize))):
+            with self.subTest(name):
+                config.enrolled_file.unlink()
+                replace_file()
+                before = len(self.tmux.started)
+                self.sup.request_restart(SID)
+                self._reconcile_within(5)
+                self.assertEqual(len(self.tmux.started), before + 1)
+                self.assertNotIn("--mcp-config", self.tmux.started[-1][1])
+
+    def _reconcile_within(self, seconds):
+        """One pass on its own thread; a pass still blocked after `seconds` fails."""
+        done = threading.Event()
+        threading.Thread(target=lambda: (self.sup.reconcile(), done.set()), daemon=True).start()
+        if not done.wait(seconds):
+            path = DeskConfig.from_env().enrolled_file
+            # Release a reader stuck opening the FIFO, so the thread ends.
+            os.close(os.open(path, os.O_WRONLY | os.O_NONBLOCK))
+            self.fail(f"the launch pass was still blocked after {seconds} s")
 
     def test_custom_name_is_used_for_remote_control(self):
         self.store.set_enabled(SID, True)

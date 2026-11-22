@@ -1,6 +1,10 @@
 """Which sessions the desk may route to (`enrolled.json`) and whether sends
 are on (`desk-settings.json`). Both are small 0600 JSON files in the 0700
 config dir, shared by the hub and the operator CLI through `JsonFile`'s lock.
+They are read through `bounded_read` rather than `JsonFile.load`: the
+supervisor reads `enrolled.json` on every launch, and a FIFO or a huge file
+in its place must not stall its one thread (or an acknowledgement holding
+the file's lock); either reads as unreadable.
 
 The hub rereads them only when their mtime, size or inode changes, so an
 `llm-switchboard desk enroll|unenroll|sends` from the CLI is seen at the
@@ -34,7 +38,8 @@ import weakref
 
 from ..json_file import JsonFile
 from ..session_id import is_session_id
-from .model import MAX_ENROLLED, DeskError
+from .bounded_read import read_bounded
+from .model import MAX_DESK_FILE_BYTES, MAX_ENROLLED, DeskError
 
 log = logging.getLogger("llm_switchboard.desk")
 
@@ -128,7 +133,7 @@ class _CachedJson:
     def _load(self) -> tuple[dict, bool]:
         """The content, and whether it failed to read (then empty)."""
         try:
-            data = self.file.load()
+            data = self._read_json()
         except (OSError, ValueError, RecursionError):
             log.warning("desk: %s unreadable; treating it as empty", self.file.path.name)
             return {}, True
@@ -137,9 +142,13 @@ class _CachedJson:
             return {}, True
         return data, False
 
+    def _read_json(self):
+        raw = read_bounded(self.file.path, MAX_DESK_FILE_BYTES)
+        return {} if raw is None else json.loads(raw)
+
     def _load_for_edit(self) -> dict:
         try:
-            data = self.file.load()
+            data = self._read_json()
         except (OSError, ValueError, RecursionError) as exc:
             raise DeskError(503, f"{self.file.path.name} unreadable; not changed") from exc
         if not isinstance(data, dict) or not self._valid(data):

@@ -21,12 +21,13 @@ round trip passes.
 | `desk/model.py` | model | `RequestState`, `Registration`, request/ticket/token/pairing records, limits |
 | `desk/hub_state.py` | rules | The hub's in-memory state machine; clock and randomness injected, no I/O |
 | `desk/locks.py` | adapter | The target lock file (fsync before handoff; refuses on unreadable, oversize, malformed or full) |
-| `desk/enrollment.py` | adapter | `enrolled.json` (JsonFile) and `desk-settings.json` (`sends_enabled`) |
+| `desk/enrollment.py` | adapter | `enrolled.json` and `desk-settings.json` (`sends_enabled`): read through `bounded_read`, written and locked through `JsonFile` |
+| `desk/bounded_read.py` | adapter | `read_bounded`: one non-blocking open, no link followed, a regular file only, at most N bytes (absent vs. unreadable); shared by enrollment and `startup_registry` |
 | `desk/labels.py` | adapter | Target labels from a bounded, cached read of each transcript's head and tail |
 | `desk/peer.py` | rules + adapter | Channel identity: peer PID from the socket, `/proc` walk, session-file check and recheck; `process_presence` (whether a pid and start time still run), shared with locks and the startup acknowledgement |
 | `desk/startup_identity.py` | rules | Launch identity for the startup acknowledgement: `StartupRefusal` (reasons and statuses), argv, foreground and session-file rules, the view digest |
 | `desk/startup_ack.py` | adapter | The startup acknowledgement: reads the supervisor's tmux panes and `/proc`, lists blocked sessions, sends the one guarded Enter; one Enter per view; rate limits |
-| `desk/startup_registry.py` | adapter | The bounded, non-blocking read of claude's `sessions/<pid>.json` for the acknowledgement (absent vs. unreadable) |
+| `desk/startup_registry.py` | adapter | Claude's `sessions/<pid>.json` for the acknowledgement, through `read_bounded` (absent vs. unreadable) |
 | `desk/channel.py` | runtime | The channel server: MCP over stdio plus the hub socket client |
 | `desk/hub.py` | runtime | Wires the state, the channel socket, the operator socket and HTTPS |
 | `desk/http_server.py` | adapter | HTTPS (stdlib `ssl` + `ThreadingHTTPServer`), Host/Origin/token guards, long-poll |
@@ -51,8 +52,8 @@ All 0600 in 0700 directories.
 
 | Path (`DeskConfig`) | Content | Bound |
 | --- | --- | --- |
-| `config_dir/enrolled.json` | `{"sessions": {<session id>: {"since": <unix s>}}}` and nothing else; an unreadable file, or any key or record of another shape (a `null` record, an extra field), makes the whole file malformed: it reads as nobody enrolled, and enroll/unenroll refuse (503) to edit it | 64 sessions |
-| `config_dir/desk-settings.json` | `{"sends_enabled": false}` | fixed |
+| `config_dir/enrolled.json` | `{"sessions": {<session id>: {"since": <unix s>}}}` and nothing else; an unreadable file (anything but a regular file, such as a FIFO or a link, or over 64 KiB, counts as unreadable and is never waited on), or any key or record of another shape (a `null` record, an extra field), makes the whole file malformed: it reads as nobody enrolled, the supervisor launches without desk flags, the startup acknowledgement and enroll/unenroll refuse (503) | 64 sessions, 64 KiB |
+| `config_dir/desk-settings.json` | `{"sends_enabled": false}`; read the same bounded way, and anything unreadable reads as sends off | fixed, 64 KiB |
 | `config_dir/mcp.json` | The pinned MCP config (`desk install-config` writes it) | fixed |
 | `config_dir/tls/leaf.pem`, `leaf.key` | The hub's TLS leaf (from `scripts/desk-ca.sh`) | fixed |
 | `state_dir/locks.json` | Target locks, no prompt or reply content | 64 entries, 64 KiB |

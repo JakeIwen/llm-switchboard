@@ -37,6 +37,8 @@ MAX_ENROLLED = 64
 LOCK_ID_BYTES = 8
 # A full file of MAX_LOCKS entries is about 20 KiB; anything larger is not ours.
 MAX_LOCK_FILE_BYTES = 64 * 1024
+# enrolled.json at MAX_ENROLLED sessions is about 5 KiB, desk-settings.json one key.
+MAX_DESK_FILE_BYTES = 64 * 1024
 
 # Pairing.
 PAIR_TTL_SECONDS = 5 * 60
