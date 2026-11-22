@@ -48,6 +48,7 @@ class LightImportsTest(unittest.TestCase):
                 (["search", "--json", "amber"], "", 3, "search_cli"),
                 (["index"], "", 0, "search_indexer"),
                 (["settings"], "", 0, "settings_cli"),
+                (["desk", "flags"], "", 0, "desk.cli"),
             ]
             for args, stdin, code, module in cases:
                 with self.subTest(command=args[0]):

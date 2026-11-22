@@ -1,0 +1,276 @@
+"""The desk's HTTPS API through a real TLS client that trusts only a
+throwaway leaf: guards, headers, pairing, sends, long-polls and refusals."""
+
+import hashlib
+import http.client
+import os
+import secrets
+import socket
+import ssl
+import threading
+import time
+import unittest
+
+from desk_fixtures import (
+    SESSION_A, ChannelClient, FakePeer, HubCase, desk_config, install_cert, make_home, throwaway_cert,
+)
+
+from llm_switchboard.desk.http_server import STATIC_ROUTES, TlsSetupError
+from llm_switchboard.desk.hub import Hub
+from llm_switchboard.desk.model import MAX_BODY_BYTES, LockStoreError
+from llm_switchboard.desk.protocol import MessageType
+
+CSP = "default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+
+
+class FailingLockStore:
+    def load(self):
+        return []
+
+    def add(self, lock):
+        raise LockStoreError("lock file unwritable")
+
+    def remove(self, lock_id):
+        raise LockStoreError("lock file unwritable")
+
+
+class HttpCase(HubCase):
+    def assertDeskHeaders(self, headers):
+        self.assertEqual(headers["cache-control"], "no-store")
+        self.assertEqual(headers["x-content-type-options"], "nosniff")
+        self.assertEqual(headers["referrer-policy"], "no-referrer")
+        self.assertEqual(headers["content-security-policy"], CSP)
+        self.assertFalse([name for name in headers if name.startswith("access-control-")])
+
+    def registered_channel(self, session_id=SESSION_A):
+        client = ChannelClient(self.config.channel_socket, session_id)
+        self.addCleanup(client.close)
+        kind, welcome = client.first
+        self.assertIs(kind, MessageType.WELCOME)
+        return client, welcome["generation"]
+
+    def ticket(self, token, generation, session_id=SESSION_A):
+        status, _, body = self.call("POST", "/desk/api/ticket", {"session_id": session_id, "generation": generation,
+                                                                 "epoch": self.hub.epoch}, token=token)
+        self.assertEqual(status, 200, body)
+        return body["ticket"]
+
+
+class GuardTest(HttpCase):
+    def test_every_response_carries_the_security_headers_and_no_cors(self):
+        token = self.pair()
+        responses = [
+            self.call("GET", "/desk"),
+            self.call("GET", "/desk/nope"),
+            self.call("GET", "/desk/api/state", token=token),
+            self.call("GET", "/desk/api/state"),
+            self.call("POST", "/desk/pair/start", {"secret_hash": "bad"},
+                      headers={"Origin": "https://evil.example"}),
+            self.call("OPTIONS", "/desk/api/send", headers={"Origin": f"https://localhost:{self.port}",
+                                                           "Access-Control-Request-Method": "POST"}),
+        ]
+        for status, headers, _ in responses:
+            with self.subTest(status=status):
+                self.assertDeskHeaders(headers)
+
+    def test_host_origin_content_type_and_size_guards(self):
+        token = self.pair()
+        ok_body = {"secret_hash": "a" * 64}
+        cases = [
+            (("GET", "/desk"), {"headers": {"Host": f"127.0.0.1:{self.port}"}}, 403, "wrong host"),
+            (("GET", "/desk"), {"headers": {"Host": "localhost:1"}}, 403, "wrong host"),
+            (("POST", "/desk/pair/start", ok_body), {"headers": {"Origin": None}}, 403, "wrong origin"),
+            (("POST", "/desk/pair/start", ok_body), {"headers": {"Origin": f"http://localhost:{self.port}"}},
+             403, "wrong origin"),
+            (("POST", "/desk/pair/start", ok_body), {"headers": {"Content-Type": "text/plain"}},
+             400, "content type must be application/json"),
+            (("POST", "/desk/pair/start"), {"raw": b"x" * (MAX_BODY_BYTES + 1)}, 413, "body too large"),
+            (("POST", "/desk/pair/start"), {"raw": b"[1, 2]"}, 400, "bad json"),
+            (("POST", "/desk/api/ticket", {}), {}, 401, "unauthorized"),
+            (("POST", "/desk/api/ticket", {}), {"token": "not-a-token"}, 401, "unauthorized"),
+            (("GET", "/desk/api/state"), {"headers": {"Authorization": f"Basic {token}"}}, 401, "unauthorized"),
+            (("GET", "/desk/api/state?after=x"), {"token": token}, 400, "bad after"),
+        ]
+        for args, options, status, reason in cases:
+            with self.subTest(reason=reason, args=args[:2], options=str(options)[:60]):
+                got, _, body = self.call(*args, **options)
+                self.assertEqual((got, body), (status, {"error": reason}))
+
+    def test_static_files_are_a_fixed_list_with_their_content_types(self):
+        for path, (file, content_type) in STATIC_ROUTES.items():
+            with self.subTest(path=path):
+                if not file.exists():
+                    self.skipTest(f"{file.name} not written yet")
+                status, headers, body = self.call("GET", path)
+                self.assertEqual(status, 200)
+                self.assertEqual(headers["content-type"], content_type)
+        for path in ("/desk/", "/desk/hub.py", "/desk/static/app.js", "/desk/../desk/app.js", "/desk/index.html"):
+            with self.subTest(path=path):
+                self.assertEqual(self.call("GET", path)[0], 404)
+
+    def test_plain_http_gets_no_answer(self):
+        with socket.create_connection(("127.0.0.1", self.port), timeout=5) as raw:
+            raw.sendall(f"GET /desk HTTP/1.1\r\nHost: localhost:{self.port}\r\n\r\n".encode())
+            data = b""
+            try:
+                while chunk := raw.recv(4096):
+                    data += chunk
+            except (ConnectionResetError, TimeoutError):
+                pass
+        self.assertNotIn(b"HTTP/1", data)
+
+    def test_the_listener_is_loopback_only(self):
+        self.assertEqual(self.hub.http._server.server_address[0], "127.0.0.1")
+
+
+class TlsSetupTest(unittest.TestCase):
+    def test_refuses_to_start_without_the_leaf_or_with_a_readable_key(self):
+        config = desk_config(make_home(self))
+        hub = Hub(config, peer=FakePeer())
+        with self.assertRaisesRegex(TlsSetupError, "leaf.pem"):
+            hub.start()
+        install_cert(config)
+        os.chmod(config.tls_key, 0o644)
+        with self.assertRaisesRegex(TlsSetupError, "0600"):
+            Hub(config, peer=FakePeer()).start()
+        self.assertFalse(config.channel_socket.exists())
+
+
+class PairingHttpTest(HttpCase):
+    def test_claim_waits_for_the_operator_and_hands_out_the_token_once(self):
+        secret = secrets.token_hex(32)
+        _, _, started = self.call("POST", "/desk/pair/start", {"secret_hash": hashlib.sha256(secret.encode()).hexdigest()})
+        claim = {"pair_id": started["pair_id"], "secret": secret}
+        self.assertEqual(self.call("POST", "/desk/pair/claim", claim)[::2], (409, {"error": "not confirmed"}))
+        self.hub.handle_operator({"op": "pair", "code": started["code"]})
+        status, _, claimed = self.call("POST", "/desk/pair/claim", claim)
+        self.assertEqual(status, 200)
+        self.assertEqual(set(claimed), {"token", "expires_at"})
+        self.assertEqual(self.call("POST", "/desk/pair/claim", claim)[0], 404)
+        status, _, view = self.call("GET", "/desk/api/state", token=claimed["token"])
+        self.assertEqual(status, 200)
+        self.assertEqual(set(view), {"version", "epoch", "sends_enabled", "lock_store_error", "targets", "requests"})
+
+
+class SendHttpTest(HttpCase):
+    def test_round_trip_over_https_and_the_channel(self):
+        token = self.pair()
+        client, generation = self.registered_channel()
+        status, _, view = self.call("GET", "/desk/api/state", token=token)
+        [target] = [t for t in view["targets"] if t["session_id"] == SESSION_A]
+        self.assertEqual({k: target[k] for k in ("host", "enrolled", "registration", "generation", "lock")},
+                         {"host": "pi", "enrolled": True, "registration": "registered", "generation": generation,
+                          "lock": None})
+        self.assertEqual(target["label"], SESSION_A[:8])
+        ticket = self.ticket(token, generation)
+        for text, reason in (("/clear", "starts with a command character"), ("", "empty"),
+                             ("a‮b", "control character")):
+            got = self.call("POST", "/desk/api/send", {"ticket": ticket, "text": text}, token=token)
+            self.assertEqual(got[::2], (400, {"error": reason}))
+        status, _, sent = self.call("POST", "/desk/api/send", {"ticket": ticket, "text": "how is the build?"},
+                                    token=token)
+        self.assertEqual((status, sent["state"]), (200, "handed_off"))
+        kind, event = client.read()
+        self.assertTrue(event["content"].startswith("how is the build?"))
+        client.send(MessageType.REPLY, request_id=sent["request_id"], text="Green.", spoken="It is green.")
+        self.assertTrue(client.read()[1]["ok"])
+        _, _, view = self.call("GET", "/desk/api/state", token=token)
+        [request] = view["requests"]
+        self.assertEqual(request, {"request_id": sent["request_id"], "session_id": SESSION_A, "state": "answered",
+                                   "text": "how is the build?", "created": request["created"],
+                                   "reply": {"text": "Green.", "spoken": "It is green."}})
+        duplicate = self.call("POST", "/desk/api/send", {"ticket": ticket, "text": "how is the build?"}, token=token)
+        self.assertEqual(duplicate[::2], (409, {"error": "ticket already used"}))
+
+    def test_clear_enroll_and_unenroll_routes(self):
+        token = self.pair()
+        client, generation = self.registered_channel()
+        ticket = self.ticket(token, generation)
+        _, _, sent = self.call("POST", "/desk/api/send", {"ticket": ticket, "text": "hi"}, token=token)
+        lock = self.target(SESSION_A)["lock"]
+        self.assertEqual(self.call("POST", "/desk/api/clear", {"session_id": SESSION_A, "lock_id": "0" * 16},
+                                   token=token)[::2], (409, {"error": "lock id does not match"}))
+        self.assertEqual(self.call("POST", "/desk/api/clear", {"session_id": SESSION_A, "lock_id": lock["lock_id"]},
+                                   token=token)[::2], (200, {"cleared": True}))
+        other = "dddddddd-0000-4000-8000-000000000004"
+        self.assertEqual(self.call("POST", "/desk/api/enroll", {"session_id": other}, token=token)[::2],
+                         (200, {"session_id": other, "enrolled": True}))
+        self.assertTrue(self.target(other)["enrolled"])
+        self.assertEqual(self.call("POST", "/desk/api/unenroll", {"session_id": other}, token=token)[0], 200)
+        self.assertEqual(self.call("POST", "/desk/api/enroll", {"session_id": "nope"}, token=token)[0], 400)
+
+
+class SendsOffTest(HttpCase):
+    sends_enabled = False
+
+    def test_sends_are_refused_while_off(self):
+        token = self.pair()
+        _, generation = self.registered_channel()
+        ticket = self.ticket(token, generation)
+        got = self.call("POST", "/desk/api/send", {"ticket": ticket, "text": "hi"}, token=token)
+        self.assertEqual(got[::2], (403, {"error": "sends off"}))
+
+
+class LockStoreFailureHttpTest(HttpCase):
+    def setUp(self):
+        super().setUp()
+        self.hub.close()
+        self.hub = self.start_hub(lock_store=FailingLockStore())
+
+    def test_a_lock_write_failure_refuses_the_send_with_503_and_writes_nothing(self):
+        token = self.pair()
+        client, generation = self.registered_channel()
+        ticket = self.ticket(token, generation)
+        got = self.call("POST", "/desk/api/send", {"ticket": ticket, "text": "hi"}, token=token)
+        self.assertEqual(got[::2], (503, {"error": "lock file unwritable"}))
+        _, _, view = self.call("GET", "/desk/api/state", token=token)
+        self.assertEqual(view["lock_store_error"], "lock file unwritable")
+        self.assertEqual(view["requests"][0]["state"], "expired")
+        client.send(MessageType.PING)
+        self.assertIs(client.read()[0], MessageType.PONG)
+
+
+class LongPollTest(HttpCase):
+    long_poll_seconds = 20.0
+
+    def poll_async(self, token, after):
+        result = {}
+
+        def run():
+            result["response"] = self.call("GET", f"/desk/api/state?after={after}", token=token)
+            result["at"] = time.monotonic()
+        thread = threading.Thread(target=run, daemon=True)
+        thread.start()
+        return thread, result
+
+    def test_a_long_poll_returns_at_the_next_change(self):
+        token = self.pair()
+        _, _, view = self.call("GET", "/desk/api/state", token=token)
+        status, _, unchanged = self.call("GET", f"/desk/api/state?after={view['version'] + 100}", token=token)
+        self.assertEqual(unchanged["version"], view["version"])
+        thread, result = self.poll_async(token, view["version"])
+        time.sleep(0.2)
+        self.assertTrue(thread.is_alive())
+        self.registered_channel()
+        thread.join(5)
+        self.assertFalse(thread.is_alive())
+        status, _, changed = result["response"]
+        self.assertEqual(status, 200)
+        self.assertGreater(changed["version"], view["version"])
+
+    def test_a_revoked_tokens_waiting_long_poll_returns_401_promptly(self):
+        token = self.pair()
+        _, _, view = self.call("GET", "/desk/api/state", token=token)
+        thread, result = self.poll_async(token, view["version"])
+        time.sleep(0.2)
+        revoked_at = time.monotonic()
+        self.assertEqual(self.hub.handle_operator({"op": "revoke"}), {"ok": True, "revoked": 1})
+        thread.join(5)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(result["response"][::2], (401, {"error": "unauthorized"}))
+        self.assertLess(result["at"] - revoked_at, 2)
+        self.assertEqual(self.call("GET", "/desk/api/state", token=token)[0], 401)
+
+
+if __name__ == "__main__":
+    unittest.main()

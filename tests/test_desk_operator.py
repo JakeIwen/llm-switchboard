@@ -1,0 +1,305 @@
+"""The running hub over its channel and operator sockets: registration and
+refusal, dispatch, replies, rechecks, restarts with held locks, operator ops
+and the desk CLI."""
+
+import json
+import os
+from pathlib import Path
+import socket
+import stat
+import subprocess
+import sys
+import unittest
+
+from desk_fixtures import SESSION_A, SESSION_B, SESSION_C, HubCase, desk_config, make_home, wait_until
+
+from llm_switchboard.desk.enrollment import Enrollment
+from llm_switchboard.desk.model import DeskError
+from llm_switchboard.desk.operator import OperatorOp, SocketInUse, bind_private_socket, operator_request
+from llm_switchboard.desk.protocol import DELIVERY_SUFFIX, MAX_REPLY_TEXT_BYTES, MessageType, encode
+
+REPO = Path(__file__).resolve().parents[1]
+
+
+class ChannelHubCase(HubCase):
+    def operator(self, op, **fields):
+        return operator_request(self.config.operator_socket, op, **fields)
+
+    def registered(self, session_id):
+        client = self.channel(session_id)
+        kind, welcome = client.first
+        self.assertIs(kind, MessageType.WELCOME, welcome)
+        return client, welcome["generation"]
+
+    def send(self, session_id, generation, text="what changed?"):
+        ticket = self.hub.ticket({"session_id": session_id, "generation": generation, "epoch": self.hub.epoch})
+        return self.hub.send({"ticket": ticket["ticket"], "text": text})
+
+    def assertRefused(self, status, reason, call, *args):
+        with self.assertRaises(DeskError) as caught:
+            call(*args)
+        self.assertEqual((caught.exception.status, caught.exception.reason), (status, reason))
+
+
+class RegistrationTest(ChannelHubCase):
+    def test_welcome_carries_the_epoch_and_a_hub_issued_generation(self):
+        _, welcome = self.channel(SESSION_A).first
+        self.assertEqual(welcome["epoch"], self.hub.epoch)
+        self.assertEqual(self.target(SESSION_A)["registration"], "registered")
+        self.assertEqual(self.target(SESSION_A)["generation"], welcome["generation"])
+
+    def test_spoofed_identity_unenrolled_and_bad_hellos_are_refused_and_closed(self):
+        self.peer.refuse[SESSION_A] = "cmdline is not the pinned channel"
+        cases = [(SESSION_A, "cmdline is not the pinned channel"), (SESSION_C, "not enrolled"),
+                 ("../../etc", "bad hello")]
+        for session_id, reason in cases:
+            with self.subTest(reason=reason):
+                client = self.channel(session_id)
+                self.assertEqual(client.first, (MessageType.REFUSED, {"v": 1, "type": "refused", "reason": reason}))
+                self.assertEqual(client.read(), (None, {}))
+        self.assertEqual(self.target(SESSION_A)["registration"], "none")
+        self.assertEqual(self.operator(OperatorOp.STATUS)["registrations"], [])
+
+    def test_two_connections_for_one_session_are_ambiguous_until_one_leaves(self):
+        first, generation = self.registered(SESSION_A)
+        second, later = self.registered(SESSION_A)
+        self.assertEqual(self.target(SESSION_A)["registration"], "ambiguous")
+        for gen in (generation, later):
+            self.assertRefused(409, "ambiguous", self.hub.ticket,
+                               {"session_id": SESSION_A, "generation": gen, "epoch": self.hub.epoch})
+        first.close()
+        wait_until(lambda: self.target(SESSION_A)["registration"] == "registered")
+        self.assertEqual(self.send(SESSION_A, later)["state"], "handed_off")
+
+    def test_labels_come_from_the_transcript_title_else_the_folder(self):
+        project = self.home / ".claude" / "projects" / "-work-van"
+        project.mkdir(parents=True)
+        records = [{"type": "user", "cwd": "/work/van", "message": {"content": "first words"}},
+                   {"type": "custom-title", "customTitle": "Van wiring", "sessionId": SESSION_A}]
+        (project / f"{SESSION_A}.jsonl").write_text("".join(json.dumps(r, separators=(",", ":")) + "\n"
+                                                           for r in records))
+        self.assertEqual((self.target(SESSION_A)["label"], self.target(SESSION_A)["cwd"]), ("Van wiring", "/work/van"))
+        self.assertEqual(self.target(SESSION_B)["label"], SESSION_B[:8])
+
+    def test_the_real_peer_check_refuses_a_process_that_is_not_the_pinned_channel(self):
+        self.hub.close()
+        self.peer = None
+        self.hub = self.start_hub()
+        kind, refused = self.channel(SESSION_A).first
+        self.assertIs(kind, MessageType.REFUSED)
+        self.assertTrue(refused["reason"])
+        self.assertEqual(self.target(SESSION_A)["registration"], "none")
+
+    def test_ping_gets_pong_and_a_bad_frame_drops_the_connection(self):
+        client, _ = self.registered(SESSION_A)
+        client.send(MessageType.PING)
+        self.assertEqual(client.read()[0], MessageType.PONG)
+        client.send_raw(b"not json\n")
+        self.assertEqual(client.read(), (None, {}))
+        wait_until(lambda: self.target(SESSION_A)["registration"] == "none")
+
+    def test_a_stale_socket_file_is_replaced_but_a_live_one_is_not(self):
+        with self.assertRaises(SocketInUse):
+            bind_private_socket(self.config.channel_socket)
+        stale = self.config.runtime_dir / "stale.sock"
+        leftover = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        leftover.bind(str(stale))
+        leftover.close()
+        listener = bind_private_socket(stale)
+        self.addCleanup(listener.close)
+        self.assertEqual(stat.S_IMODE(os.stat(stale).st_mode), 0o600)
+        self.assertEqual(stat.S_IMODE(os.stat(self.config.channel_socket).st_mode), 0o600)
+        self.assertEqual(stat.S_IMODE(os.stat(self.config.operator_socket).st_mode), 0o600)
+        self.assertEqual(stat.S_IMODE(os.stat(self.config.runtime_dir).st_mode), 0o700)
+
+
+class DispatchTest(ChannelHubCase):
+    def test_send_writes_the_event_and_the_first_valid_reply_wins(self):
+        client, generation = self.registered(SESSION_A)
+        other, _ = self.registered(SESSION_B)
+        sent = self.send(SESSION_A, generation, "what changed?")
+        request_id = sent["request_id"]
+        self.assertEqual(sent["state"], "handed_off")
+        self.assertTrue(request_id.startswith(self.hub.epoch + "."))
+        kind, event = client.read()
+        self.assertIs(kind, MessageType.EVENT)
+        self.assertEqual(event["content"], "what changed?" + DELIVERY_SUFFIX.format(request_id=request_id))
+        client.send(MessageType.DELIVERED, request_id=request_id)
+        replies = [
+            (other, {"request_id": request_id, "text": "x", "spoken": "x"}, "wrong connection"),
+            (client, {"request_id": "nope", "text": "x", "spoken": "x"}, "unknown request"),
+            (client, {"request_id": request_id, "text": "y" * (MAX_REPLY_TEXT_BYTES + 1), "spoken": "x"},
+             "reply too large"),
+            (client, {"request_id": request_id, "text": "the answer", "spoken": "Short."}, None),
+            (client, {"request_id": request_id, "text": "again", "spoken": "again"}, "request not outstanding"),
+        ]
+        for sender, fields, reason in replies:
+            with self.subTest(reason=reason):
+                sender.send(MessageType.REPLY, **fields)
+                kind, result = sender.read()
+                self.assertIs(kind, MessageType.REPLY_RESULT)
+                self.assertEqual((result["ok"], result["reason"]), (reason is None, reason))
+        [request] = [r for r in self.hub.state_view()["requests"] if r["request_id"] == request_id]
+        self.assertEqual(request["reply"], {"text": "the answer", "spoken": "Short."})
+        self.assertEqual(self.target(SESSION_A)["registration"], "verified")
+        self.assertIsNone(self.target(SESSION_A)["lock"])
+
+    def test_disconnect_after_handoff_leaves_an_unknown_locked_request(self):
+        client, generation = self.registered(SESSION_A)
+        request_id = self.send(SESSION_A, generation)["request_id"]
+        client.close()
+        wait_until(lambda: self.hub.state.request_state(request_id) == "unknown")
+        self.assertEqual(self.target(SESSION_A)["lock"]["request_id"], request_id)
+        _, generation = self.registered(SESSION_A)
+        self.assertRefused(409, "busy", self.hub.ticket,
+                           {"session_id": SESSION_A, "generation": generation, "epoch": self.hub.epoch})
+
+    def test_a_failed_recheck_turns_a_handed_off_request_unknown_and_keeps_its_lock(self):
+        client, generation = self.registered(SESSION_A)
+        request_id = self.send(SESSION_A, generation)["request_id"]
+        client.read()
+        # /clear: the session file now names another session.
+        self.peer.recheck_failures[SESSION_A] = "session file names another session"
+        self.hub.recheck_now()
+        self.assertEqual(self.hub.state.request_state(request_id), "unknown")
+        self.assertEqual(self.target(SESSION_A)["registration"], "none")
+        self.assertEqual(self.target(SESSION_A)["lock"]["request_id"], request_id)
+        self.assertEqual(client.read(), (None, {}))
+
+    def test_a_failed_dispatch_recheck_writes_nothing_and_expires_the_request(self):
+        client, generation = self.registered(SESSION_A)
+        ticket = self.hub.ticket({"session_id": SESSION_A, "generation": generation, "epoch": self.hub.epoch})
+        self.peer.recheck_failures[SESSION_A] = "parent start time changed"
+        self.assertRefused(409, "target changed; not sent", self.hub.send, {"ticket": ticket["ticket"], "text": "hi"})
+        [request] = self.hub.state_view()["requests"]
+        self.assertEqual(request["state"], "expired")
+        self.assertIsNone(self.target(SESSION_A)["lock"])
+        self.assertEqual(client.read(), (None, {}))
+
+    def test_unenroll_stops_routing_from_the_api_at_once_and_from_the_cli_at_the_next_recheck(self):
+        client, _ = self.registered(SESSION_A)
+        self.hub.unenroll({"session_id": SESSION_A})
+        self.assertNotIn(SESSION_A, [t["session_id"] for t in self.hub.state_view()["targets"]])
+        self.assertEqual(client.read(), (None, {}))
+        other, _ = self.registered(SESSION_B)
+        Enrollment(self.config.enrolled_file).unenroll(SESSION_B)
+        self.assertEqual(self.operator(OperatorOp.STATUS)["registrations"][0]["session_id"], SESSION_B)
+        self.hub.recheck_now()
+        self.assertEqual(self.operator(OperatorOp.STATUS)["registrations"], [])
+        self.assertEqual(other.read(), (None, {}))
+
+
+class RestartTest(ChannelHubCase):
+    def test_a_prompt_held_behind_a_dialog_survives_a_hub_restart_until_cleared_by_its_lock_id(self):
+        client, generation = self.registered(SESSION_A)
+        first = self.send(SESSION_A, generation)["request_id"]
+        client.read()
+        old_lock = self.target(SESSION_A)["lock"]["lock_id"]
+        client.send(MessageType.REPLY, request_id=first, text="ok", spoken="ok")
+        client.read()
+        held = self.send(SESSION_A, generation)["request_id"]
+        self.assertEqual(client.read()[0], MessageType.EVENT)
+        held_lock = self.target(SESSION_A)["lock"]["lock_id"]
+        # The event was written but never answered; the hub restarts.
+        old_epoch = self.hub.epoch
+        self.hub.close()
+        client.close()
+        self.hub = self.start_hub()
+        self.assertNotEqual(self.hub.epoch, old_epoch)
+        lock = self.target(SESSION_A)["lock"]
+        self.assertEqual((lock["lock_id"], lock["request_id"], lock["earlier_run"]), (held_lock, held, True))
+        client, generation = self.registered(SESSION_A)
+        ticket = {"session_id": SESSION_A, "generation": generation, "epoch": self.hub.epoch}
+        self.assertRefused(409, "busy", self.hub.ticket, ticket)
+        # The channel answering the earlier run's request is not this connection's request.
+        client.send(MessageType.REPLY, request_id=held, text="late", spoken="late")
+        self.assertEqual(client.read()[1]["reason"], "unknown request")
+        refused = self.operator(OperatorOp.CLEAR, session_id=SESSION_A, lock_id=old_lock)
+        self.assertEqual(refused, {"ok": False, "error": "lock id does not match"})
+        self.assertRefused(409, "busy", self.hub.ticket, ticket)
+        self.assertEqual(self.operator(OperatorOp.CLEAR, session_id=SESSION_A, lock_id=held_lock),
+                         {"ok": True, "cleared": True})
+        self.assertEqual(self.send(SESSION_A, generation)["state"], "handed_off")
+
+
+class OperatorTest(ChannelHubCase):
+    def test_status_lists_ids_and_never_text(self):
+        token = self.pair()
+        client, generation = self.registered(SESSION_A)
+        self.send(SESSION_A, generation, "secret prompt words")
+        status = self.operator(OperatorOp.STATUS)
+        self.assertTrue(status["ok"])
+        self.assertEqual(status["epoch"], self.hub.epoch)
+        self.assertEqual([r["session_id"] for r in status["registrations"]], [SESSION_A])
+        self.assertEqual(len(status["locks"]), 1)
+        self.assertEqual(len(status["tokens"]), 1)
+        self.assertEqual(status["enrolled"], sorted([SESSION_A, SESSION_B]))
+        dumped = json.dumps(status)
+        self.assertNotIn("secret prompt", dumped)
+        self.assertNotIn(token, dumped)
+
+    def test_sends_persist_and_revoke_one_or_all(self):
+        self.assertEqual(self.operator(OperatorOp.SENDS, enabled=False), {"ok": True, "sends_enabled": False})
+        self.assertEqual(json.loads(self.config.settings_file.read_text()), {"sends_enabled": False})
+        self.assertFalse(self.hub.state_view()["sends_enabled"])
+        self.assertFalse(self.operator(OperatorOp.SENDS, enabled="yes")["ok"])
+        tokens = [self.pair(), self.pair()]
+        first_id = self.operator(OperatorOp.STATUS)["tokens"][0]["token_id"]
+        self.assertEqual(self.operator(OperatorOp.REVOKE, token_id=first_id)["revoked"], 1)
+        self.assertFalse(self.hub.authenticate(tokens[0]))
+        self.assertTrue(self.hub.authenticate(tokens[1]))
+        self.assertEqual(self.operator(OperatorOp.REVOKE)["revoked"], 1)
+        self.assertFalse(self.hub.authenticate(tokens[1]))
+
+    def test_unknown_ops_and_bad_lines_are_refused(self):
+        self.assertEqual(self.hub.handle_operator({"op": "shutdown"}), {"ok": False, "error": "unknown op"})
+        raw = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        raw.settimeout(5)
+        raw.connect(str(self.config.operator_socket))
+        raw.sendall(b"[1,2]\n")
+        self.assertEqual(json.loads(raw.makefile("rb").readline()), {"ok": False, "error": "bad request"})
+        raw.close()
+        self.assertEqual(self.operator(OperatorOp.PAIR, code="ZZZ-ZZZ"), {"ok": False, "error": "no such pairing"})
+
+
+class DeskCliTest(unittest.TestCase):
+    def run_cli(self, home, *args):
+        env = {**os.environ, "HOME": str(home), "XDG_CONFIG_HOME": "", "XDG_STATE_HOME": "",
+               "XDG_RUNTIME_DIR": "", "LLM_SWITCHBOARD_DESK_PORT": ""}
+        return subprocess.run([sys.executable, "-m", "llm_switchboard", "desk", *args], cwd=REPO, env=env,
+                              capture_output=True, text=True, timeout=30)
+
+    def test_file_commands_work_without_a_hub(self):
+        home = make_home(self)
+        config = desk_config(home)
+        flags = self.run_cli(home, "flags")
+        self.assertEqual(flags.returncode, 0, flags.stderr)
+        self.assertEqual(flags.stdout.split(), [*config.launch_flags])
+        installed = self.run_cli(home, "install-config")
+        self.assertEqual(installed.returncode, 0, installed.stderr)
+        self.assertEqual(stat.S_IMODE(os.stat(config.mcp_config).st_mode), 0o600)
+        argv = config.channel_argv
+        self.assertEqual(json.loads(config.mcp_config.read_text()),
+                         {"mcpServers": {"desk": {"command": argv[0], "args": list(argv[1:])}}})
+        self.assertEqual(self.run_cli(home, "enroll", SESSION_A).returncode, 0)
+        self.assertTrue(Enrollment(config.enrolled_file).is_enrolled(SESSION_A))
+        self.assertEqual(self.run_cli(home, "enroll", "bogus").returncode, 1)
+        self.assertEqual(self.run_cli(home, "unenroll", SESSION_A).returncode, 0)
+        self.assertFalse(Enrollment(config.enrolled_file).is_enrolled(SESSION_A))
+        status = self.run_cli(home, "status")
+        self.assertEqual(status.returncode, 3)
+        self.assertIn("not running", status.stderr)
+        sends = self.run_cli(home, "sends", "on")
+        self.assertEqual(sends.returncode, 0, sends.stderr)
+        self.assertEqual(json.loads(config.settings_file.read_text()), {"sends_enabled": True})
+
+    def test_serve_refuses_to_start_without_the_tls_leaf(self):
+        home = make_home(self)
+        served = self.run_cli(home, "serve")
+        self.assertNotEqual(served.returncode, 0)
+        self.assertIn("leaf.pem", served.stderr)
+        self.assertFalse(desk_config(home).channel_socket.exists())
+
+
+if __name__ == "__main__":
+    unittest.main()
