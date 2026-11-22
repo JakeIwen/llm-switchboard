@@ -8,7 +8,8 @@ set -eu -o pipefail
 repo=$1
 env_file=$2
 unit_dir="$HOME/.config/systemd/user"
-desk_dir="$HOME/.config/llm-switchboard/desk"
+# Same root as DeskConfig.config_dir: an empty XDG_CONFIG_HOME counts as unset.
+desk_dir="${XDG_CONFIG_HOME:-$HOME/.config}/llm-switchboard/desk"
 tls_dir="$desk_dir/tls"
 applied_file="$desk_dir/adb-link.applied"  # line 1 serial, line 2 checksum of bin/desk-adb-link
 mkdir -p "$unit_dir" "$desk_dir"

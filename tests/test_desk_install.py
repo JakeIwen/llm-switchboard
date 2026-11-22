@@ -60,7 +60,7 @@ class DeskInstallTest(unittest.TestCase):
         self.repo = self.root / "repo"
         self.copy_repo_files(self.repo)
         self.local_env = self.repo / "local.env"
-        tls = self.home / ".config/llm-switchboard/desk/tls"
+        tls = Path(self.env["XDG_CONFIG_HOME"]) / "llm-switchboard/desk/tls"  # where the hub reads it
         tls.mkdir(parents=True)
         (tls / "leaf.pem").write_text("pem")
         (tls / "leaf.key").write_text("key")
@@ -148,7 +148,7 @@ class DeskInstallTest(unittest.TestCase):
         self.assertIn("Tablet link not enabled", again.stdout)
 
     def test_missing_leaf_leaves_hub_alone_and_says_why(self):
-        (self.home / ".config/llm-switchboard/desk/tls/leaf.key").unlink()
+        (Path(self.env["XDG_CONFIG_HOME"]) / "llm-switchboard/desk/tls/leaf.key").unlink()
         self.set_serial("")
         result = self.desk_units()
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -162,7 +162,7 @@ class DeskInstallTest(unittest.TestCase):
         copy = self.repo
         (copy / "local.env").write_text("DESK_ADB_SERIAL=TAB1\n")
         result = subprocess.run([str(copy / "install.sh")], env=self.env, capture_output=True,
-                                text=True, timeout=120, check=False)
+                                text=True, timeout=120, check=False, cwd=copy)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         calls = self.calls()
         self.assertIn("--user enable --now llm-switchboard.service", calls)
@@ -175,12 +175,44 @@ class DeskInstallTest(unittest.TestCase):
     def test_install_sh_writes_nothing_outside_the_fixture(self):
         before = subprocess.run(["git", "status", "--porcelain"], cwd=REPO, capture_output=True,
                                 text=True, check=True).stdout
+        sentinel = self.root / "sentinel-config"
+        (sentinel / "llm-switchboard/desk").mkdir(parents=True)
+        (sentinel / "llm-switchboard/desk/mcp.json").write_text("untouched")
         self.test_install_sh_runs_the_picker_steps_then_the_desk_reconcile()
+        mcp = Path(self.env["XDG_CONFIG_HOME"]) / "llm-switchboard/desk/mcp.json"
+        self.assertTrue(mcp.is_file(), "install-config must land in the fixture XDG root")
+        self.assertIn(str(self.repo), mcp.read_text())
+        self.assertNotIn(str(REPO), mcp.read_text())
+        self.assertEqual((sentinel / "llm-switchboard/desk/mcp.json").read_text(), "untouched")
+        self.assertEqual(sorted(p.name for p in sentinel.rglob("*")), ["desk", "llm-switchboard", "mcp.json"])
         after = subprocess.run(["git", "status", "--porcelain"], cwd=REPO, capture_output=True,
                                text=True, check=True).stdout
         self.assertEqual(before, after)
         for path in self.root.rglob("*"):
             self.assertTrue(path.is_relative_to(self.root))
+
+    def test_leaf_under_a_non_default_xdg_config_home_keeps_the_hub_running(self):
+        # The leaf exists only under XDG_CONFIG_HOME (setUp), never under HOME/.config.
+        self.assertFalse((self.home / ".config/llm-switchboard/desk/tls/leaf.pem").exists())
+        self.set_serial("")
+        self.desk_units()
+        self.clear_calls()
+        result = self.desk_units()
+        self.assertIn(f"--user restart {HUB}", self.calls())
+        self.assertNotIn(f"--user disable --now {HUB}", self.calls())
+        self.assertNotIn("not enabled", result.stderr)
+
+    def test_without_xdg_config_home_the_leaf_is_found_under_home(self):
+        env = {k: v for k, v in self.env.items() if k != "XDG_CONFIG_HOME"}
+        tls = self.home / ".config/llm-switchboard/desk/tls"
+        tls.mkdir(parents=True)
+        (tls / "leaf.pem").write_text("pem")
+        (tls / "leaf.key").write_text("key")
+        self.set_serial("")
+        self.env = env
+        result = self.desk_units()
+        self.assertIn(f"--user enable --now {HUB}", self.calls())
+        self.assertNotIn("not enabled", result.stderr)
 
     def test_fixture_repo_has_no_symlinks(self):
         self.assertEqual([p for p in self.repo.rglob("*") if p.is_symlink()], [])
@@ -189,7 +221,7 @@ class DeskInstallTest(unittest.TestCase):
         self.set_serial("")
         self.desk_units()
         self.assertTrue((self.fake / "active" / HUB).exists())
-        (self.home / ".config/llm-switchboard/desk/tls/leaf.key").unlink()
+        (Path(self.env["XDG_CONFIG_HOME"]) / "llm-switchboard/desk/tls/leaf.key").unlink()
         self.clear_calls()
         self.desk_units()
         self.assertIn(f"--user disable --now {HUB}", self.calls())
