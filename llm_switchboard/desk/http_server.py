@@ -269,7 +269,7 @@ class _DeskHandler(BaseHTTPRequestHandler):
             raise DeskError(400, "truncated body")
         try:
             body = json.loads(raw)
-        except (ValueError, UnicodeDecodeError):
+        except (ValueError, RecursionError):
             raise DeskError(400, "bad json") from None
         if not isinstance(body, dict):
             raise DeskError(400, "bad json")

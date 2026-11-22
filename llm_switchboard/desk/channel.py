@@ -361,7 +361,7 @@ class McpServer:
     def handle_line(self, line: bytes) -> None:
         try:
             message = json.loads(line)
-        except ValueError:
+        except (ValueError, RecursionError):
             return
         if not isinstance(message, dict) or not isinstance(message.get("method"), str):
             return

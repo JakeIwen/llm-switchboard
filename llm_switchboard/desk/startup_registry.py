@@ -44,7 +44,9 @@ def read_session_entry(sessions_dir: Path, pid: int) -> tuple[bool, dict | None]
         return StartupRefusal.SESSION_FILE_UNREADABLE
     try:
         entry = json.loads(data)
-    except ValueError:
+    except (ValueError, RecursionError):
+        # Claude writes this file: deep nesting under the size cap still
+        # overflows the parser, and is no more a session entry than bad JSON.
         return True, None
     return True, entry if isinstance(entry, dict) else None
 

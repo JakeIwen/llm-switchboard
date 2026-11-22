@@ -113,7 +113,7 @@ def process_presence(proc_dir: Path, pid: int, start: str) -> ChannelProcess:
 def read_session_file(sessions_dir: Path, pid: int) -> dict | None:
     try:
         entry = json.loads((Path(sessions_dir) / f"{pid}.json").read_text())
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return None
     return entry if isinstance(entry, dict) else None
 

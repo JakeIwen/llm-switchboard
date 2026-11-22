@@ -173,7 +173,7 @@ class OperatorServer:
                 message = json.loads(line)
                 if not isinstance(message, dict):
                     raise ValueError("not an object")
-            except (OSError, FrameError, ValueError):
+            except (OSError, FrameError, ValueError, RecursionError):
                 _send(conn, {"ok": False, "error": "bad request"})
                 return
             try:
@@ -214,7 +214,7 @@ def operator_request(path: Path, op: OperatorOp, timeout: float = OPERATOR_TIMEO
         client.close()
     try:
         response = json.loads(line) if line else None
-    except ValueError:
+    except (ValueError, RecursionError):
         response = None
     # Only an answer saying whether it was applied acknowledges the request.
     if not isinstance(response, dict) or not isinstance(response.get("ok"), bool):

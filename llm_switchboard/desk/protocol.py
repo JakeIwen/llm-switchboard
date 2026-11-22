@@ -64,7 +64,7 @@ def decode(line: bytes) -> tuple[MessageType, dict]:
         raise FrameError("line too long")
     try:
         message = json.loads(line)
-    except (ValueError, UnicodeDecodeError) as exc:
+    except (ValueError, RecursionError) as exc:
         raise FrameError("not JSON") from exc
     if not isinstance(message, dict) or message.get("v") != PROTOCOL_VERSION:
         raise FrameError("wrong version or shape")

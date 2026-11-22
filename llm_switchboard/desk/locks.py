@@ -130,7 +130,7 @@ def _fsync_dir(directory: Path) -> None:
 def _parse(raw: bytes, max_locks: int) -> list[Lock]:
     try:
         data = json.loads(raw)
-    except (ValueError, UnicodeDecodeError) as exc:
+    except (ValueError, RecursionError) as exc:
         raise ValueError("not JSON") from exc
     if not isinstance(data, dict) or data.get("version") != FILE_VERSION or not isinstance(data.get("locks"), list):
         raise ValueError("wrong shape")

@@ -39,7 +39,7 @@ def encodable(value: str) -> str:
 
 
 def _record(line: bytes) -> dict:
-    with contextlib.suppress(ValueError, UnicodeDecodeError):
+    with contextlib.suppress(ValueError, RecursionError):
         value = json.loads(line)
         if isinstance(value, dict):
             return value
@@ -140,7 +140,7 @@ class SessionLabels:
         return max(candidates)[1] if candidates else None
 
     def _session_cwd(self, claude_pid: int) -> str:
-        with contextlib.suppress(OSError, ValueError, TypeError, AttributeError):
+        with contextlib.suppress(OSError, ValueError, RecursionError, TypeError, AttributeError):
             with open(self.sessions_dir / f"{int(claude_pid)}.json", "rb") as f:
                 return str(json.loads(f.read(_MAX_SESSION_FILE_BYTES)).get("cwd") or "")
         return ""
