@@ -18,7 +18,9 @@ from llm_switchboard.desk.protocol import MessageType
 
 REPO = Path(__file__).resolve().parents[1]
 PYTHON = REPO / ".venv" / "bin" / "python"
-TIMEOUT = 10
+# Every wait below is a bound that only matters on failure; it is generous so a loaded
+# machine (a live Claude session beside the suite) does not turn slowness into a failure.
+TIMEOUT = 30
 
 
 def wait_for(condition, what="condition"):
