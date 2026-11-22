@@ -43,7 +43,7 @@ def live_processes(registry_dir: Path = LIVE_REGISTRY_DIR, proc_dir: Path = Path
                 session_id=str(entry.get("sessionId", "")),
                 cwd=str(entry.get("cwd", "")),
                 status=str(entry.get("status", "")),
-                managed_for=_managed_for(proc),
+                managed_for=managed_for(proc),
                 rss_kb=_rss_kb(proc),
                 remote_control=bool(entry.get("bridgeSessionId")),
             )
@@ -64,7 +64,9 @@ def _same_process(proc: Path, proc_start) -> bool:
     return fields[19] == str(proc_start)
 
 
-def _managed_for(proc: Path) -> str | None:
+def managed_for(proc: Path) -> str | None:
+    """The session id the supervisor launched this process for (its window's
+    MANAGED_ENV_VAR, inherited from `tmux new-window -e`), else None."""
     try:
         environ = (proc / "environ").read_bytes()
     except OSError:
