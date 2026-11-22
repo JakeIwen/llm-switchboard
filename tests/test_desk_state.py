@@ -10,7 +10,7 @@ from desk_fixtures import (
     SESSION_A, SESSION_B, Clock, FakeIdentity, desk_config, make_home, request_id, token_for,
 )
 
-from llm_switchboard.desk.hub_state import HubState
+from llm_switchboard.desk.hub_state import CHANNEL_STILL_RUNNING, HubState
 from llm_switchboard.desk.locks import LockStore
 from llm_switchboard.desk.model import (
     MAX_LOCKS, MAX_PAIR_SECRET_FAILURES, MAX_REGISTRATIONS, MAX_REPLY_RING_BYTES, MAX_REQUEST_AGE_SECONDS,
@@ -264,17 +264,44 @@ class HandoffTest(StateCase):
         self.assertEqual(self.lock_file_ids(), [])
         self.assertTrue(other)
 
-    def test_a_disconnect_or_undeliverable_ends_the_delivery_and_the_request_stays_unknown(self):
-        for end in (lambda rid: self.state.drop_registration(1), lambda rid: self.state.mark_undeliverable(1, rid)):
-            self.state = self.new_state()
-            generation = self.state.register(1, SESSION_A, identity(SESSION_A))
-            request = self.begin(self.state, self.ticket(self.state, SESSION_A, generation), "hi")
-            self.state.hand_off(request.request_id)
-            self.state.finish_write(request.request_id, True)
-            lock_id = self.target(self.state, SESSION_A)["lock"]["lock_id"]
-            end(request.request_id)
-            self.assertEqual(self.state.request_state(request.request_id), "unknown")
-            self.state.clear_lock(SESSION_A, lock_id)
+    def test_undeliverable_ends_the_delivery_and_the_request_stays_unknown(self):
+        request = self.begin(self.state, self.ticket(self.state, SESSION_A, self.generation), "hi")
+        self.state.hand_off(request.request_id)
+        self.state.finish_write(request.request_id, True)
+        lock_id = self.target(self.state, SESSION_A)["lock"]["lock_id"]
+        self.state.mark_undeliverable(1, request.request_id)
+        self.assertEqual(self.state.request_state(request.request_id), "unknown")
+        # The channel said it wrote nothing: no need to ask whether it still runs.
+        self.state.clear_lock(SESSION_A, lock_id, lambda identity: self.fail("asked about the channel"))
+
+    def test_a_disconnect_before_any_report_holds_the_lock_while_that_channel_runs(self):
+        channel = identity(SESSION_A, pid=4242)
+        self.state = self.new_state()
+        generation = self.state.register(1, SESSION_A, channel)
+        request = self.begin(self.state, self.ticket(self.state, SESSION_A, generation), "hi")
+        self.state.hand_off(request.request_id)
+        self.state.finish_write(request.request_id, True)
+        lock_id = self.target(self.state, SESSION_A)["lock"]["lock_id"]
+        self.assertEqual(self.state.drop_registration(1), [request.request_id])
+        self.assertEqual(self.state.request_state(request.request_id), "unknown")
+        asked = []
+        alive = lambda seen: asked.append(seen) or True  # noqa: E731
+        self.assertRefused(409, CHANNEL_STILL_RUNNING, self.state.clear_lock, SESSION_A, lock_id, alive)
+        self.assertEqual(asked, [channel])
+        # Without a way to look, the hub can't prove the channel stopped.
+        self.assertRefused(409, CHANNEL_STILL_RUNNING, self.state.clear_lock, SESSION_A, lock_id)
+        # A new connection from the same session can't vouch for the old event.
+        self.state.register(2, SESSION_A, identity(SESSION_A, pid=5151))
+        self.assertFalse(self.state.mark_delivered(2, request.request_id))
+        self.assertRefused(409, CHANNEL_STILL_RUNNING, self.state.clear_lock, SESSION_A, lock_id, alive)
+        self.state.clear_lock(SESSION_A, lock_id, lambda seen: False)
+        self.assertEqual(self.lock_file_ids(), [])
+
+    def test_a_delivered_report_before_the_disconnect_needs_no_channel_check(self):
+        request_id, _ = self.handed_off(self.state, 1, SESSION_A, self.generation)
+        lock_id = self.target(self.state, SESSION_A)["lock"]["lock_id"]
+        self.state.drop_registration(1)
+        self.state.clear_lock(SESSION_A, lock_id, lambda identity: self.fail("asked about the channel"))
 
     def test_a_failed_event_write_makes_the_request_unknown_and_keeps_its_lock(self):
         request = self.begin(self.state, self.ticket(self.state, SESSION_A, self.generation), "hi")
@@ -283,7 +310,21 @@ class HandoffTest(StateCase):
         self.state.finish_write(request.request_id, False)
         self.assertEqual(self.state.request_state(request.request_id), "unknown")
         self.assertEqual(self.lock_file_ids(), [lock_id])
-        self.state.clear_lock(SESSION_A, lock_id)
+        # Part of the event may have reached a channel that is still running.
+        self.state.drop_registration(1)
+        self.assertRefused(409, CHANNEL_STILL_RUNNING, self.state.clear_lock, SESSION_A, lock_id,
+                           lambda seen: True)
+        self.state.clear_lock(SESSION_A, lock_id, lambda seen: False)
+
+    def test_an_event_with_no_connection_to_write_to_needs_no_channel_check(self):
+        request = self.begin(self.state, self.ticket(self.state, SESSION_A, self.generation), "hi")
+        self.state.hand_off(request.request_id)
+        lock_id = self.target(self.state, SESSION_A)["lock"]["lock_id"]
+        # The connection went away between handoff and the write.
+        self.state.drop_registration(1)
+        self.state.finish_write(request.request_id, False, attempted=False)
+        self.assertEqual(self.state.request_state(request.request_id), "unknown")
+        self.state.clear_lock(SESSION_A, lock_id, lambda identity: self.fail("asked about the channel"))
 
     def test_undeliverable_makes_the_request_unknown_and_keeps_its_lock(self):
         request_id, _ = self.handed_off(self.state, 1, SESSION_A, self.generation)

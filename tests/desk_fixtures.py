@@ -3,6 +3,7 @@ leaf, a fake peer verifier (no /proc needed), a manual clock and a channel
 client speaking the real socket protocol."""
 
 import atexit
+import dataclasses
 from dataclasses import dataclass
 import contextlib
 import hashlib
@@ -147,6 +148,8 @@ class FakePeer:
     def __init__(self):
         self.refuse: dict[str, str] = {}
         self.recheck_failures: dict[str, str] = {}
+        # The identity the next verified connection for a session gets, when set.
+        self.identities: dict[str, FakeIdentity] = {}
         self._pids = iter(range(5000, 6000))
 
     def socket_peer_pid(self, sock) -> int:
@@ -157,6 +160,8 @@ class FakePeer:
             raise self.PeerRefused(self.refuse[hello_session_id])
         if not is_enrolled(hello_session_id):
             raise self.PeerRefused("not enrolled")
+        if hello_session_id in self.identities:
+            return self.identities[hello_session_id]
         return FakeIdentity(pid, "1", pid + 1, "2", hello_session_id)
 
     def recheck(self, identity, config, is_enrolled):
@@ -199,6 +204,15 @@ class ChannelClient:
             self.sock.close()
 
 
+def write_fake_process(proc_dir: Path, pid: int, start: str) -> None:
+    """A /proc/<pid>/stat entry with `start` as field 22, as peer.read_process reads it."""
+    entry = Path(proc_dir) / str(pid)
+    entry.mkdir(parents=True, exist_ok=True)
+    fields = ["S", "1"] + ["0"] * 17 + [start, "0"]
+    (entry / "stat").write_text(f"{pid} (channel) " + " ".join(fields) + "\n")
+    (entry / "cmdline").write_bytes(b"channel\0")
+
+
 def enroll_file(config: DeskConfig, *session_ids: str) -> None:
     config.config_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     payload = {"sessions": {sid: {"since": 1} for sid in session_ids}}
@@ -215,7 +229,10 @@ class HubCase(unittest.TestCase):
     def setUp(self):
         from llm_switchboard.desk.enrollment import DeskSettings
         self.home = make_home(self)
-        self.config = desk_config(self.home)
+        # An empty process tree of its own: whether a dropped channel still
+        # runs never depends on the host's real /proc.
+        self.config = dataclasses.replace(desk_config(self.home), proc_dir=self.home / "proc")
+        self.config.proc_dir.mkdir()
         self.cert = install_cert(self.config)
         enroll_file(self.config, SESSION_A, SESSION_B)
         DeskSettings(self.config.settings_file).set_sends_enabled(self.sends_enabled)

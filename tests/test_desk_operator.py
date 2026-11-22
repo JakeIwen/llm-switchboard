@@ -2,6 +2,7 @@
 refusal, dispatch, replies, rechecks, restarts with held locks, operator ops
 and the desk CLI."""
 
+import dataclasses
 import json
 import os
 from pathlib import Path
@@ -14,18 +15,30 @@ import time
 import unittest
 from unittest import mock
 
-from desk_fixtures import SESSION_A, SESSION_B, SESSION_C, HubCase, desk_config, make_home, wait_until
+from desk_fixtures import (
+    SESSION_A, SESSION_B, SESSION_C, FakeIdentity, HubCase, desk_config, make_home, wait_until, write_fake_process,
+)
 
 from llm_switchboard.desk.enrollment import Enrollment
 from llm_switchboard.desk.hub import INVALID_ID_MARKER
+from llm_switchboard.desk.hub_state import CHANNEL_STILL_RUNNING
 from llm_switchboard.desk.labels import SessionLabels
 from llm_switchboard.desk.model import (
     LABEL_HEAD_BYTES, LABEL_TAIL_BYTES, MAX_OPERATOR_CONNECTIONS, MAX_OPERATOR_LINE_BYTES, DeskError,
 )
 from llm_switchboard.desk.operator import OperatorOp, SocketInUse, bind_private_socket, operator_request
+from llm_switchboard.desk.peer import read_process
 from llm_switchboard.desk.protocol import DELIVERY_SUFFIX, MAX_REPLY_TEXT_BYTES, MessageType, encode
 
 REPO = Path(__file__).resolve().parents[1]
+
+
+def run_desk_cli(home, *args):
+    """`llm-switchboard desk ...` as a separate process under this HOME."""
+    env = {**os.environ, "HOME": str(home), "XDG_CONFIG_HOME": "", "XDG_STATE_HOME": "",
+           "XDG_RUNTIME_DIR": "", "LLM_SWITCHBOARD_DESK_PORT": ""}
+    return subprocess.run([sys.executable, "-m", "llm_switchboard", "desk", *args], cwd=REPO, env=env,
+                          capture_output=True, text=True, timeout=30)
 
 
 class ChannelHubCase(HubCase):
@@ -257,6 +270,86 @@ class DeliveryGuardTest(ChannelHubCase):
                          {"ok": True, "cleared": True})
 
 
+class StuckChannelTest(ChannelHubCase):
+    """A channel blocked writing an event to Claude can't answer heartbeats;
+    the hub drops it at the idle timeout, but the process may still write the
+    event later, so its lock can't be cleared while that process runs."""
+
+    # Well above the few milliseconds from registration to the send.
+    IDLE_TIMEOUT = 2.0
+
+    def stuck_after_handoff(self, identity):
+        self.hub.close()
+        self.hub = self.start_hub(idle_timeout_seconds=self.IDLE_TIMEOUT)
+        self.peer.identities[SESSION_A] = identity
+        client, generation = self.registered(SESSION_A)
+        request_id = self.send(SESSION_A, generation)["request_id"]
+        self.assertIs(client.read()[0], MessageType.EVENT)
+        # The channel now stops reading and answering, its socket left open.
+        wait_until(lambda: self.hub.state.request_state(request_id) == "unknown", timeout=10)
+        self.assertEqual(self.target(SESSION_A)["registration"], "none")
+        lock = self.target(SESSION_A)["lock"]
+        self.assertEqual(lock["request_id"], request_id)
+        return {"session_id": SESSION_A, "lock_id": lock["lock_id"]}
+
+    def assertClearRefused(self, clear):
+        self.assertEqual(self.operator(OperatorOp.CLEAR, **clear), {"ok": False, "error": CHANNEL_STILL_RUNNING})
+        self.assertRefused(409, CHANNEL_STILL_RUNNING, self.hub.clear, clear, self.token)
+
+    def test_a_clear_waits_for_the_timed_out_channel_process_to_be_gone(self):
+        child = subprocess.Popen(["sleep", "60"])
+        self.addCleanup(child.wait)
+        self.addCleanup(child.kill)
+        # The process tree stands in for /proc; the child is the channel's pid.
+        write_fake_process(self.config.proc_dir, child.pid, "4242")
+        clear = self.stuck_after_handoff(FakeIdentity(child.pid, "4242", child.pid + 1, "2", SESSION_A))
+        self.assertClearRefused(clear)
+        # Another process reusing the pid (another start time) is not that channel.
+        write_fake_process(self.config.proc_dir, child.pid, "9999")
+        self.assertEqual(self.operator(OperatorOp.CLEAR, **clear), {"ok": True, "cleared": True})
+        self.assertIsNone(self.target(SESSION_A)["lock"])
+
+    @unittest.skipUnless(Path("/proc/self/stat").exists(), "needs /proc to see a real process's start time")
+    def test_a_clear_waits_for_a_real_channel_process_to_exit(self):
+        self.config = dataclasses.replace(self.config, proc_dir=Path("/proc"))
+        child = subprocess.Popen(["sleep", "60"])
+        self.addCleanup(child.wait)
+        self.addCleanup(child.kill)
+        record = read_process(Path("/proc"), child.pid)
+        clear = self.stuck_after_handoff(FakeIdentity(child.pid, record.start, child.pid + 1, "2", SESSION_A))
+        self.assertClearRefused(clear)
+        child.kill()
+        child.wait(timeout=10)
+        self.assertEqual(self.operator(OperatorOp.CLEAR, **clear), {"ok": True, "cleared": True})
+
+
+class OnlineEnrollmentCliTest(ChannelHubCase):
+    def test_cli_unenroll_goes_through_the_running_hub_and_stops_routing_at_once(self):
+        client, generation = self.registered(SESSION_A)
+        ticket = {"session_id": SESSION_A, "generation": generation, "epoch": self.hub.epoch}
+        self.assertTrue(self.hub.ticket(ticket, self.token))
+        done = run_desk_cli(self.home, "unenroll", SESSION_A)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("unenrolled", done.stdout)
+        # No recheck ran: the hub changed the file and its state together.
+        self.assertEqual(self.operator(OperatorOp.STATUS)["registrations"], [])
+        self.assertEqual(client.read(), (None, {}))
+        self.assertRefused(409, "not enrolled", self.hub.ticket, ticket, self.token)
+        self.assertFalse(Enrollment(self.config.enrolled_file).is_enrolled(SESSION_A))
+        again = run_desk_cli(self.home, "unenroll", SESSION_A)
+        self.assertEqual((again.returncode, again.stdout.split()[1:]), (0, ["was", "not", "enrolled"]))
+
+    def test_cli_enroll_goes_through_the_running_hub(self):
+        done = run_desk_cli(self.home, "enroll", SESSION_C)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn(f"{SESSION_C} enrolled", done.stdout)
+        self.assertTrue(self.target(SESSION_C)["enrolled"])
+        self.assertEqual(self.operator(OperatorOp.STATUS)["enrolled"], sorted([SESSION_A, SESSION_B, SESSION_C]))
+        refused = run_desk_cli(self.home, "enroll", "bogus")
+        self.assertEqual(refused.returncode, 1)
+        self.assertIn("bad session_id", refused.stderr)
+
+
 class ReplyRecheckTest(ChannelHubCase):
     def test_a_reply_after_the_session_changed_is_refused_and_keeps_the_lock(self):
         client, generation = self.registered(SESSION_A)
@@ -268,9 +361,10 @@ class ReplyRecheckTest(ChannelHubCase):
         client.send(MessageType.REPLY, request_id=request_id, text="answer", spoken="answer")
         kind, result = client.read()
         self.assertEqual((kind, result["ok"], result["reason"]), (MessageType.REPLY_RESULT, False, "session changed"))
+        # The hub refuses before it drops the registration: wait for the drop.
+        self.assertEqual(client.read(), (None, {}))
         self.assertEqual(self.hub.state.request_state(request_id), "unknown")
         self.assertEqual(self.target(SESSION_A)["lock"]["request_id"], request_id)
-        self.assertEqual(client.read(), (None, {}))
 
 
 class PreHandoffFailureTest(ChannelHubCase):
@@ -490,10 +584,7 @@ class OperatorAdmissionTest(ChannelHubCase):
 
 class DeskCliTest(unittest.TestCase):
     def run_cli(self, home, *args):
-        env = {**os.environ, "HOME": str(home), "XDG_CONFIG_HOME": "", "XDG_STATE_HOME": "",
-               "XDG_RUNTIME_DIR": "", "LLM_SWITCHBOARD_DESK_PORT": ""}
-        return subprocess.run([sys.executable, "-m", "llm_switchboard", "desk", *args], cwd=REPO, env=env,
-                              capture_output=True, text=True, timeout=30)
+        return run_desk_cli(home, *args)
 
     def test_file_commands_work_without_a_hub(self):
         home = make_home(self)

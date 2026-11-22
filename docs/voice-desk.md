@@ -89,7 +89,10 @@ retention.
   same single one. Reading the enrollment and settings files and publishing
   them into the state happen under one hub lock, which `desk sends` and the
   page's enroll/unenroll also hold while they write, so a slow read can't
-  publish a stale value over a newer change. Any failure before handoff,
+  publish a stale value over a newer change; the CLI's `desk enroll` and
+  `desk unenroll` go through the same lock on the operator socket while the
+  hub runs, so an unenroll that has returned is never overtaken by a
+  handoff that read the file before it. Any failure before handoff,
   expected or not, expires the pending request. One outstanding request per target: a target is **busy**
   while it has a lock. Answered, expired and unknown requests, with their
   reply text, are dropped 24 h after they finished (and beyond the last 20);
@@ -110,10 +113,18 @@ retention.
   that request's event write is still under way is refused with 409
   `delivery in progress`). The delivery stays in progress after the hub's
   socket write until that connection reports `delivered` (written to
-  Claude's stdin) or `undeliverable`, answers, or disconnects: a socket
-  write only means the channel has the event. A lost report resolves
-  through the disconnect (unknown), never as success; a channel stuck
-  writing to Claude keeps the lock unclearable until its session is stopped.
+  Claude's stdin) or `undeliverable`, or answers: a socket write only means
+  the channel has the event. When the connection goes away first (a
+  disconnect, a failed recheck, or the 45 s idle timeout of a channel
+  blocked writing to Claude, which can't answer heartbeats), or the hub's
+  event write fails part way, the request becomes unknown, never a success,
+  and the hub keeps that channel's identity (pid and start time) with the
+  lock in memory: a clear is refused with 409 `the session's channel is
+  still running; stop the session, then clear` while a process with that
+  pid and start time exists (read from `/proc`, as the recheck does), since
+  it may still write the event to Claude. Once it is gone, a clear works as
+  usual; an event never written (no connection left to write to) needs no
+  such check. A hub restart loses the identity, and `earlier_run` applies.
   Locks survive hub restarts; a locked target stays
   busy in the new epoch, shown as `unknown (earlier hub run)`, until cleared.
   An unreadable, oversize (over 64 KiB), corrupt, full or unwritable lock
@@ -170,7 +181,8 @@ JSON (`Content-Type: application/json`), at most 16 KiB, and need `Origin:
 https://localhost:<port>` exactly (`null` is refused). Errors are
 `{"error": "<reason>"}` with 400 (bad input), 401 (no or bad token), 403
 (refused: sends off, wrong origin), 404, 409 (state conflict: busy, stale
-ticket or generation, not enrolled, delivery in progress), 413, 429 (rate
+ticket or generation, not enrolled, delivery in progress, the session's
+channel still running), 413, 429 (rate
 limit) or 503 (lock store error, enrollment file unreadable).
 
 Unauthenticated:
@@ -213,8 +225,12 @@ while its request was in flight changes nothing):
 response `{ok, ...}`): `pair <code>`, `revoke [--token <id>]` (all tokens when
 no id), `status` (epoch, registrations, locks, token ids and expiry, sends
 flag), `clear <session id> <lock id>`, `sends on|off` (persisted in
-`desk-settings.json`). `enroll|unenroll <session id>` and `flags` (prints the
-launch flags) and `install-config` (writes `mcp.json`) work without the hub.
+`desk-settings.json`), `enroll|unenroll <session id>` (the hub edits
+`enrolled.json` and publishes it under its policy lock; unenroll drops the
+session's registrations at once). `sends`, `enroll` and `unenroll` edit their
+file directly when no hub answers, and the hub reads it at its next recheck
+or start. `flags` (prints the launch flags) and `install-config` (writes
+`mcp.json`) never need the hub.
 `serve` runs the hub. A request line is at most 4 KiB; at most 4 connections
 are served at once, and another gets `{"ok": false, "error": "busy"}` at once.
 

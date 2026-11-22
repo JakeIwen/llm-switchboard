@@ -7,8 +7,10 @@ Channel connections: the hub reads the peer PID from the socket, reads
 connection is rechecked before every dispatch and every 5 s; a failed
 recheck or a disconnect drops its registration, and a request handed to it
 becomes unknown (its lock stays), as does one the channel reports
-`undeliverable`. Peer verification is injected (`peer=`) so tests run
-without /proc; production imports `desk.peer` at start.
+`undeliverable`. A lock whose delivery the dropped channel never reported on
+can't be cleared while that channel process still runs (read from
+`config.proc_dir`, as the recheck does). Peer verification is injected
+(`peer=`) so tests run without /proc; production imports `desk.peer` at start.
 
 Logs carry ids and reasons only: a request id from the channel is logged
 only when it has the hub-issued shape, never as sent.
@@ -31,12 +33,13 @@ from .config import DeskConfig
 from .enrollment import DeskSettings, Enrollment, ensure_private_dir
 from .hub_state import HubState
 from .http_server import DeskHttpServer, make_tls_context
-from .labels import SessionLabels
+from .labels import SessionLabels, encodable
 from .locks import LockStore
 from .model import (
     HELLO_TIMEOUT_SECONDS, MAX_PENDING_CHANNEL_CONNECTIONS, RECHECK_SECONDS, DeskError, is_request_id,
 )
 from .operator import OperatorOp, OperatorServer, bind_private_socket
+from .peer import read_process
 from .protocol import (
     HEARTBEAT_SECONDS, IDLE_TIMEOUT_SECONDS, FrameError, MessageType, decode, encode, read_line,
 )
@@ -120,7 +123,8 @@ class Hub:
         self._operator_ops = {
             OperatorOp.PAIR: self._op_pair, OperatorOp.REVOKE: self._op_revoke,
             OperatorOp.STATUS: self._op_status, OperatorOp.CLEAR: self._op_clear,
-            OperatorOp.SENDS: self._op_sends,
+            OperatorOp.SENDS: self._op_sends, OperatorOp.ENROLL: self._op_enroll,
+            OperatorOp.UNENROLL: self._op_unenroll,
         }
 
     @property
@@ -196,12 +200,14 @@ class Hub:
         """Every target's label and folder, from bounded, cached transcript
         reads; never run by the state long-poll. Never raises: a transcript
         that can't be read labels its target by the session id instead of
-        stopping startup, a registration or the recheck loop."""
+        stopping startup, a registration or the recheck loop. Both fields are
+        made strict-UTF-8 encodable here too, since every snapshot carries them."""
         pids = {r.session_id: getattr(r.identity, "claude_pid", None) for r in self.state.registrations()}
         labels = {}
         for session_id in self.state.target_session_ids():
             try:
-                labels[session_id] = self.labels.describe(session_id, pids.get(session_id))
+                label, cwd = self.labels.describe(session_id, pids.get(session_id))
+                labels[session_id] = (encodable(str(label)), encodable(str(cwd)))
             except Exception as exc:
                 log.warning("desk: label for session %s failed: %s", session_id[:8], type(exc).__name__)
                 labels[session_id] = (session_id[:8], "")
@@ -421,14 +427,14 @@ class Hub:
             # keep the target busy (a no-op once it is no longer pending).
             self.state.expire_request(request.request_id)
             raise
-        written = False
+        written = attempted = False
         try:
             with self._connections_lock:
                 connection = self._connections.get(conn_id)
-            written = connection is not None and connection.send(
-                MessageType.EVENT, request_id=request.request_id, content=content)
+            attempted = connection is not None
+            written = attempted and connection.send(MessageType.EVENT, request_id=request.request_id, content=content)
         finally:
-            self.state.finish_write(request.request_id, written)
+            self.state.finish_write(request.request_id, written, attempted=attempted)
         if not written:
             self._drop_connection(conn_id, "event write failed")
         log.info("desk: request %s handed off to session %s", request.request_id, request.session_id[:8])
@@ -447,26 +453,54 @@ class Hub:
 
     def clear(self, body: dict, token: str) -> dict:
         with self.state.authorized(token):
-            self.state.clear_lock(body.get("session_id"), body.get("lock_id"))
+            self.state.clear_lock(body.get("session_id"), body.get("lock_id"), self._channel_alive)
         return {"cleared": True}
+
+    def _channel_alive(self, identity) -> bool:
+        """Whether the channel process a delivery was handed to still runs:
+        the same pid with the same start time, so a reused pid doesn't count."""
+        pid, start = getattr(identity, "channel_pid", None), getattr(identity, "channel_start", None)
+        if not isinstance(pid, int) or pid <= 0:
+            # Nothing to look up; the state refuses the clear without proof.
+            return True
+        record = read_process(self.config.proc_dir, pid)
+        return record is not None and record.start == start
 
     def enroll(self, body: dict, token: str) -> dict:
         session_id = body.get("session_id")
         with self._policy_lock, self.state.authorized(token):
-            self.enrollment.enroll(session_id, self._now())
-            self.refresh_files()
+            self._enroll(session_id)
         return {"session_id": session_id, "enrolled": True}
 
     def unenroll(self, body: dict, token: str) -> dict:
         session_id = body.get("session_id")
         with self._policy_lock, self.state.authorized(token):
-            self.enrollment.unenroll(session_id)
+            self._unenroll(session_id)
+        self._drop_unenrolled(session_id)
+        return {"session_id": session_id, "enrolled": False}
+
+    # Enrollment edits, from the page or the operator socket, run under the
+    # policy lock: a send's handoff rereads the file under it too, so an
+    # unenroll that has returned is never overtaken by a handoff that read
+    # the file before it.
+
+    def _enroll(self, session_id) -> bool:
+        with self._policy_lock:
+            added = self.enrollment.enroll(session_id, self._now())
             self.refresh_files()
-        # Routing stops at once, not at the next recheck.
+            return added
+
+    def _unenroll(self, session_id) -> bool:
+        with self._policy_lock:
+            removed = self.enrollment.unenroll(session_id)
+            self.refresh_files()
+            return removed
+
+    def _drop_unenrolled(self, session_id) -> None:
+        """Routing stops at once, not at the next recheck."""
         for registration in self.state.registrations():
             if registration.session_id == session_id:
                 self._drop_connection(registration.conn_id, "unenrolled")
-        return {"session_id": session_id, "enrolled": False}
 
     # -- the operator socket -----------------------------------------------------
 
@@ -494,8 +528,18 @@ class Hub:
         return {**self.state.status(), "enrolled": sorted(self.enrollment.sessions())}
 
     def _op_clear(self, message: dict) -> dict:
-        self.state.clear_lock(message.get("session_id"), message.get("lock_id"))
+        self.state.clear_lock(message.get("session_id"), message.get("lock_id"), self._channel_alive)
         return {"cleared": True}
+
+    def _op_enroll(self, message: dict) -> dict:
+        session_id = message.get("session_id")
+        return {"session_id": session_id, "enrolled": True, "changed": self._enroll(session_id)}
+
+    def _op_unenroll(self, message: dict) -> dict:
+        session_id = message.get("session_id")
+        removed = self._unenroll(session_id)
+        self._drop_unenrolled(session_id)
+        return {"session_id": session_id, "enrolled": False, "changed": removed}
 
     def _op_sends(self, message: dict) -> dict:
         enabled = message.get("enabled")

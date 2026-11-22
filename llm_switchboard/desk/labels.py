@@ -31,6 +31,13 @@ _SUMMARY = b'"type":"summary"'
 _MAX_SESSION_FILE_BYTES = 64 * 1024
 
 
+def encodable(value: str) -> str:
+    """`value` with anything strict UTF-8 can't encode (a lone surrogate from
+    a JSON escape) replaced, so one odd folder name can't break the state
+    snapshot every tablet reads."""
+    return value.encode("utf-8", "replace").decode("utf-8")
+
+
 def _record(line: bytes) -> dict:
     with contextlib.suppress(ValueError, UnicodeDecodeError):
         value = json.loads(line)
@@ -107,6 +114,7 @@ class SessionLabels:
                 title, cwd = read_title_and_cwd(path, key[2])
         if not cwd and claude_pid:
             cwd = self._session_cwd(claude_pid)
+        title, cwd = encodable(title), encodable(cwd)
         label = title or (Path(cwd).name if cwd else "") or session_id[:8]
         self._cache[session_id] = _Cached(path if key else None, key, label, cwd)
         self._cache.move_to_end(session_id)

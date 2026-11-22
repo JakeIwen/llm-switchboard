@@ -1,9 +1,10 @@
 """`llm-switchboard desk ...`: run the hub and operate it.
 
 A light command (`__main__._LIGHT_COMMANDS`): it never imports the HTTP
-stack. `pair`, `revoke`, `status`, `clear` and `sends` talk to the running
-hub over the operator socket; `enroll`, `unenroll`, `flags` and
-`install-config` work on files and need no hub.
+stack. `pair`, `revoke`, `status` and `clear` talk to the running hub over
+the operator socket. `sends`, `enroll` and `unenroll` go through the hub
+when it runs (so its sends see the change in order) and edit the file
+directly when it doesn't; `flags` and `install-config` work on files only.
 """
 
 import argparse
@@ -104,15 +105,34 @@ def _sends(args, config):
         return 0
 
 
+def _enrollment_change(config: DeskConfig, op: OperatorOp, session_id: str, edit_file) -> bool | None:
+    """Through the running hub, else by editing the file; whether anything
+    changed, or None when the hub refused (already printed)."""
+    try:
+        response = operator_request(config.operator_socket, op, session_id=session_id)
+    except HubUnavailable:
+        return edit_file()
+    if not response.get("ok"):
+        print(f"desk: {response.get('error', 'refused')}", file=sys.stderr)
+        return None
+    return bool(response.get("changed"))
+
+
 def _enroll(args, config):
-    added = Enrollment(config.enrolled_file).enroll(args.session_id, time.time())
+    added = _enrollment_change(config, OperatorOp.ENROLL, args.session_id,
+                               lambda: Enrollment(config.enrolled_file).enroll(args.session_id, time.time()))
+    if added is None:
+        return EXIT_REFUSED
     print(f"{args.session_id} {'enrolled' if added else 'was already enrolled'}; "
           "it takes effect at the session's next launch with the desk flags")
     return 0
 
 
 def _unenroll(args, config):
-    removed = Enrollment(config.enrolled_file).unenroll(args.session_id)
+    removed = _enrollment_change(config, OperatorOp.UNENROLL, args.session_id,
+                                 lambda: Enrollment(config.enrolled_file).unenroll(args.session_id))
+    if removed is None:
+        return EXIT_REFUSED
     print(f"{args.session_id} {'unenrolled' if removed else 'was not enrolled'}")
     return 0
 

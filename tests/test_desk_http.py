@@ -13,11 +13,13 @@ import unittest
 from unittest import mock
 
 from desk_fixtures import (
-    SESSION_A, SESSION_B, ChannelClient, FakePeer, HubCase, desk_config, install_cert, make_home, throwaway_cert,
+    SESSION_A, SESSION_B, ChannelClient, FakeIdentity, FakePeer, HubCase, desk_config, install_cert, make_home,
+    throwaway_cert,
 )
 
 from llm_switchboard.desk.http_server import STATIC_ROUTES, TlsSetupError
 from llm_switchboard.desk.hub import Hub
+from llm_switchboard.desk.labels import SessionLabels
 from llm_switchboard.desk.model import MAX_BODY_BYTES, LockStoreError
 from llm_switchboard.desk.protocol import MessageType
 
@@ -339,6 +341,45 @@ class LongPollTest(HttpCase):
         self.assertEqual(result["response"][::2], (401, {"error": "unauthorized"}))
         self.assertLess(result["at"] - revoked_at, 2)
         self.assertEqual(self.call("GET", "/desk/api/state", token=token)[0], 401)
+
+
+class UnencodableLabelTest(HttpCase):
+    """A folder name holding a lone surrogate (a JSON escape in a transcript
+    or session file) must not break the snapshot every tablet reads."""
+
+    # `\udc80` stays a JSON escape in the file, as Claude Code would write it.
+    BAD_CWD_JSON = '"/work/\\udc80"'
+
+    def assertStateServed(self):
+        status, _, view = self.call("GET", "/desk/api/state", token=self.pair())
+        self.assertEqual(status, 200, view)
+        [target] = [t for t in view["targets"] if t["session_id"] == SESSION_A]
+        target["cwd"].encode("utf-8")
+        target["label"].encode("utf-8")
+        return target
+
+    def test_a_transcript_cwd_with_a_lone_surrogate_is_served(self):
+        project = self.home / ".claude" / "projects" / "-work-x"
+        project.mkdir(parents=True)
+        (project / f"{SESSION_A}.jsonl").write_text('{"type":"system","cwd":' + self.BAD_CWD_JSON + '}\n')
+        self.assertEqual(SessionLabels(self.config).describe(SESSION_A), ("?", "/work/?"))
+        self.hub.recheck_now()
+        self.assertEqual(self.assertStateServed()["cwd"], "/work/?")
+
+    def test_a_session_file_cwd_with_a_lone_surrogate_is_served(self):
+        # No transcript: the folder comes from the session registry entry.
+        self.peer.identities[SESSION_A] = FakeIdentity(7001, "1", 7002, "2", SESSION_A)
+        self.config.claude_sessions_dir.mkdir(parents=True)
+        (self.config.claude_sessions_dir / "7002.json").write_text('{"cwd":' + self.BAD_CWD_JSON + '}')
+        self.assertEqual(SessionLabels(self.config).describe(SESSION_A, 7002), ("?", "/work/?"))
+        self.registered_channel()
+        self.assertEqual(self.assertStateServed()["cwd"], "/work/?")
+
+    def test_the_hub_cleans_whatever_the_label_reader_returns(self):
+        with mock.patch.object(SessionLabels, "describe", return_value=("bad \udc80 title", "/work/\udc80")):
+            self.hub.recheck_now()
+        target = self.assertStateServed()
+        self.assertEqual((target["label"], target["cwd"]), ("bad ? title", "/work/?"))
 
 
 if __name__ == "__main__":

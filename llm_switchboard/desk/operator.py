@@ -1,5 +1,6 @@
 """The operator socket (`DeskConfig.operator_socket`, 0600 in a 0700 dir) and
-its client, used by `llm-switchboard desk pair|revoke|status|clear|sends`.
+its client, used by `llm-switchboard desk
+pair|revoke|status|clear|sends|enroll|unenroll`.
 
 One request per connection: the client writes one JSON line `{op, ...}`, the
 hub answers one line `{ok, ...}` (`{ok: false, error}` on refusal) and
@@ -38,6 +39,8 @@ class OperatorOp(str, Enum):
     STATUS = "status"
     CLEAR = "clear"
     SENDS = "sends"
+    ENROLL = "enroll"
+    UNENROLL = "unenroll"
 
 
 class HubUnavailable(Exception):
