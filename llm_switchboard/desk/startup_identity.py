@@ -76,10 +76,13 @@ def refused(refusal: StartupRefusal) -> DeskError:
     return DeskError(_STATUS[refusal], refusal.value, _FIELDS.get(refusal))
 
 
-# Options that choose which conversation claude opens. Exactly one may
-# appear, and it must be one of SESSION_OPTIONS followed by the session id.
+# Options that choose which conversation claude opens (Claude Code
+# 2.1.330's `--help`: `-r` is `--resume`'s short form, `-c` `--continue`'s).
+# Exactly one may appear, and it must be one of SESSION_OPTIONS followed by
+# the session id.
 SESSION_OPTIONS = frozenset({"--resume", "--session-id"})
-_OTHER_SESSION_OPTIONS = frozenset({"-r", "-c", "--continue", "--fork-session", "--from-pr"})
+_SESSION_CHOOSERS = SESSION_OPTIONS | {"-r", "-c", "--continue", "--fork-session", "--from-pr", "--teleport",
+                                       "--cloud"}
 # The installer names each executable for its version (`2.1.330`).
 _VERSION_NAME = re.compile(r"[0-9]+(?:\.[0-9]+)+")
 
@@ -141,19 +144,33 @@ def foreground_claude(pane: ProcessRecord, children: list[ProcessRecord],
     return leader[0]
 
 
+def option_names(arg: str) -> frozenset[str]:
+    """Every option one argument may set, as Claude Code's parser could
+    read it: `--name=value` sets `--name`, and a single-dash argument may be
+    a cluster (`-cr`) or a short option with its value attached (`-r<id>`),
+    so each of its letters counts. Counting too many only refuses. Every
+    conflict and duplicate test goes through this, never the raw spelling."""
+    if arg.startswith("--"):
+        return frozenset({arg.split("=", 1)[0]}) if len(arg) > 2 else frozenset()
+    if arg.startswith("-") and len(arg) > 1:
+        return frozenset("-" + letter for letter in arg[1:])
+    return frozenset()
+
+
 def check_launch_argv(argv: tuple[str, ...], session_id: str, config: DeskConfig) -> StartupRefusal | None:
-    """Options end at `--` (what follows is a prompt). Before it: each
-    pinned flag exactly once, with its value as the next argument, and the
-    session id as the exact value of the one session-choosing option (never
-    a substring of one)."""
+    """Options end at `--` (what follows is a prompt). Before it, with every
+    argument's option names normalized (`option_names`): each pinned flag
+    set exactly once, in its bare form with its value as the next argument,
+    and exactly one session-choosing option, which is `--resume` or
+    `--session-id` in its bare form followed by exactly the session id."""
     options = argv[1:argv.index("--")] if "--" in argv else argv[1:]
+    names = [option_names(arg) for arg in options]
     flags = config.launch_flags
     for flag, value in zip(flags[::2], flags[1::2]):
-        at = [i for i, arg in enumerate(options) if arg == flag or arg.startswith(flag + "=")]
+        at = [i for i, found in enumerate(names) if flag in found]
         if len(at) != 1 or options[at[0]] != flag or options[at[0] + 1:at[0] + 2] != (value,):
             return StartupRefusal.MISSING_FLAG
-    choosers = [i for i, arg in enumerate(options) if arg in SESSION_OPTIONS or arg in _OTHER_SESSION_OPTIONS
-                or arg.startswith(("--resume=", "--session-id="))]
+    choosers = [i for i, found in enumerate(names) if found & _SESSION_CHOOSERS]
     if len(choosers) != 1:
         return StartupRefusal.WRONG_SESSION
     at = choosers[0]

@@ -387,14 +387,18 @@ must hold (`desk/startup_identity.py`, `desk/startup_ack.py`,
   running claude may still be an older version), and its environment
   carries the supervisor's `LLM_SWITCHBOARD_SESSION=<session id>` from
   `tmux new-window -e`. Another program named `claude` is refused.
-- Its options (argv up to a `--`; what follows is a prompt) carry
-  `--mcp-config <DeskConfig.mcp_config>` and
+- Its options (argv up to a `--`; what follows is a prompt) are compared by
+  name, never by spelling: `--name=value` sets `--name`, and every letter
+  of a single-dash argument counts as a short option (`-cr` is `-c` and
+  `-r`, `-r<id>` is `-r`), since Claude Code's parser reads them so.
+  They carry `--mcp-config <DeskConfig.mcp_config>` and
   `--dangerously-load-development-channels server:desk` each exactly once
-  (no second copy, no `--flag=value` form), with the value as the next
-  argument, and exactly one session-choosing option (`--resume`,
-  `--session-id`, `-r`, `-c`, `--continue`, `--fork-session`, `--from-pr`,
-  or `--resume=`/`--session-id=`), which is `--resume` or `--session-id`
-  followed by exactly this id (never a substring).
+  (no second copy in any spelling), in the bare form with the value as the
+  next argument, and exactly one session-choosing option (`--resume`/`-r`,
+  `--session-id`, `--continue`/`-c`, `--fork-session`, `--from-pr`,
+  `--teleport`, `--cloud`, from 2.1.330's `--help`), which is `--resume` or
+  `--session-id` in the bare form followed by exactly this id (never a
+  substring, never `=`).
 - `sessions/<pid>.json`, if it exists, is readable and names this session; a
   missing file is expected at this stage. Only a definitive "no such file"
   counts as missing: the file is opened once, without following a link and

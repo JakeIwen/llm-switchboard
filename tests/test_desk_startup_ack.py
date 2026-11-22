@@ -390,7 +390,22 @@ class RefusalTest(StartupCase):
             "--resume twice": (good + ("--resume", SESSION_A), StartupRefusal.WRONG_SESSION),
             "--resume and --session-id": (good + ("--session-id", SESSION_A), StartupRefusal.WRONG_SESSION),
             "--resume with no value": (("claude", *self.config.launch_flags, "--resume"), StartupRefusal.WRONG_SESSION),
+            "the channel flag with =": (base + (mcp, path, f"{channels}={server}"), StartupRefusal.MISSING_FLAG),
+            "a second channel flag with =": (good + (f"{channels}=server:other",), StartupRefusal.MISSING_FLAG),
         }
+        # Beside the approved `--resume <id>`, every other spelling of a
+        # session-choosing option is a second chooser.
+        for spelling in ("-c", "-r", f"-r{SESSION_B}", "-rc", "-pc", f"-r={SESSION_B}", "--continue",
+                         "--fork-session", "--from-pr", "--from-pr=123", f"--resume={SESSION_B}", "--resume=",
+                         f"--session-id={SESSION_A}", "--session-id", f"--teleport={SESSION_B}", "--teleport",
+                         "--cloud", "--cloud=x"):
+            cases[f"--resume <id> and {spelling}"] = (good + (spelling,), StartupRefusal.WRONG_SESSION)
+        # The approved chooser only in its exact two-argument form.
+        for spelling in ((f"--resume={SESSION_A}",), ("-r", SESSION_A), (f"-r{SESSION_A}",),
+                         (f"--session-id={SESSION_A}",)):
+            cases[f"only {' '.join(spelling)}"] = (("claude", *spelling, *self.config.launch_flags),
+                                                   StartupRefusal.WRONG_SESSION)
+        cases["--session-id <id>"] = (("claude", "--session-id", SESSION_A, *self.config.launch_flags), None)
         for name, (argv, refusal) in cases.items():
             with self.subTest(name):
                 self.assertEqual(check_launch_argv(argv, SESSION_A, self.config), refusal)
