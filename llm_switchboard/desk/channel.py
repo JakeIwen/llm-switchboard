@@ -121,21 +121,24 @@ class HubLink:
         try:
             self._send(sock, MessageType.REPLY, request_id=request_id, text=text, spoken=spoken)
         except OSError:
-            self._forget(request_id)
+            self._forget(request_id, waiter)
             return "not connected to the desk hub; the reply was not delivered"
         if not waiter["done"].wait(REPLY_WAIT_SECONDS):
-            self._forget(request_id)
-            self._reset_link(sock)
+            self._forget_and_reset_link(request_id, waiter, sock)
             return "the desk hub did not confirm the reply in time; delivery unconfirmed; the hub link was reset"
-        self._forget(request_id)
+        self._forget(request_id, waiter)
         return None if waiter["ok"] else (waiter["reason"] or "the desk hub refused the reply")
 
-    def _reset_link(self, sock: socket.socket) -> None:
+    def _forget_and_reset_link(self, request_id: str, waiter: dict, sock: socket.socket) -> None:
         """Drop the hub link after an uncertain reply. The hub's reply_result carries only
         the request id, so a late ack from this attempt could otherwise be taken for a
         retry's; the hub marks the request unknown on disconnect and refuses a retry
         from the new connection."""
+        # One critical section: a concurrent call must not register a waiter between
+        # removing ours and retiring the socket, or it would ride the doomed link.
         with self._lock:
+            if self._pending.get(request_id) is waiter:
+                del self._pending[request_id]
             if self._sock is sock:
                 self._sock, self._welcomed = None, False
         try:
@@ -145,9 +148,11 @@ class HubLink:
 
     # --- connection loop ---
 
-    def _forget(self, request_id: str) -> None:
+    def _forget(self, request_id: str, waiter: dict) -> None:
+        """Removes the call's own waiter only; a replacement under the same id stays."""
         with self._lock:
-            self._pending.pop(request_id, None)
+            if self._pending.get(request_id) is waiter:
+                del self._pending[request_id]
 
     def _send(self, sock: socket.socket, kind: MessageType, **fields) -> None:
         data = protocol.encode(kind, **fields)

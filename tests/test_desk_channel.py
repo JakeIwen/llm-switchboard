@@ -12,7 +12,7 @@ import time
 import unittest
 
 from llm_switchboard.desk import protocol
-from llm_switchboard.desk.channel import MAX_MCP_LINE_BYTES, REPLY_WAIT_SECONDS
+from llm_switchboard.desk.channel import HubLink, MAX_MCP_LINE_BYTES, REPLY_WAIT_SECONDS, StdoutWriter
 from llm_switchboard.desk.config import DeskConfig
 from llm_switchboard.desk.protocol import MessageType
 
@@ -352,6 +352,9 @@ class ChannelServerTest(unittest.TestCase):
         with self.assertRaises(EOFError):
             old.receive()
         new = hub.next_connection()
+        # Submit the retry only once the channel has consumed WELCOME and serves the new link.
+        new.send(MessageType.PING)
+        self.assertEqual(new.receive()[0], MessageType.PONG)
         self.reply_call(channel, 2, "r-1")
         kind, message = new.receive()
         self.assertEqual((kind, message["request_id"]), (MessageType.REPLY, "r-1"))
@@ -434,6 +437,19 @@ class ChannelServerTest(unittest.TestCase):
         channel.request(1, "ping")
         channel.proc.terminate()
         self.assertEqual(channel.proc.wait(TIMEOUT), 0)
+
+
+class HubLinkWaiterTest(unittest.TestCase):
+    def test_a_finished_call_cannot_remove_a_replacement_waiter(self):
+        home = Path(tempfile.mkdtemp(prefix="dk", dir="/tmp"))
+        self.addCleanup(shutil.rmtree, home, True)
+        link = HubLink(DeskConfig.from_env(home=home, environ={}), "sess-1", StdoutWriter(None))
+        old, replacement = {"done": threading.Event()}, {"done": threading.Event()}
+        link._pending["r-1"] = replacement
+        link._forget("r-1", old)
+        self.assertIs(link._pending.get("r-1"), replacement)
+        link._forget("r-1", replacement)
+        self.assertNotIn("r-1", link._pending)
 
 
 class LightImportTest(unittest.TestCase):
