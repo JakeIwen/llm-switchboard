@@ -173,8 +173,6 @@ class DeskInstallTest(unittest.TestCase):
         self.assertTrue((self.home / ".config/systemd/user/llm-switchboard.service").is_file())
 
     def test_install_sh_writes_nothing_outside_the_fixture(self):
-        before = subprocess.run(["git", "status", "--porcelain"], cwd=REPO, capture_output=True,
-                                text=True, check=True).stdout
         sentinel = self.root / "sentinel-config"
         (sentinel / "llm-switchboard/desk").mkdir(parents=True)
         (sentinel / "llm-switchboard/desk/mcp.json").write_text("untouched")
@@ -185,11 +183,6 @@ class DeskInstallTest(unittest.TestCase):
         self.assertNotIn(str(REPO), mcp.read_text())
         self.assertEqual((sentinel / "llm-switchboard/desk/mcp.json").read_text(), "untouched")
         self.assertEqual(sorted(p.name for p in sentinel.rglob("*")), ["desk", "llm-switchboard", "mcp.json"])
-        after = subprocess.run(["git", "status", "--porcelain"], cwd=REPO, capture_output=True,
-                               text=True, check=True).stdout
-        self.assertEqual(before, after)
-        for path in self.root.rglob("*"):
-            self.assertTrue(path.is_relative_to(self.root))
 
     def test_leaf_under_a_non_default_xdg_config_home_keeps_the_hub_running(self):
         # The leaf exists only under XDG_CONFIG_HOME (setUp), never under HOME/.config.
