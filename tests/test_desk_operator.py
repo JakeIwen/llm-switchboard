@@ -6,8 +6,10 @@ import dataclasses
 import json
 import os
 from pathlib import Path
+import shutil
 import socket
 import stat
+import struct
 import subprocess
 import sys
 import threading
@@ -21,12 +23,14 @@ from desk_fixtures import (
 
 from llm_switchboard.desk.enrollment import Enrollment
 from llm_switchboard.desk.hub import INVALID_ID_MARKER
-from llm_switchboard.desk.hub_state import CHANNEL_STILL_RUNNING
+from llm_switchboard.desk.hub_state import CHANNEL_STILL_RUNNING, CHANNEL_UNVERIFIABLE
 from llm_switchboard.desk.labels import SessionLabels
 from llm_switchboard.desk.model import (
     LABEL_HEAD_BYTES, LABEL_TAIL_BYTES, MAX_OPERATOR_CONNECTIONS, MAX_OPERATOR_LINE_BYTES, DeskError,
 )
-from llm_switchboard.desk.operator import OperatorOp, SocketInUse, bind_private_socket, operator_request
+from llm_switchboard.desk.operator import (
+    RESULT_UNKNOWN, HubAbsent, HubResultUnknown, OperatorOp, SocketInUse, bind_private_socket, operator_request,
+)
 from llm_switchboard.desk.peer import read_process
 from llm_switchboard.desk.protocol import DELIVERY_SUFFIX, MAX_REPLY_TEXT_BYTES, MessageType, encode
 
@@ -134,13 +138,18 @@ class RegistrationTest(ChannelHubCase):
             view = self.hub.state_view()
         self.assertEqual({t["label"] for t in view["targets"]}, {SESSION_A[:8], SESSION_B[:8]})
 
+    @unittest.skipUnless(sys.platform.startswith("linux") and Path("/proc/self/stat").exists(),
+                         "the real peer check needs Linux: SO_PEERCRED and /proc")
     def test_the_real_peer_check_refuses_a_process_that_is_not_the_pinned_channel(self):
+        # The real process tree, so the refusal is about this test process's
+        # command line, not a pid the fixture's empty tree lacks.
+        self.config = dataclasses.replace(self.config, proc_dir=Path("/proc"))
         self.hub.close()
         self.peer = None
         self.hub = self.start_hub()
         kind, refused = self.channel(SESSION_A).first
         self.assertIs(kind, MessageType.REFUSED)
-        self.assertTrue(refused["reason"])
+        self.assertEqual(refused["reason"], "peer is not the desk channel server")
         self.assertEqual(self.target(SESSION_A)["registration"], "none")
 
     def test_ping_gets_pong_and_a_bad_frame_drops_the_connection(self):
@@ -292,14 +301,26 @@ class StuckChannelTest(ChannelHubCase):
         self.assertEqual(lock["request_id"], request_id)
         return {"session_id": SESSION_A, "lock_id": lock["lock_id"]}
 
-    def assertClearRefused(self, clear):
-        self.assertEqual(self.operator(OperatorOp.CLEAR, **clear), {"ok": False, "error": CHANNEL_STILL_RUNNING})
-        self.assertRefused(409, CHANNEL_STILL_RUNNING, self.hub.clear, clear, self.token)
+    def assertClearRefused(self, clear, status=409, reason=CHANNEL_STILL_RUNNING):
+        self.assertEqual(self.operator(OperatorOp.CLEAR, **clear), {"ok": False, "error": reason})
+        self.assertRefused(status, reason, self.hub.clear, clear, self.token)
 
-    def test_a_clear_waits_for_the_timed_out_channel_process_to_be_gone(self):
+    def restart_hub(self):
+        """A new hub run: nothing about the old connection is left in memory."""
+        old_epoch = self.hub.epoch
+        self.hub.close()
+        self.hub = self.start_hub()
+        self.assertNotEqual(self.hub.epoch, old_epoch)
+        self.assertTrue(self.target(SESSION_A)["lock"]["earlier_run"])
+
+    def live_child(self):
         child = subprocess.Popen(["sleep", "60"])
         self.addCleanup(child.wait)
         self.addCleanup(child.kill)
+        return child
+
+    def test_a_clear_waits_for_the_timed_out_channel_process_to_be_gone(self):
+        child = self.live_child()
         # The process tree stands in for /proc; the child is the channel's pid.
         write_fake_process(self.config.proc_dir, child.pid, "4242")
         clear = self.stuck_after_handoff(FakeIdentity(child.pid, "4242", child.pid + 1, "2", SESSION_A))
@@ -309,18 +330,46 @@ class StuckChannelTest(ChannelHubCase):
         self.assertEqual(self.operator(OperatorOp.CLEAR, **clear), {"ok": True, "cleared": True})
         self.assertIsNone(self.target(SESSION_A)["lock"])
 
+    def test_a_hub_restart_keeps_the_clear_waiting_for_the_timed_out_channel(self):
+        child = self.live_child()
+        write_fake_process(self.config.proc_dir, child.pid, "4242")
+        clear = self.stuck_after_handoff(FakeIdentity(child.pid, "4242", child.pid + 1, "2", SESSION_A))
+        self.restart_hub()
+        # The lock file names the writer, so the new run still waits for it.
+        self.assertClearRefused(clear)
+        shutil.rmtree(self.config.proc_dir / str(child.pid))
+        self.assertEqual(self.operator(OperatorOp.CLEAR, **clear), {"ok": True, "cleared": True})
+
+    def test_a_channel_whose_process_entry_cannot_be_read_is_never_presumed_gone(self):
+        child = self.live_child()
+        write_fake_process(self.config.proc_dir, child.pid, "4242")
+        clear = self.stuck_after_handoff(FakeIdentity(child.pid, "4242", child.pid + 1, "2", SESSION_A))
+        stat = self.config.proc_dir / str(child.pid) / "stat"
+        for broken in ("garbled", "1 (sleep) S 1 2", "1 (sleep) " + " ".join(["0"] * 19) + " x9 0"):
+            with self.subTest(stat=broken):
+                stat.write_text(broken)
+                self.assertClearRefused(clear, 503, CHANNEL_UNVERIFIABLE)
+        # A stat that can't be read at all (here a directory) is no evidence either.
+        stat.unlink()
+        stat.mkdir()
+        self.assertClearRefused(clear, 503, CHANNEL_UNVERIFIABLE)
+        shutil.rmtree(self.config.proc_dir / str(child.pid))
+        self.assertEqual(self.operator(OperatorOp.CLEAR, **clear), {"ok": True, "cleared": True})
+
     @unittest.skipUnless(Path("/proc/self/stat").exists(), "needs /proc to see a real process's start time")
     def test_a_clear_waits_for_a_real_channel_process_to_exit(self):
-        self.config = dataclasses.replace(self.config, proc_dir=Path("/proc"))
-        child = subprocess.Popen(["sleep", "60"])
-        self.addCleanup(child.wait)
-        self.addCleanup(child.kill)
-        record = read_process(Path("/proc"), child.pid)
-        clear = self.stuck_after_handoff(FakeIdentity(child.pid, record.start, child.pid + 1, "2", SESSION_A))
-        self.assertClearRefused(clear)
-        child.kill()
-        child.wait(timeout=10)
-        self.assertEqual(self.operator(OperatorOp.CLEAR, **clear), {"ok": True, "cleared": True})
+        for restart in (False, True):
+            with self.subTest(restart=restart):
+                self.config = dataclasses.replace(self.config, proc_dir=Path("/proc"))
+                child = self.live_child()
+                record = read_process(Path("/proc"), child.pid)
+                clear = self.stuck_after_handoff(FakeIdentity(child.pid, record.start, child.pid + 1, "2", SESSION_A))
+                if restart:
+                    self.restart_hub()
+                self.assertClearRefused(clear)
+                child.kill()
+                child.wait(timeout=10)
+                self.assertEqual(self.operator(OperatorOp.CLEAR, **clear), {"ok": True, "cleared": True})
 
 
 class OnlineEnrollmentCliTest(ChannelHubCase):
@@ -580,6 +629,94 @@ class OperatorAdmissionTest(ChannelHubCase):
         self.assertEqual(json.loads(raw.makefile("rb").readline()), {"ok": False, "error": "bad request"})
         with self.assertRaisesRegex(ValueError, "too large"):
             self.operator(OperatorOp.PAIR, code="x" * MAX_OPERATOR_LINE_BYTES)
+
+
+class SilentOperator:
+    """Something listening on the operator socket that reads each request and
+    never answers (the hub may or may not have applied it): it closes
+    (`eof`), resets (`reset`) or keeps the connection open (`hold`)."""
+
+    def __init__(self, path: Path, end: str = "eof"):
+        self.listener = bind_private_socket(path)
+        self.listener.settimeout(0.2)
+        self.end = end
+        self.requests: list[bytes] = []
+        self._held: list[socket.socket] = []
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._serve, daemon=True)
+        self._thread.start()
+
+    def _serve(self):
+        while not self._stop.is_set():
+            try:
+                conn, _ = self.listener.accept()
+            except TimeoutError:
+                continue
+            except OSError:
+                return
+            conn.settimeout(5)
+            with conn.makefile("rb") as stream:
+                self.requests.append(stream.readline())
+            if self.end == "hold":
+                self._held.append(conn)
+                continue
+            if self.end == "reset":
+                # SO_LINGER with a zero timeout makes close send a reset.
+                conn.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+            conn.close()
+
+    def close(self):
+        self._stop.set()
+        self._thread.join(timeout=5)
+        for conn in self._held:
+            conn.close()
+        self.listener.close()
+
+
+class OperatorFallbackTest(unittest.TestCase):
+    """`sends`, `enroll` and `unenroll` edit the file directly only when the
+    connect proved no hub listens."""
+
+    def setUp(self):
+        self.home = make_home(self)
+        self.config = desk_config(self.home)
+
+    def test_a_socket_file_nobody_listens_on_counts_as_no_hub(self):
+        self.config.runtime_dir.mkdir(mode=0o700, parents=True)
+        stale = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        stale.bind(str(self.config.operator_socket))
+        stale.close()
+        with self.assertRaises(HubAbsent):
+            operator_request(self.config.operator_socket, OperatorOp.STATUS)
+        self.assertEqual(run_desk_cli(self.home, "enroll", SESSION_A).returncode, 0)
+        self.assertTrue(Enrollment(self.config.enrolled_file).is_enrolled(SESSION_A))
+        self.assertEqual(run_desk_cli(self.home, "sends", "on").returncode, 0)
+        self.assertEqual(json.loads(self.config.settings_file.read_text()), {"sends_enabled": True})
+        self.assertEqual(run_desk_cli(self.home, "unenroll", SESSION_A).returncode, 0)
+        self.assertFalse(Enrollment(self.config.enrolled_file).is_enrolled(SESSION_A))
+
+    def test_no_answer_after_connecting_writes_nothing_and_says_the_result_is_unknown(self):
+        silent = SilentOperator(self.config.operator_socket)
+        self.addCleanup(silent.close)
+        for args in (("enroll", SESSION_A), ("unenroll", SESSION_A), ("sends", "on")):
+            with self.subTest(args=args):
+                done = run_desk_cli(self.home, *args)
+                self.assertEqual(done.returncode, 4, done.stderr)
+                self.assertIn(RESULT_UNKNOWN, done.stderr)
+        self.assertEqual(len(silent.requests), 3)
+        self.assertFalse(self.config.enrolled_file.exists())
+        self.assertFalse(self.config.settings_file.exists())
+
+    def test_a_reset_or_a_timeout_after_connecting_is_a_result_unknown(self):
+        for end in ("reset", "hold"):
+            with self.subTest(end=end):
+                silent = SilentOperator(self.config.operator_socket, end)
+                try:
+                    with self.assertRaises(HubResultUnknown):
+                        operator_request(self.config.operator_socket, OperatorOp.SENDS, timeout=0.5, enabled=True)
+                    self.assertEqual(len(silent.requests), 1)
+                finally:
+                    silent.close()
 
 
 class DeskCliTest(unittest.TestCase):

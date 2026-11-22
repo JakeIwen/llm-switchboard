@@ -14,11 +14,12 @@ and the delivery marked in progress) -> the caller writes the event ->
 `finish_write`; or `expire_request` when a check failed. The delivery stays
 in progress (its lock can't be cleared) until that connection reports
 `delivered` or `undeliverable` or answers: a socket write only means the
-channel has the event, not that Claude does. A connection that goes away (or
-an event write that failed part way) first leaves the delivery unresolved,
-remembered with the channel's identity: the channel process may still be
-blocked writing the event to Claude, so `clear_lock` asks the caller's
-`channel_alive(identity)` and refuses while it is. HTTP callers
+channel has the event, not that Claude does. A lock is cleared only on
+positive evidence that no writer can still emit its event: that connection
+reported on it, or nothing was ever written; otherwise (the connection went
+away first, the write failed part way, or the lock is from an earlier hub
+run) `clear_lock` asks the caller's `channel_process(pid, start)` about the
+channel recorded in the lock, and only `GONE` clears. HTTP callers
 run their mutation inside `authorized(token)`, so a token revoked while the
 request was in flight can't act.
 """
@@ -39,7 +40,8 @@ from .model import (
     OUTSTANDING_STATES, PAIR_CODE_LENGTH,
     PAIR_ID_BYTES, PAIR_TTL_SECONDS, REQUEST_ID_RANDOM_BYTES, TICKET_RANDOM_BYTES, TICKET_TTL_SECONDS,
     TOKEN_BYTES, TOKEN_ID_LENGTH, TOKEN_TTL_SECONDS, DeskError, Lock, LockStoreError, Pairing,
-    Registration, RegistrationState, Reply, Request, RequestState, Ticket, Token,
+    ChannelProcess, Registration, RegistrationState, Reply, Request, RequestState, Ticket, Token,
+    valid_channel_identity,
 )
 from .protocol import MAX_REPLY_TEXT_BYTES, MAX_SPOKEN_BYTES, event_content
 from .text_rule import check_text
@@ -50,6 +52,7 @@ _MAX_TOKEN_LENGTH = 128
 _PAIR_RATE_WINDOW_SECONDS = 60
 _CODE_FIXES = str.maketrans({"O": "0", "I": "1", "L": "1"})
 CHANNEL_STILL_RUNNING = "the session's channel is still running; stop the session, then clear"
+CHANNEL_UNVERIFIABLE = "the session's channel can't be checked; stop the session, then clear"
 
 
 def sha256_hex(value: str) -> str:
@@ -91,11 +94,10 @@ class HubState:
         # Request id -> connection, for events the channel hasn't reported
         # emitted or refused yet; their locks can't be cleared.
         self._in_delivery: dict[str, int] = {}
-        # Request id -> the channel identity it was handed to, for events
-        # whose connection went away before any report: that process may
-        # still write the event to Claude, so the lock can't be cleared
-        # while it runs. In memory only; after a restart `earlier_run` applies.
-        self._unresolved: dict[str, object] = {}
+        # Request ids whose writer can't emit any more: the channel reported
+        # delivered or undeliverable, or the event was never written. In
+        # memory only, so an earlier run's lock always gets the process check.
+        self._writer_done: set[str] = set()
         self._labels: dict[str, tuple[str, str]] = {}
         try:
             self._locks = {lock.lock_id: lock for lock in lock_store.load()}
@@ -192,10 +194,11 @@ class HubState:
         """The connection is gone or failed its recheck. Returns the ids of
         requests that became unknown (their locks stay)."""
         with self._mutex:
-            registration = self._registrations.pop(conn_id, None)
-            if registration is None:
+            if self._registrations.pop(conn_id, None) is None:
                 return []
-            self._leave_deliveries_unresolved(conn_id, registration.identity)
+            # Unreported deliveries end without evidence: their locks get the process check.
+            for request_id in [r for r, c in self._in_delivery.items() if c == conn_id]:
+                del self._in_delivery[request_id]
             lost = []
             for request in self._requests.values():
                 if request.conn_id != conn_id:
@@ -326,9 +329,11 @@ class HubState:
                 self._finish(request, RequestState.EXPIRED)
                 self._bump()
                 raise
+            channel = self._registrations[request.conn_id].identity
             lock = Lock(lock_id=self._token_bytes(LOCK_ID_BYTES).hex(), host=HOST,
                         session_id=request.session_id, request_id=request.request_id,
-                        ticket_hash=request.ticket_hash, since=self._now())
+                        ticket_hash=request.ticket_hash, since=self._now(),
+                        channel_pid=channel.channel_pid, channel_start=channel.channel_start)
             try:
                 self._lock_store.add(lock)
             except LockStoreError as exc:
@@ -353,23 +358,24 @@ class HubState:
         others = self._registrations_for(request.session_id)
         if current is None or current.generation != request.generation or len(others) != 1:
             raise DeskError(409, "target changed; not sent")
+        # The lock must name the writer, or it could never be cleared safely.
+        identity = current.identity
+        if not valid_channel_identity(getattr(identity, "channel_pid", None), getattr(identity, "channel_start", None)):
+            raise DeskError(409, "channel identity unusable; not sent")
 
     def finish_write(self, request_id: str, written: bool, *, attempted: bool = True) -> None:
         """The caller's socket write is over. A failed write makes the request
         unknown; its lock stays. When the write was attempted, part of the
-        event may have reached the channel, so the delivery stays unresolved
-        while that channel process runs; `attempted=False` (no connection to
-        write to) ends it. A written event stays in delivery until the
+        event may have reached the channel, so its lock gets the process
+        check; `attempted=False` (no connection to write to) is evidence
+        nothing can emit it. A written event stays in delivery until the
         channel reports on it."""
         with self._mutex:
             request = self._requests.get(request_id)
             if not written:
-                conn_id = self._in_delivery.pop(request_id, None)
-                registration = self._registrations.get(conn_id) if conn_id is not None else None
-                if attempted and registration is not None:
-                    self._unresolved[request_id] = registration.identity
-                elif not attempted:
-                    self._unresolved.pop(request_id, None)
+                self._in_delivery.pop(request_id, None)
+                if not attempted:
+                    self._writer_done.add(request_id)
                 if request and request.state is RequestState.HANDED_OFF:
                     self._finish(request, RequestState.UNKNOWN)
             self._bump()
@@ -378,12 +384,8 @@ class HubState:
         if not isinstance(request_id, str) or self._in_delivery.get(request_id) != conn_id:
             return False
         del self._in_delivery[request_id]
+        self._writer_done.add(request_id)
         return True
-
-    def _leave_deliveries_unresolved(self, conn_id: int, identity) -> None:
-        for request_id in [r for r, c in self._in_delivery.items() if c == conn_id]:
-            del self._in_delivery[request_id]
-            self._unresolved[request_id] = identity
 
     def mark_delivered(self, conn_id: int, request_id) -> bool:
         """The channel wrote the event to Claude's stdin. Only the connection
@@ -453,13 +455,15 @@ class HubState:
 
     # -- locks ----------------------------------------------------------------
 
-    def clear_lock(self, session_id, lock_id, channel_alive: Callable[[object], bool] | None = None) -> None:
-        """Jacob checked the session: release exactly the lock he saw. Refused
-        while that request's delivery is still in progress, and while the
-        channel process of a delivery left unresolved still runs
-        (`channel_alive(identity)`, a short /proc read done under the state's
-        lock so nothing can resolve the delivery between check and clear;
-        without it such a lock is refused)."""
+    def clear_lock(self, session_id, lock_id,
+                   channel_process: Callable[[int, str], ChannelProcess] | None = None) -> None:
+        """Jacob checked the session: release exactly the lock he saw, only
+        when nothing can still emit its event. Refused while the delivery is
+        in progress; without a report or proof nothing was written (and for
+        every earlier run's lock), cleared only when `channel_process(pid,
+        start)` for the lock's channel says `GONE`: 409 while it runs, 503
+        when it can't be checked or no checker is given. The check is a short
+        /proc read, done under the state's lock."""
         if not isinstance(session_id, str) or not isinstance(lock_id, str):
             raise DeskError(400, "bad session_id or lock_id")
         with self._mutex:
@@ -471,9 +475,13 @@ class HubState:
                 raise DeskError(409, "lock id does not match")
             if lock.request_id in self._in_delivery:
                 raise DeskError(409, "delivery in progress")
-            if lock.request_id in self._unresolved and (
-                    channel_alive is None or channel_alive(self._unresolved[lock.request_id])):
-                raise DeskError(409, CHANNEL_STILL_RUNNING)
+            if lock.request_id not in self._writer_done:
+                seen = (channel_process(lock.channel_pid, lock.channel_start) if channel_process
+                        else ChannelProcess.UNVERIFIABLE)
+                if seen is ChannelProcess.RUNNING:
+                    raise DeskError(409, CHANNEL_STILL_RUNNING)
+                if seen is not ChannelProcess.GONE:
+                    raise DeskError(503, CHANNEL_UNVERIFIABLE)
             try:
                 self._lock_store.remove(lock.lock_id)
             except LockStoreError as exc:
@@ -481,7 +489,7 @@ class HubState:
                 self._bump()
                 raise DeskError(503, self._lock_error) from exc
             del self._locks[lock.lock_id]
-            self._unresolved.pop(lock.request_id, None)
+            self._writer_done.discard(lock.request_id)
             request = self._requests.get(lock.request_id)
             # Nobody waits for it any more, so a late reply is dropped.
             if request and request.state is RequestState.HANDED_OFF:
@@ -641,8 +649,7 @@ class HubState:
             if self._prune_tokens(now):
                 self._changed.notify_all()
             locked_requests = {lock.request_id for lock in self._locks.values()}
-            for request_id in [r for r in self._unresolved if r not in locked_requests]:
-                del self._unresolved[request_id]
+            self._writer_done &= locked_requests
 
     def close(self) -> None:
         with self._mutex:

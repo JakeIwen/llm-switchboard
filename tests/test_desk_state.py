@@ -10,18 +10,31 @@ from desk_fixtures import (
     SESSION_A, SESSION_B, Clock, FakeIdentity, desk_config, make_home, request_id, token_for,
 )
 
-from llm_switchboard.desk.hub_state import CHANNEL_STILL_RUNNING, HubState
+from llm_switchboard.desk.hub_state import CHANNEL_STILL_RUNNING, CHANNEL_UNVERIFIABLE, HubState
 from llm_switchboard.desk.locks import LockStore
 from llm_switchboard.desk.model import (
     MAX_LOCKS, MAX_PAIR_SECRET_FAILURES, MAX_REGISTRATIONS, MAX_REPLY_RING_BYTES, MAX_REQUEST_AGE_SECONDS,
     MAX_REQUESTS, MAX_TICKETS,
-    MAX_TOKENS, PAIR_TTL_SECONDS, TICKET_TTL_SECONDS, TOKEN_TTL_SECONDS, DeskError, Lock, LockStoreError,
+    MAX_TOKENS, PAIR_TTL_SECONDS, TICKET_TTL_SECONDS, TOKEN_TTL_SECONDS, ChannelProcess, DeskError, Lock,
+    LockStoreError,
 )
 from llm_switchboard.desk.protocol import DELIVERY_SUFFIX, MAX_REPLY_TEXT_BYTES
 
 
 def identity(session_id: str, pid: int = 100) -> FakeIdentity:
     return FakeIdentity(pid, "1", pid + 1, "2", session_id)
+
+
+def channel_is(seen: ChannelProcess, asked: list | None = None):
+    """A `channel_process(pid, start)` stand-in that always answers `seen`."""
+    def check(pid, start):
+        if asked is not None:
+            asked.append((pid, start))
+        return seen
+    return check
+
+
+GONE, RUNNING, UNVERIFIABLE = (channel_is(s) for s in ChannelProcess)
 
 
 class FailingLockStore:
@@ -189,7 +202,10 @@ class HandoffTest(StateCase):
         lock = self.target(self.state, SESSION_A)["lock"]
         self.assertEqual(self.lock_file_ids(), [lock["lock_id"]])
         saved = json.loads(self.config.lock_file.read_text())["locks"][0]
-        self.assertEqual(set(saved), {"lock_id", "host", "session_id", "request_id", "ticket_hash", "since"})
+        self.assertEqual(set(saved), {"lock_id", "host", "session_id", "request_id", "ticket_hash", "since",
+                                      "channel_pid", "channel_start"})
+        # The writer it was handed to, so a later hub run can tell whether it still runs.
+        self.assertEqual((saved["channel_pid"], saved["channel_start"]), (100, "1"))
         self.assertNotIn("what changed", self.config.lock_file.read_text())
         self.assertRefused(409, "busy", self.state.issue_ticket, SESSION_A, self.generation, self.state.epoch)
 
@@ -272,7 +288,7 @@ class HandoffTest(StateCase):
         self.state.mark_undeliverable(1, request.request_id)
         self.assertEqual(self.state.request_state(request.request_id), "unknown")
         # The channel said it wrote nothing: no need to ask whether it still runs.
-        self.state.clear_lock(SESSION_A, lock_id, lambda identity: self.fail("asked about the channel"))
+        self.state.clear_lock(SESSION_A, lock_id, lambda *_: self.fail("asked about the channel"))
 
     def test_a_disconnect_before_any_report_holds_the_lock_while_that_channel_runs(self):
         channel = identity(SESSION_A, pid=4242)
@@ -285,23 +301,24 @@ class HandoffTest(StateCase):
         self.assertEqual(self.state.drop_registration(1), [request.request_id])
         self.assertEqual(self.state.request_state(request.request_id), "unknown")
         asked = []
-        alive = lambda seen: asked.append(seen) or True  # noqa: E731
+        alive = channel_is(ChannelProcess.RUNNING, asked)
         self.assertRefused(409, CHANNEL_STILL_RUNNING, self.state.clear_lock, SESSION_A, lock_id, alive)
-        self.assertEqual(asked, [channel])
-        # Without a way to look, the hub can't prove the channel stopped.
-        self.assertRefused(409, CHANNEL_STILL_RUNNING, self.state.clear_lock, SESSION_A, lock_id)
+        self.assertEqual(asked, [(channel.channel_pid, channel.channel_start)])
+        # Without a way to look, or with an unreadable entry, nothing proves the channel stopped.
+        self.assertRefused(503, CHANNEL_UNVERIFIABLE, self.state.clear_lock, SESSION_A, lock_id)
+        self.assertRefused(503, CHANNEL_UNVERIFIABLE, self.state.clear_lock, SESSION_A, lock_id, UNVERIFIABLE)
         # A new connection from the same session can't vouch for the old event.
         self.state.register(2, SESSION_A, identity(SESSION_A, pid=5151))
         self.assertFalse(self.state.mark_delivered(2, request.request_id))
         self.assertRefused(409, CHANNEL_STILL_RUNNING, self.state.clear_lock, SESSION_A, lock_id, alive)
-        self.state.clear_lock(SESSION_A, lock_id, lambda seen: False)
+        self.state.clear_lock(SESSION_A, lock_id, GONE)
         self.assertEqual(self.lock_file_ids(), [])
 
     def test_a_delivered_report_before_the_disconnect_needs_no_channel_check(self):
         request_id, _ = self.handed_off(self.state, 1, SESSION_A, self.generation)
         lock_id = self.target(self.state, SESSION_A)["lock"]["lock_id"]
         self.state.drop_registration(1)
-        self.state.clear_lock(SESSION_A, lock_id, lambda identity: self.fail("asked about the channel"))
+        self.state.clear_lock(SESSION_A, lock_id, lambda *_: self.fail("asked about the channel"))
 
     def test_a_failed_event_write_makes_the_request_unknown_and_keeps_its_lock(self):
         request = self.begin(self.state, self.ticket(self.state, SESSION_A, self.generation), "hi")
@@ -312,9 +329,17 @@ class HandoffTest(StateCase):
         self.assertEqual(self.lock_file_ids(), [lock_id])
         # Part of the event may have reached a channel that is still running.
         self.state.drop_registration(1)
-        self.assertRefused(409, CHANNEL_STILL_RUNNING, self.state.clear_lock, SESSION_A, lock_id,
-                           lambda seen: True)
-        self.state.clear_lock(SESSION_A, lock_id, lambda seen: False)
+        self.assertRefused(409, CHANNEL_STILL_RUNNING, self.state.clear_lock, SESSION_A, lock_id, RUNNING)
+        self.state.clear_lock(SESSION_A, lock_id, GONE)
+
+    def test_a_channel_identity_without_a_usable_pid_is_never_handed_an_event(self):
+        state = self.new_state()
+        generation = state.register(1, SESSION_A, FakeIdentity(0, "not a start", 2, "2", SESSION_A))
+        request = self.begin(state, self.ticket(state, SESSION_A, generation), "hi")
+        self.assertRefused(409, "channel identity unusable; not sent", state.hand_off, request.request_id)
+        self.assertEqual(state.request_state(request.request_id), "expired")
+        self.assertEqual(self.lock_file_ids(), [])
+        self.assertIsNone(state.snapshot()["lock_store_error"])
 
     def test_an_event_with_no_connection_to_write_to_needs_no_channel_check(self):
         request = self.begin(self.state, self.ticket(self.state, SESSION_A, self.generation), "hi")
@@ -324,7 +349,7 @@ class HandoffTest(StateCase):
         self.state.drop_registration(1)
         self.state.finish_write(request.request_id, False, attempted=False)
         self.assertEqual(self.state.request_state(request.request_id), "unknown")
-        self.state.clear_lock(SESSION_A, lock_id, lambda identity: self.fail("asked about the channel"))
+        self.state.clear_lock(SESSION_A, lock_id, lambda *_: self.fail("asked about the channel"))
 
     def test_undeliverable_makes_the_request_unknown_and_keeps_its_lock(self):
         request_id, _ = self.handed_off(self.state, 1, SESSION_A, self.generation)
@@ -359,7 +384,14 @@ class HandoffTest(StateCase):
         self.assertRefused(409, "busy", restarted.issue_ticket, SESSION_A, generation, restarted.epoch)
         self.assertRefused(409, "lock id does not match", restarted.clear_lock, SESSION_A, old_lock)
         self.assertRefused(409, "busy", restarted.issue_ticket, SESSION_A, generation, restarted.epoch)
-        restarted.clear_lock(SESSION_A, held_lock)
+        # This run never saw a report on it: only the recorded channel being gone clears it.
+        asked = []
+        self.assertRefused(409, CHANNEL_STILL_RUNNING, restarted.clear_lock, SESSION_A, held_lock,
+                           channel_is(ChannelProcess.RUNNING, asked))
+        self.assertEqual(asked, [(100, "1")])
+        self.assertRefused(503, CHANNEL_UNVERIFIABLE, restarted.clear_lock, SESSION_A, held_lock, UNVERIFIABLE)
+        self.assertRefused(503, CHANNEL_UNVERIFIABLE, restarted.clear_lock, SESSION_A, held_lock)
+        restarted.clear_lock(SESSION_A, held_lock, GONE)
         self.assertEqual(self.lock_file_ids(), [])
         self.assertRefused(409, "no lock", restarted.clear_lock, SESSION_A, held_lock)
         ticket = self.ticket(restarted, SESSION_A, generation)
@@ -458,14 +490,14 @@ class CapsTest(StateCase):
         self.assertEqual(self.state.request_state(request_id), "handed_off")
 
     def test_a_full_lock_file_refuses_every_send(self):
-        locks = [Lock(f"{i:016x}", "pi", f"{i:08x}-0000-4000-8000-000000000000", request_id(i), "ab" * 32, 1.0)
-                 for i in range(MAX_LOCKS)]
+        locks = [Lock(f"{i:016x}", "pi", f"{i:08x}-0000-4000-8000-000000000000", request_id(i), "ab" * 32, 1.0,
+                      100, "1") for i in range(MAX_LOCKS)]
         store = LockStore(self.config.lock_file)
         store.load()
         for lock in locks:
             store.add(lock)
         with self.assertRaises(LockStoreError):
-            store.add(Lock("f" * 16, "pi", SESSION_B, request_id(999), "ab" * 32, 1.0))
+            store.add(Lock("f" * 16, "pi", SESSION_B, request_id(999), "ab" * 32, 1.0, 100, "1"))
         state = self.new_state()
         generation = state.register(1, SESSION_A, identity(SESSION_A))
         self.assertEqual(state.snapshot()["lock_store_error"], "lock file full")

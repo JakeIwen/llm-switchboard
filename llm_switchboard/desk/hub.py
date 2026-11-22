@@ -7,9 +7,9 @@ Channel connections: the hub reads the peer PID from the socket, reads
 connection is rechecked before every dispatch and every 5 s; a failed
 recheck or a disconnect drops its registration, and a request handed to it
 becomes unknown (its lock stays), as does one the channel reports
-`undeliverable`. A lock whose delivery the dropped channel never reported on
-can't be cleared while that channel process still runs (read from
-`config.proc_dir`, as the recheck does). Peer verification is injected
+`undeliverable`. A lock whose delivery its channel never reported on (or
+one from an earlier hub run) is cleared only once the channel process it
+records is gone (`channel_process`, from `config.proc_dir`). Peer verification is injected
 (`peer=`) so tests run without /proc; production imports `desk.peer` at start.
 
 Logs carry ids and reasons only: a request id from the channel is logged
@@ -20,6 +20,7 @@ import contextlib
 import itertools
 import logging
 import os
+from pathlib import Path
 import re
 import secrets
 import signal
@@ -36,10 +37,10 @@ from .http_server import DeskHttpServer, make_tls_context
 from .labels import SessionLabels, encodable
 from .locks import LockStore
 from .model import (
-    HELLO_TIMEOUT_SECONDS, MAX_PENDING_CHANNEL_CONNECTIONS, RECHECK_SECONDS, DeskError, is_request_id,
+    CHANNEL_START_PATTERN, HELLO_TIMEOUT_SECONDS, MAX_PENDING_CHANNEL_CONNECTIONS, RECHECK_SECONDS, ChannelProcess,
+    DeskError, is_request_id,
 )
 from .operator import OperatorOp, OperatorServer, bind_private_socket
-from .peer import read_process
 from .protocol import (
     HEARTBEAT_SECONDS, IDLE_TIMEOUT_SECONDS, FrameError, MessageType, decode, encode, read_line,
 )
@@ -64,6 +65,23 @@ def _logged_request_id(value) -> str:
 
 def _logged_channel_reason(value) -> str:
     return value if isinstance(value, str) and _LOGGABLE_REASON.fullmatch(value) else "?"
+
+
+def channel_process(proc_dir: Path, pid: int, start: str) -> ChannelProcess:
+    """Whether the process a lock's event was handed to may still run, from
+    its start time alone (/proc/<pid>/stat field 22, parsed as
+    `peer.read_process` does). Only a missing entry or another start time
+    (a reused pid) is evidence it is gone; anything unreadable is not."""
+    try:
+        stat = (Path(proc_dir) / str(pid) / "stat").read_text()
+    except (FileNotFoundError, ProcessLookupError):
+        return ChannelProcess.GONE
+    except (OSError, ValueError):
+        return ChannelProcess.UNVERIFIABLE
+    fields = stat.rsplit(")", 1)[1].split() if ")" in stat else []
+    if len(fields) < 20 or not CHANNEL_START_PATTERN.fullmatch(fields[19]):
+        return ChannelProcess.UNVERIFIABLE
+    return ChannelProcess.RUNNING if fields[19] == start else ChannelProcess.GONE
 
 
 class ChannelConnection:
@@ -453,18 +471,11 @@ class Hub:
 
     def clear(self, body: dict, token: str) -> dict:
         with self.state.authorized(token):
-            self.state.clear_lock(body.get("session_id"), body.get("lock_id"), self._channel_alive)
+            self.state.clear_lock(body.get("session_id"), body.get("lock_id"), self._channel_process)
         return {"cleared": True}
 
-    def _channel_alive(self, identity) -> bool:
-        """Whether the channel process a delivery was handed to still runs:
-        the same pid with the same start time, so a reused pid doesn't count."""
-        pid, start = getattr(identity, "channel_pid", None), getattr(identity, "channel_start", None)
-        if not isinstance(pid, int) or pid <= 0:
-            # Nothing to look up; the state refuses the clear without proof.
-            return True
-        record = read_process(self.config.proc_dir, pid)
-        return record is not None and record.start == start
+    def _channel_process(self, pid: int, start: str) -> ChannelProcess:
+        return channel_process(self.config.proc_dir, pid, start)
 
     def enroll(self, body: dict, token: str) -> dict:
         session_id = body.get("session_id")
@@ -528,7 +539,7 @@ class Hub:
         return {**self.state.status(), "enrolled": sorted(self.enrollment.sessions())}
 
     def _op_clear(self, message: dict) -> dict:
-        self.state.clear_lock(message.get("session_id"), message.get("lock_id"), self._channel_alive)
+        self.state.clear_lock(message.get("session_id"), message.get("lock_id"), self._channel_process)
         return {"cleared": True}
 
     def _op_enroll(self, message: dict) -> dict:

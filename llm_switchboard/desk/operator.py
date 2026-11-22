@@ -44,7 +44,17 @@ class OperatorOp(str, Enum):
 
 
 class HubUnavailable(Exception):
-    """No hub answers on the operator socket."""
+    """No answer from a hub on the operator socket."""
+
+
+class HubAbsent(HubUnavailable):
+    """Positively no hub: no socket file, or nothing listens on it. Nothing
+    was sent, so a policy write may be made to the file instead."""
+
+
+class HubResultUnknown(HubUnavailable):
+    """The request may have reached the hub, but no answer came back (EOF,
+    reset, timeout, a garbled line): the hub may have applied it."""
 
 
 class SocketInUse(Exception):
@@ -177,8 +187,14 @@ def _send(conn: socket.socket, message: dict) -> None:
         conn.sendall(json.dumps(message, separators=(",", ":")).encode() + b"\n")
 
 
+RESULT_UNKNOWN = "result unknown; run `llm-switchboard desk status`"
+
+
 def operator_request(path: Path, op: OperatorOp, timeout: float = OPERATOR_TIMEOUT_SECONDS, **fields) -> dict:
-    """Send one operator request and return the hub's response."""
+    """Send one operator request and return the hub's response. Raises
+    `HubAbsent` only when the connect itself proved no hub listens,
+    `HubResultUnknown` once connected without a whole answer, and plain
+    `HubUnavailable` for any other connect failure (nothing was sent)."""
     data = json.dumps({"op": op.value, **fields}, separators=(",", ":")).encode() + b"\n"
     if len(data) > MAX_OPERATOR_LINE_BYTES:
         raise ValueError("request too large")
@@ -188,20 +204,30 @@ def operator_request(path: Path, op: OperatorOp, timeout: float = OPERATOR_TIMEO
         try:
             client.connect(str(path))
         except (FileNotFoundError, ConnectionRefusedError) as exc:
-            raise HubUnavailable("the desk hub is not running") from exc
+            raise HubAbsent("the desk hub is not running") from exc
+        except OSError as exc:
+            raise HubUnavailable(f"the desk hub can't be reached ({type(exc).__name__}); nothing was sent") from exc
+        line = _exchange(client, data)
+    finally:
+        client.close()
+    try:
+        response = json.loads(line) if line else None
+    except ValueError:
+        response = None
+    if not isinstance(response, dict):
+        raise HubResultUnknown(f"the desk hub gave no answer; {RESULT_UNKNOWN}")
+    return response
+
+
+def _exchange(client: socket.socket, data: bytes) -> bytes:
+    """Write the request and read one answer line; b"" when none came."""
+    try:
         # A busy hub may answer and close before reading; its answer still counts.
         with contextlib.suppress(BrokenPipeError, ConnectionResetError):
             client.sendall(data)
-        try:
-            with client.makefile("rb") as stream:
-                line = read_line(stream)
-        except ConnectionResetError:
-            line = b""
-    finally:
-        client.close()
-    if not line:
-        raise HubUnavailable("the desk hub closed the connection")
-    response = json.loads(line)
-    if not isinstance(response, dict):
-        raise ValueError("bad response")
-    return response
+        with client.makefile("rb") as stream:
+            return read_line(stream)
+    except ConnectionResetError:
+        return b""
+    except (OSError, FrameError) as exc:
+        raise HubResultUnknown(f"the desk hub stopped answering ({type(exc).__name__}); {RESULT_UNKNOWN}") from exc

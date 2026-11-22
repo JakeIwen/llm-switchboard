@@ -1,5 +1,7 @@
 """The target lock file (`DeskConfig.lock_file`): crash-durable locks that keep
 a target busy across hub restarts until its answer or Jacob's explicit clear.
+Each lock names the channel process (pid, start time) its event was handed
+to, so a later hub run can tell whether that writer may still emit it.
 
 Every change rewrites the whole file: temp file (0600) -> every byte
 written -> fsync -> rename -> fsync the directory (0700), so a lock reported
@@ -17,14 +19,14 @@ from pathlib import Path
 
 from ..session_id import is_session_id
 from .model import (
-    KNOWN_HOSTS, LOCK_ID_PATTERN, MAX_LOCK_FILE_BYTES, MAX_LOCKS, SHA256_HEX_PATTERN, Lock, LockStoreError,
-    is_request_id,
+    CHANNEL_START_PATTERN, KNOWN_HOSTS, LOCK_ID_PATTERN, MAX_LOCK_FILE_BYTES, MAX_LOCKS, MAX_PID, SHA256_HEX_PATTERN,
+    Lock, LockStoreError, is_request_id,
 )
 
 __all__ = ["LockStore", "LockStoreError"]
 
 FILE_VERSION = 1
-_STRING_FIELDS = ("lock_id", "host", "session_id", "request_id", "ticket_hash")
+_STRING_FIELDS = ("lock_id", "host", "session_id", "request_id", "ticket_hash", "channel_start")
 
 
 class LockStore:
@@ -142,7 +144,7 @@ def _parse(raw: bytes, max_locks: int) -> list[Lock]:
 
 
 def _parse_lock(entry) -> Lock:
-    if not isinstance(entry, dict) or set(entry) != {*_STRING_FIELDS, "since"}:
+    if not isinstance(entry, dict) or set(entry) != {*_STRING_FIELDS, "since", "channel_pid"}:
         raise ValueError("entry not a lock")
     since = entry["since"]
     if isinstance(since, bool) or not isinstance(since, (int, float)):
@@ -151,7 +153,7 @@ def _parse_lock(entry) -> Lock:
         since = float(since)
     except OverflowError:
         raise ValueError("bad since") from None
-    lock = Lock(since=since, **{name: entry[name] for name in _STRING_FIELDS})
+    lock = Lock(since=since, channel_pid=entry["channel_pid"], **{name: entry[name] for name in _STRING_FIELDS})
     _check_lock(lock)
     return lock
 
@@ -165,6 +167,8 @@ def _check_lock(lock: Lock) -> None:
         "request_id": is_request_id,
         "ticket_hash": lambda v: isinstance(v, str) and SHA256_HEX_PATTERN.fullmatch(v),
         "since": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) and v > 0,
+        "channel_pid": lambda v: isinstance(v, int) and not isinstance(v, bool) and 0 < v <= MAX_PID,
+        "channel_start": lambda v: isinstance(v, str) and CHANNEL_START_PATTERN.fullmatch(v),
     }
     for name, valid in checks.items():
         if not valid(getattr(lock, name)):

@@ -4,7 +4,9 @@ A light command (`__main__._LIGHT_COMMANDS`): it never imports the HTTP
 stack. `pair`, `revoke`, `status` and `clear` talk to the running hub over
 the operator socket. `sends`, `enroll` and `unenroll` go through the hub
 when it runs (so its sends see the change in order) and edit the file
-directly when it doesn't; `flags` and `install-config` work on files only.
+directly only when the connect proved no hub listens; once connected, a
+missing answer is reported as unknown and nothing is written. `flags` and
+`install-config` work on files only.
 """
 
 import argparse
@@ -17,12 +19,14 @@ import time
 from .config import DeskConfig
 from .enrollment import DeskSettings, Enrollment, ensure_private_dir
 from .model import DeskError
-from .operator import HubUnavailable, OperatorOp, operator_request
+from .operator import HubAbsent, HubResultUnknown, HubUnavailable, OperatorOp, operator_request
 from .protocol import SERVER_NAME
 
 EXIT_REFUSED = 1
 EXIT_SETUP = 2
 EXIT_NO_HUB = 3
+# The request may or may not have been applied.
+EXIT_UNKNOWN = 4
 
 
 def main(argv=None) -> int:
@@ -52,6 +56,9 @@ def main(argv=None) -> int:
     except DeskError as exc:
         print(f"desk: {exc.reason}", file=sys.stderr)
         return EXIT_REFUSED
+    except HubResultUnknown as exc:
+        print(f"desk: {exc}", file=sys.stderr)
+        return EXIT_UNKNOWN
     except HubUnavailable as exc:
         print(f"desk: {exc}", file=sys.stderr)
         return EXIT_NO_HUB
@@ -99,18 +106,19 @@ def _sends(args, config):
     enabled = args.value == "on"
     try:
         return _operator(config, OperatorOp.SENDS, enabled=enabled)
-    except HubUnavailable:
+    except HubAbsent:
         DeskSettings(config.settings_file).set_sends_enabled(enabled)
         print(f"sends {args.value} (saved; the hub is not running and reads it at start)")
         return 0
 
 
 def _enrollment_change(config: DeskConfig, op: OperatorOp, session_id: str, edit_file) -> bool | None:
-    """Through the running hub, else by editing the file; whether anything
-    changed, or None when the hub refused (already printed)."""
+    """Through the running hub, else (no hub, proved at connect) by editing
+    the file; whether anything changed, or None when the hub refused
+    (already printed)."""
     try:
         response = operator_request(config.operator_socket, op, session_id=session_id)
-    except HubUnavailable:
+    except HubAbsent:
         return edit_file()
     if not response.get("ok"):
         print(f"desk: {response.get('error', 'refused')}", file=sys.stderr)

@@ -78,6 +78,24 @@ MAX_OPERATOR_LINE_BYTES = 4 * 1024
 REQUEST_ID_PATTERN = re.compile(rf"[0-9a-f]{{{2 * EPOCH_BYTES}}}\.[0-9a-f]{{{2 * REQUEST_ID_RANDOM_BYTES}}}")
 LOCK_ID_PATTERN = re.compile(rf"[0-9a-f]{{{2 * LOCK_ID_BYTES}}}")
 SHA256_HEX_PATTERN = re.compile(r"[0-9a-f]{64}")
+# A channel process's start time: /proc/<pid>/stat field 22 (clock ticks since boot).
+CHANNEL_START_PATTERN = re.compile(r"[0-9]{1,20}")
+MAX_PID = 2**31 - 1
+
+
+def valid_channel_identity(pid, start) -> bool:
+    """The (pid, start time) a lock records for the channel it was handed to."""
+    return (isinstance(pid, int) and not isinstance(pid, bool) and 0 < pid <= MAX_PID
+            and isinstance(start, str) and CHANNEL_START_PATTERN.fullmatch(start) is not None)
+
+
+class ChannelProcess(str, Enum):
+    """What the process tree says about the channel a lock's event was handed to."""
+    # No process with that pid, or one with another start time (the pid was reused).
+    GONE = "gone"
+    RUNNING = "running"
+    # The process entry exists but its start time can't be read.
+    UNVERIFIABLE = "unverifiable"
 
 
 def is_request_id(value) -> bool:
@@ -170,7 +188,9 @@ class Reply:
 
 @dataclass(frozen=True)
 class Lock:
-    """One persisted target lock; never holds prompt or reply text."""
+    """One persisted target lock; never holds prompt or reply text. The
+    channel's pid and start time say which process might still write the
+    event to Claude, after a hub restart too."""
 
     lock_id: str
     host: str
@@ -178,10 +198,13 @@ class Lock:
     request_id: str
     ticket_hash: str
     since: float
+    channel_pid: int
+    channel_start: str
 
     def to_json(self) -> dict:
         return {"lock_id": self.lock_id, "host": self.host, "session_id": self.session_id,
-                "request_id": self.request_id, "ticket_hash": self.ticket_hash, "since": self.since}
+                "request_id": self.request_id, "ticket_hash": self.ticket_hash, "since": self.since,
+                "channel_pid": self.channel_pid, "channel_start": self.channel_start}
 
 
 @dataclass

@@ -107,31 +107,40 @@ retention.
   an event already written. The lock and Jacob's explicit clear cover that
   window: a request in doubt stays unknown and the target busy.
 - **Target lock** (`locks.json`): `{lock_id, host, session_id, request_id,
-  ticket_hash, since}`. Written completely and fsynced before handoff.
-  Cleared by the verified answer, or by Jacob's explicit clear naming that
-  `lock_id` (a clear naming an older lock id is refused, and a clear while
-  that request's event write is still under way is refused with 409
-  `delivery in progress`). The delivery stays in progress after the hub's
-  socket write until that connection reports `delivered` (written to
-  Claude's stdin) or `undeliverable`, or answers: a socket write only means
-  the channel has the event. When the connection goes away first (a
+  ticket_hash, since, channel_pid, channel_start}`: the last two name the
+  channel process the event is handed to (its pid and `/proc/<pid>/stat`
+  start time; no content). Written completely and fsynced before handoff;
+  a registration without a usable pid and start time is never handed an
+  event. Cleared by the verified answer, or by Jacob's explicit clear
+  naming that `lock_id` (a clear naming an older lock id is refused).
+- **Clear rule**: a lock is cleared only on positive evidence that no
+  writer can still emit its event. While the connection it was handed to is
+  registered and hasn't reported, the delivery is in progress (409
+  `delivery in progress`): a socket write only means the channel has the
+  event, and it stays in progress until that connection reports `delivered`
+  (written to Claude's stdin) or `undeliverable`, or answers. Those reports,
+  and an event that was never written (no connection left to write to),
+  are the evidence. Without them (the connection went away first: a
   disconnect, a failed recheck, or the 45 s idle timeout of a channel
-  blocked writing to Claude, which can't answer heartbeats), or the hub's
-  event write fails part way, the request becomes unknown, never a success,
-  and the hub keeps that channel's identity (pid and start time) with the
-  lock in memory: a clear is refused with 409 `the session's channel is
-  still running; stop the session, then clear` while a process with that
-  pid and start time exists (read from `/proc`, as the recheck does), since
-  it may still write the event to Claude. Once it is gone, a clear works as
-  usual; an event never written (no connection left to write to) needs no
-  such check. A hub restart loses the identity, and `earlier_run` applies.
-  Locks survive hub restarts; a locked target stays
+  blocked writing to Claude, which can't answer heartbeats; the hub's event
+  write failed part way; or the lock is from an earlier hub run, whose
+  reports this run never saw) the request is unknown, never a success, and
+  the hub reads the start time of the lock's `channel_pid` from `/proc`:
+  no such process, or one with another start time (a reused pid), allows
+  the clear; the same start time refuses it with 409 `the session's channel
+  is still running; stop the session, then clear`; an entry whose start
+  time can't be read or parsed refuses it with 503 `the session's channel
+  can't be checked; stop the session, then clear`. A session that kept
+  running across a hub restart therefore has to be stopped before its
+  earlier run's lock clears.
+- **Locks survive hub restarts**: a locked target stays
   busy in the new epoch, shown as `unknown (earlier hub run)`, until cleared.
   An unreadable, oversize (over 64 KiB), corrupt, full or unwritable lock
   file, or any entry with a malformed field (lock id not 16 hex, unknown
   host, session id not a session id, request id not the hub-issued shape,
-  ticket hash not SHA-256 hex, `since` not a finite positive number, extra
-  or missing keys), refuses every send and shows a lock-store error.
+  ticket hash not SHA-256 hex, `since` not a finite positive number,
+  `channel_pid` not a positive integer, `channel_start` not decimal digits,
+  extra or missing keys), refuses every send and shows a lock-store error.
 - **Replies** count only from the connection the request was handed to,
   while it is `handed_off`, with its request id, under the size caps, as
   strict UTF-8 (a lone surrogate is refused before anything changes), and
@@ -183,7 +192,8 @@ https://localhost:<port>` exactly (`null` is refused). Errors are
 (refused: sends off, wrong origin), 404, 409 (state conflict: busy, stale
 ticket or generation, not enrolled, delivery in progress, the session's
 channel still running), 413, 429 (rate
-limit) or 503 (lock store error, enrollment file unreadable).
+limit) or 503 (lock store error, enrollment file unreadable, the session's
+channel can't be checked).
 
 Unauthenticated:
 - `GET /desk`, `/desk/app.js`, `/desk/app.css`, `/desk/text_rule.js`,
@@ -228,8 +238,12 @@ flag), `clear <session id> <lock id>`, `sends on|off` (persisted in
 `desk-settings.json`), `enroll|unenroll <session id>` (the hub edits
 `enrolled.json` and publishes it under its policy lock; unenroll drops the
 session's registrations at once). `sends`, `enroll` and `unenroll` edit their
-file directly when no hub answers, and the hub reads it at its next recheck
-or start. `flags` (prints the launch flags) and `install-config` (writes
+file directly only when the connect proves no hub listens (no socket file,
+or nothing accepting on it), and the hub reads it at its next recheck or
+start. Once connected, a missing, reset, timed-out or garbled answer means
+the hub may have applied the change: the command writes nothing, prints
+``result unknown; run `llm-switchboard desk status` ``, and exits 4 (3: no
+hub for the other commands, 1: refused). `flags` (prints the launch flags) and `install-config` (writes
 `mcp.json`) never need the hub.
 `serve` runs the hub. A request line is at most 4 KiB; at most 4 connections
 are served at once, and another gets `{"ok": false, "error": "busy"}` at once.

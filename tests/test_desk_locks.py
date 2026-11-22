@@ -17,7 +17,7 @@ from llm_switchboard.desk.model import MAX_ENROLLED, MAX_LOCK_FILE_BYTES, MAX_LO
 
 
 def lock(n: int, session_id: str = SESSION_A) -> Lock:
-    return Lock(f"{n:016x}", "pi", session_id, request_id(n), "ab" * 32, 1000.0 + n)
+    return Lock(f"{n:016x}", "pi", session_id, request_id(n), "ab" * 32, 1000.0 + n, 4000 + n, str(900 + n))
 
 
 def mode(path) -> int:
@@ -111,6 +111,8 @@ class LockStoreTest(unittest.TestCase):
             "lock_id": ["", "x" * 16, "0" * 15, 7], "host": ["mac", "", None],
             "session_id": ["not-a-session", SESSION_A.upper(), 1],
             "request_id": ["epoch.1", "e" * 32 + ".zz", ["list"]], "ticket_hash": ["h", "A" * 64],
+            "channel_pid": [0, -1, 2**31, True, "4001", 1.5, None],
+            "channel_start": ["", "12a", " 12", "1" * 21, 12, None],
         }
         raw_since = ["NaN", "Infinity", "-Infinity", "-1", "0", "1e400", '"soon"', "true"]
         contents = [json.dumps({"version": 1, "locks": [good, {**lock(2).to_json(), name: value}]})
@@ -119,6 +121,9 @@ class LockStoreTest(unittest.TestCase):
         contents += [template.replace('"SINCE"', since) for since in raw_since]
         contents += [json.dumps({"version": 1, "locks": [{**good, "extra": "text"}]}),
                      json.dumps({"version": 1, "locks": [{k: v for k, v in good.items() if k != "host"}]})]
+        # The writer's identity is required: a lock without it could never be cleared safely.
+        contents += [json.dumps({"version": 1, "locks": [{k: v for k, v in good.items() if k != name}]})
+                     for name in ("channel_pid", "channel_start")]
         for content in contents:
             with self.subTest(content=content[-90:]):
                 self.path.write_text(content)
@@ -131,7 +136,9 @@ class LockStoreTest(unittest.TestCase):
         store = LockStore(self.path)
         store.load()
         with self.assertRaisesRegex(LockStoreError, "malformed"):
-            store.add(Lock("0" * 16, "pi", SESSION_A, "not an id", "ab" * 32, 1.0))
+            store.add(Lock("0" * 16, "pi", SESSION_A, "not an id", "ab" * 32, 1.0, 4001, "900"))
+        with self.assertRaisesRegex(LockStoreError, "bad channel_pid"):
+            store.add(Lock("0" * 16, "pi", SESSION_A, request_id(1), "ab" * 32, 1.0, 0, "900"))
         self.assertFalse(self.path.exists())
 
     def test_the_cap_is_enforced_on_add(self):
