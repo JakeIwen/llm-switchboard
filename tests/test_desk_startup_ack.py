@@ -669,6 +669,23 @@ class RealProcessTreeTest(StartupCase):
         return super().start_hub(**options)
 
     def test_a_real_bash_and_claude_chain(self):
+        self.assertRealChainAcknowledged()
+
+    def test_an_unrelated_process_whose_name_is_not_utf8_never_blocks_the_scan(self):
+        # A script's process name (stat's comm) is its file name, so this one
+        # runs named with bytes that aren't UTF-8, a space and a ")".
+        script = Path(os.fsdecode(os.fsencode(self.home) + b"/\xff) x"))
+        script.write_text("#!/bin/sh\nsleep 60\n")
+        script.chmod(0o700)
+        other = subprocess.Popen([script], start_new_session=True)
+        self.addCleanup(other.wait)
+        # The whole group: the script and its sleep.
+        self.addCleanup(os.killpg, other.pid, signal.SIGKILL)
+        stat = Path(f"/proc/{other.pid}/stat")
+        wait_until(lambda: b"(\xff) x)" in stat.read_bytes())
+        self.assertRealChainAcknowledged()
+
+    def assertRealChainAcknowledged(self):
         state = Path(tempfile.mkdtemp(prefix="pane", dir=self.home))
         # The kernel's /proc/<pid>/exe must be an installed claude version, so
         # the fake runs from a copy of the interpreter placed as one (its

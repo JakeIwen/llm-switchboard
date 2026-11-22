@@ -63,7 +63,7 @@ from .model import (
     MAX_STARTUP_ACKS_PER_MINUTE, MAX_STARTUP_ATTEMPTS, MAX_STARTUP_VIEWS_PER_MINUTE, SHA256_HEX_PATTERN,
     ChannelProcess, DeskError,
 )
-from .peer import ProcessRecord, process_presence, read_process_entry
+from .peer import ProcessRecord, process_presence, read_parent_pid, read_process_entry
 from .startup_identity import (
     LaunchIdentity, StartupRefusal, check_launch_argv, check_session_file, foreground_claude, refused,
     view_digest,
@@ -383,18 +383,29 @@ class StartupAck:
                               claude_pid=claude.pid, claude_start=claude.start)
 
     def _children(self, pid: int) -> list[ProcessRecord] | StartupRefusal:
-        """Every process whose parent is `pid`. An entry that can't be read
-        might be one of them (a second claude must not hide), so it refuses;
+        """Every process whose parent is `pid`. Parentage comes first, from
+        each entry's `stat` alone; only children get the full read, so an
+        unrelated process's command line or name can't stop the scan. An
+        entry whose parent can't be read might be a child (a second claude
+        must not hide), so it refuses, as does a child that can't be read;
         one that exits during the scan is skipped."""
+        proc = self.config.proc_dir
         found = []
-        with os.scandir(self.config.proc_dir) as entries:
+        with os.scandir(proc) as entries:
             for entry in entries:
-                if entry.name.isdigit():
-                    record = read_process_entry(self.config.proc_dir, int(entry.name))
-                    if record is ChannelProcess.UNVERIFIABLE:
-                        return StartupRefusal.UNVERIFIABLE
-                    if isinstance(record, ProcessRecord) and record.ppid == pid:
-                        found.append(record)
+                if not entry.name.isdigit():
+                    continue
+                ppid = read_parent_pid(proc, int(entry.name))
+                if ppid is ChannelProcess.UNVERIFIABLE:
+                    return StartupRefusal.UNVERIFIABLE
+                if ppid != pid:
+                    continue
+                record = read_process_entry(proc, int(entry.name))
+                if record is ChannelProcess.UNVERIFIABLE:
+                    return StartupRefusal.UNVERIFIABLE
+                # The full read is a second look: the pid may have exited, or been reused, since.
+                if isinstance(record, ProcessRecord) and record.ppid == pid:
+                    found.append(record)
         return found
 
 

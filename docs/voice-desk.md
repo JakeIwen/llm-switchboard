@@ -408,10 +408,14 @@ must hold (`desk/startup_identity.py`, `desk/startup_ack.py`,
   named for its version; on the Pi `~/.local/bin/claude` links there, and a
   running claude may still be an older version), and its environment
   carries the supervisor's `LLM_SWITCHBOARD_SESSION=<session id>` from
-  `tmux new-window -e`. Another program named `claude` is refused. A
-  `/proc` entry that exists but can't be read (the pane's process, or any
-  process the child scan meets, which might be a second claude) refuses
-  with 503 **the session's process can't be checked**; only a missing entry
+  `tmux new-window -e`. Another program named `claude` is refused. The
+  child scan reads each process's parent from its `stat` alone (the
+  numeric fields after the last `)`, so a name with spaces, `)` or bytes
+  that aren't UTF-8 doesn't matter) and reads the rest only for the pane's
+  children, so an unrelated process can't stop it. A `/proc` entry that
+  exists but can't be read (the pane's process, a child, or any process
+  whose parent can't be read, which might be a second claude) refuses with
+  503 **the session's process can't be checked**; only a missing entry
   counts as no process.
 - Its options (argv up to a `--`; what follows is a prompt) are compared by
   name, never by spelling: `--name=value` sets `--name`, and every letter

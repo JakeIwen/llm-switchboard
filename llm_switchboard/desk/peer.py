@@ -102,6 +102,26 @@ def read_process_entry(proc_dir: Path, pid: int) -> ProcessRecord | ChannelProce
     return ProcessRecord(pid=pid, ppid=ppid, start=start, argv=argv, exe=exe, pgrp=pgrp, tpgid=tpgid)
 
 
+def read_parent_pid(proc_dir: Path, pid: int) -> int | ChannelProcess:
+    """The parent pid alone, from the numeric fields of the raw `stat` bytes,
+    so a scan over every process isn't stopped by one whose name isn't
+    UTF-8 or whose command line can't be read. The name between parentheses
+    may hold spaces, ")" and any bytes, so the fields start after the last
+    ")". GONE and UNVERIFIABLE mean what they do for `read_process_entry`."""
+    root = Path(proc_dir)
+    try:
+        raw = (root / str(pid) / "stat").read_bytes()
+    except (FileNotFoundError, ProcessLookupError):
+        return ChannelProcess.GONE if (root / "self").is_dir() else ChannelProcess.UNVERIFIABLE
+    except OSError:
+        return ChannelProcess.UNVERIFIABLE
+    _, paren, rest = raw.rpartition(b")")
+    fields = rest.split()
+    if not paren or len(fields) < 2 or not fields[1].isdigit():
+        return ChannelProcess.UNVERIFIABLE
+    return int(fields[1])
+
+
 def process_presence(proc_dir: Path, pid: int, start: str) -> ChannelProcess:
     """Whether a process recorded by pid and start time (a lock's channel, a
     startup acknowledgement's claude) may still run, from its start time
