@@ -21,6 +21,7 @@ import sys
 from typing import Callable
 
 from .config import DeskConfig
+from .model import CHANNEL_START_PATTERN, ChannelProcess
 
 
 @dataclass(frozen=True)
@@ -86,6 +87,27 @@ def read_process(proc_dir: Path, pid: int) -> ProcessRecord | None:
     body = raw_argv[:-1] if raw_argv.endswith(b"\0") else raw_argv
     argv = tuple(part.decode(errors="surrogateescape") for part in body.split(b"\0")) if body else ()
     return ProcessRecord(pid=pid, ppid=ppid, start=start, argv=argv, exe=exe, pgrp=pgrp, tpgid=tpgid)
+
+
+def process_presence(proc_dir: Path, pid: int, start: str) -> ChannelProcess:
+    """Whether a process recorded by pid and start time (a lock's channel, a
+    startup acknowledgement's claude) may still run, from its start time
+    alone (/proc/<pid>/stat field 22, parsed as `read_process` does). Only a missing entry in a mounted process
+    tree (`<proc>/self` present) or another start time (a reused pid) is
+    evidence it is gone; anything unreadable is not."""
+    root = Path(proc_dir)
+    try:
+        stat = (root / str(pid) / "stat").read_text()
+    except (FileNotFoundError, ProcessLookupError):
+        # A missing entry means a missing process only in a mounted process
+        # tree; with no tree at all (or no /proc mounted) nothing is known.
+        return ChannelProcess.GONE if (root / "self").is_dir() else ChannelProcess.UNVERIFIABLE
+    except (OSError, ValueError):
+        return ChannelProcess.UNVERIFIABLE
+    fields = stat.rsplit(")", 1)[1].split() if ")" in stat else []
+    if len(fields) < 20 or not CHANNEL_START_PATTERN.fullmatch(fields[19]):
+        return ChannelProcess.UNVERIFIABLE
+    return ChannelProcess.RUNNING if fields[19] == start else ChannelProcess.GONE
 
 
 def read_session_file(sessions_dir: Path, pid: int) -> dict | None:

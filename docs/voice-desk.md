@@ -23,7 +23,7 @@ round trip passes.
 | `desk/locks.py` | adapter | The target lock file (fsync before handoff; refuses on unreadable, oversize, malformed or full) |
 | `desk/enrollment.py` | adapter | `enrolled.json` (JsonFile) and `desk-settings.json` (`sends_enabled`) |
 | `desk/labels.py` | adapter | Target labels from a bounded, cached read of each transcript's head and tail |
-| `desk/peer.py` | rules + adapter | Channel identity: peer PID from the socket, `/proc` walk, session-file check and recheck |
+| `desk/peer.py` | rules + adapter | Channel identity: peer PID from the socket, `/proc` walk, session-file check and recheck; `process_presence` (whether a pid and start time still run), shared with locks and the startup acknowledgement |
 | `desk/startup_identity.py` | rules | Launch identity for the startup acknowledgement: `StartupRefusal` (reasons and statuses), argv, foreground and session-file rules, the view digest |
 | `desk/startup_ack.py` | adapter | The startup acknowledgement: reads the supervisor's tmux panes and `/proc`, lists blocked sessions, sends the one guarded Enter; one Enter per view; rate limits |
 | `desk/startup_registry.py` | adapter | The bounded, non-blocking read of claude's `sessions/<pid>.json` for the acknowledgement (absent vs. unreadable) |
