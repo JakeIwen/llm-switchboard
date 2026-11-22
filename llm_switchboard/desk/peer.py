@@ -103,9 +103,20 @@ def check_channel_process(peer: ProcessRecord, config: DeskConfig) -> None:
         raise PeerRefused("peer executable is not the channel interpreter")
 
 
-def has_mcp_config_flag(argv: tuple[str, ...], path: Path) -> bool:
+def has_adjacent_flag(argv: tuple[str, ...], flag: str, value: str) -> bool:
     """The flag and its value as two adjacent arguments, as the launch flags give them."""
-    return any(flag == "--mcp-config" and value == str(path) for flag, value in zip(argv, argv[1:]))
+    return any(left == flag and right == value for left, right in zip(argv, argv[1:]))
+
+
+def has_mcp_config_flag(argv: tuple[str, ...], path: Path) -> bool:
+    return has_adjacent_flag(argv, "--mcp-config", str(path))
+
+
+def has_channel_enablement(argv: tuple[str, ...], config: DeskConfig) -> bool:
+    """`--dangerously-load-development-channels server:desk` from the launch flags; without it
+    the session would not receive channel events, so registering it would be misleading."""
+    flags = config.launch_flags
+    return has_adjacent_flag(argv, flags[2], flags[3])
 
 
 def check_claude_parent(parent: ProcessRecord, entry: dict | None, hello_session_id: str, config: DeskConfig) -> None:
@@ -119,6 +130,8 @@ def check_claude_parent(parent: ProcessRecord, entry: dict | None, hello_session
         raise PeerRefused("session id does not match the parent's session")
     if not has_mcp_config_flag(parent.argv, config.mcp_config):
         raise PeerRefused("parent was not launched with the pinned MCP config")
+    if not has_channel_enablement(parent.argv, config):
+        raise PeerRefused("parent was not launched with the desk channel enabled")
 
 
 # --- public entry points ------------------------------------------------------

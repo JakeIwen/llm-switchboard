@@ -19,6 +19,7 @@ import time
 
 from . import protocol
 from .config import DeskConfig
+from .peer import read_session_file
 from .protocol import MessageType
 
 VERSION = "0.1.0"
@@ -30,6 +31,13 @@ BACKOFF_MAX_SECONDS = 30
 WELCOME_WAIT_SECONDS = 5
 # Socket read granularity: bounds how late a heartbeat or idle check can run.
 POLL_SECONDS = 0.5
+# Concurrent tools/call handlers (each can wait REPLY_WAIT_SECONDS); more are refused.
+MAX_CONCURRENT_CALLS = 8
+JSONRPC_BUSY = -32000
+# Cap on one MCP request line from Claude. Larger than the hub protocol's line cap
+# because a valid reply (32 KiB text) is JSON-escaped up to 6x on the way in, so
+# this must not turn a refusable reply into a silently dropped request.
+MAX_MCP_LINE_BYTES = 1024 * 1024
 
 REPLY_TOOL_SCHEMA = {
     "name": protocol.REPLY_TOOL,
@@ -58,14 +66,22 @@ class StdoutWriter:
         self._lock = threading.Lock()
 
     def send(self, message: dict) -> bool:
+        return self.send_guarded(message, None) is None
+
+    def send_guarded(self, message: dict, guard) -> str | None:
+        """Writes the line unless `guard()` (run under the write lock, right before the
+        write) returns a refusal reason. None when written, else the reason."""
         data = (json.dumps(message, separators=(",", ":")) + "\n").encode()
         with self._lock:
+            reason = guard() if guard is not None else None
+            if reason is not None:
+                return reason
             try:
                 self._stream.write(data)
                 self._stream.flush()
             except (OSError, ValueError):
-                return False
-        return True
+                return "stdout closed"
+        return None
 
 
 class HubLink:
@@ -75,6 +91,7 @@ class HubLink:
                  heartbeat_seconds: float = protocol.HEARTBEAT_SECONDS,
                  idle_timeout_seconds: float = protocol.IDLE_TIMEOUT_SECONDS):
         self._socket_path = str(config.channel_socket)
+        self._sessions_dir = config.claude_sessions_dir
         self._session_id = session_id
         self._writer = writer
         self._heartbeat = heartbeat_seconds
@@ -95,6 +112,10 @@ class HubLink:
         with self._lock:
             if not self._welcomed or self._sock is None:
                 return "not connected to the desk hub; the reply was not delivered"
+            if request_id in self._pending:
+                # The hub's reply_result is matched by request id, so a second call
+                # would steal or overwrite the first call's answer.
+                return "a reply for this request is already in flight; wait for its result"
             self._pending[request_id] = waiter
             sock = self._sock
         try:
@@ -179,13 +200,15 @@ class HubLink:
                 continue
             last_rx = time.monotonic()
             kind, message = protocol.decode(line)
-            self._handle(sock, kind, message)
+            if not self._handle(sock, kind, message):
+                return
 
-    def _handle(self, sock: socket.socket, kind: MessageType, message: dict) -> None:
+    def _handle(self, sock: socket.socket, kind: MessageType, message: dict) -> bool:
+        """False when the link must be dropped."""
         if kind is MessageType.PING:
             self._send(sock, MessageType.PONG)
         elif kind is MessageType.EVENT:
-            self._deliver_event(sock, message)
+            return self._deliver_event(sock, message)
         elif kind is MessageType.REPLY_RESULT:
             with self._lock:
                 waiter = self._pending.get(message.get("request_id"))
@@ -193,21 +216,37 @@ class HubLink:
                 waiter["ok"] = message.get("ok") is True
                 waiter["reason"] = str(message.get("reason") or "")
                 waiter["done"].set()
+        return True
 
-    def _deliver_event(self, sock: socket.socket, message: dict) -> None:
+    def _session_still_ours(self) -> str | None:
+        """None while our parent's registry entry names the session we said hello with.
+        /clear keeps this process alive but moves the parent to a new session, and
+        the hub's earlier check cannot see that."""
+        parent = os.getppid()
+        entry = read_session_file(self._sessions_dir, parent)
+        if entry is None or entry.get("pid") != parent:
+            return "the parent's session file is missing or unreadable"
+        if entry.get("sessionId") != self._session_id:
+            return "the parent's session changed since hello"
+        return None
+
+    def _deliver_event(self, sock: socket.socket, message: dict) -> bool:
         request_id, content = message.get("request_id"), message.get("content")
         if not isinstance(request_id, str) or not isinstance(content, str):
             log("ignored a malformed event")
-            return
-        written = self._writer.send({
+            return True
+        refusal = self._writer.send_guarded({
             "jsonrpc": "2.0",
             "method": "notifications/claude/channel",
             "params": {"content": content, "meta": {"request_id": request_id}},
-        })
-        if not written:
-            log(f"event {request_id} not written: stdout closed")
-            return
+        }, self._session_still_ours)
+        if refusal is not None:
+            log(f"event {request_id} not written: {refusal}")
+            self._send(sock, MessageType.UNDELIVERABLE, request_id=request_id, reason=refusal)
+            # Our hello identity is stale; the hub link ends and a reconnect is refused.
+            return False
         self._send(sock, MessageType.DELIVERED, request_id=request_id)
+        return True
 
 
 class LineReader:
@@ -266,10 +305,20 @@ def validate_reply_arguments(arguments) -> tuple[str, str, str] | str:
     request_id, text, spoken = values
     if not request_id:
         return "request_id is empty"
-    if len(text.encode()) > protocol.MAX_REPLY_TEXT_BYTES:
+    try:
+        text_bytes, spoken_bytes = len(text.encode("utf-8")), len(spoken.encode("utf-8"))
+        request_id.encode("utf-8")
+    except UnicodeEncodeError:
+        return "request_id, text and spoken must be valid UTF-8 (no lone surrogates)"
+    if text_bytes > protocol.MAX_REPLY_TEXT_BYTES:
         return f"text is over {protocol.MAX_REPLY_TEXT_BYTES} bytes; shorten it and call reply again"
-    if len(spoken.encode()) > protocol.MAX_SPOKEN_BYTES:
+    if spoken_bytes > protocol.MAX_SPOKEN_BYTES:
         return f"spoken is over {protocol.MAX_SPOKEN_BYTES} bytes; shorten it and call reply again"
+    try:
+        # JSON escaping can grow a text past the line cap even when its raw bytes fit.
+        protocol.encode(MessageType.REPLY, request_id=request_id, text=text, spoken=spoken)
+    except (protocol.FrameError, ValueError):
+        return "the reply is too large once framed for the hub; shorten it and call reply again"
     return request_id, text, spoken
 
 
@@ -288,6 +337,7 @@ class McpServer:
     def __init__(self, link: HubLink, writer: StdoutWriter):
         self._link = link
         self._writer = writer
+        self._slots = threading.BoundedSemaphore(MAX_CONCURRENT_CALLS)
 
     def handle_line(self, line: bytes) -> None:
         try:
@@ -298,9 +348,28 @@ class McpServer:
             return
         if "id" not in message:
             return  # notifications (initialized, cancelled, ...) need no answer
-        threading.Thread(target=self._answer, args=(message,), daemon=True).start()
+        if message["method"] != "tools/call":
+            self._answer(message)  # instant; stays responsive when every call slot is busy
+            return
+        if not self._slots.acquire(blocking=False):
+            self._error(message["id"], JSONRPC_BUSY, "too many calls in flight; retry shortly")
+            return
+        threading.Thread(target=self._answer_call, args=(message,), daemon=True).start()
+
+    def _answer_call(self, message: dict) -> None:
+        try:
+            self._answer(message)
+        finally:
+            self._slots.release()
 
     def _answer(self, message: dict) -> None:
+        try:
+            self._dispatch(message)
+        except Exception as exc:  # a tool call must always get an answer
+            log(f"internal error: {type(exc).__name__}")
+            self._error(message["id"], -32603, "internal error")
+
+    def _dispatch(self, message: dict) -> None:
         request_id, method = message["id"], message["method"]
         params = message.get("params")
         params = params if isinstance(params, dict) else {}
@@ -324,6 +393,19 @@ class McpServer:
         self._writer.send({"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": text}})
 
 
+def read_capped_line(stream) -> bytes | None:
+    """One stdin line; b"" at EOF; None for an oversize line, whose remainder is
+    discarded as it is read so no memory grows with it. The bound is the same
+    idea as `protocol.read_line`, which cannot resume after refusing a line."""
+    line = stream.readline(MAX_MCP_LINE_BYTES + 1)
+    if len(line) <= MAX_MCP_LINE_BYTES or line.endswith(b"\n"):
+        return line
+    log("discarded an oversize line from stdin")
+    while line and not line.endswith(b"\n"):
+        line = stream.readline(MAX_MCP_LINE_BYTES)
+    return None
+
+
 def main() -> int:
     for signum in (signal.SIGTERM, signal.SIGHUP):
         signal.signal(signum, lambda *_: sys.exit(0))
@@ -334,7 +416,9 @@ def main() -> int:
     server = McpServer(link, writer)
     stdin = sys.stdin.buffer
     while True:
-        line = stdin.readline()
+        line = read_capped_line(stdin)
+        if line is None:
+            continue
         if not line:
             return 0
         server.handle_line(line)

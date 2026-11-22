@@ -147,6 +147,20 @@ class VerifyPeerTest(unittest.TestCase):
         self.system.add_process(CLAUDE_PID, 1, CLAUDE_START, argv, self.system.root / "claude-bin")
         self.assert_refused("pinned MCP config")
 
+    def test_parent_without_channel_enablement(self):
+        argv = ("claude", *self.system.config.launch_flags[:2])
+        self.system.add_process(CLAUDE_PID, 1, CLAUDE_START, argv, self.system.root / "claude-bin")
+        self.assert_refused("channel enabled")
+
+    def test_channel_flag_and_server_must_be_adjacent_and_exact(self):
+        flags = self.system.config.launch_flags
+        for tail in (("--dangerously-load-development-channels", "--verbose", "server:desk"),
+                     ("--dangerously-load-development-channels", "server:other"),
+                     ("server:desk", "--dangerously-load-development-channels")):
+            self.system.add_process(CLAUDE_PID, 1, CLAUDE_START, ("claude", *flags[:2], *tail),
+                                    self.system.root / "claude-bin")
+            self.assert_refused("channel enabled")
+
     def test_not_enrolled(self):
         self.system.enrolled.clear()
         self.assert_refused("not enrolled")

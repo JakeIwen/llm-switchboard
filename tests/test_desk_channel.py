@@ -12,6 +12,7 @@ import time
 import unittest
 
 from llm_switchboard.desk import protocol
+from llm_switchboard.desk.channel import MAX_MCP_LINE_BYTES
 from llm_switchboard.desk.config import DeskConfig
 from llm_switchboard.desk.protocol import MessageType
 
@@ -150,6 +151,14 @@ class ChannelServerTest(unittest.TestCase):
         self.channels = []
         self.hubs = []
         self.addCleanup(self.cleanup)
+        self.write_session("sess-1")
+
+    def write_session(self, session_id, pid=None):
+        """The registry entry of the channel's parent, which is this test process."""
+        pid = os.getpid() if pid is None else pid
+        self.config.claude_sessions_dir.mkdir(parents=True, exist_ok=True)
+        entry = {"pid": pid, "procStart": "1", "sessionId": session_id}
+        (self.config.claude_sessions_dir / f"{pid}.json").write_text(json.dumps(entry))
 
     def cleanup(self):
         for channel in self.channels:
@@ -232,6 +241,32 @@ class ChannelServerTest(unittest.TestCase):
         self.assertTrue(result["isError"])
         self.assertIn("request already answered", result["content"][0]["text"])
 
+    def assert_event_undeliverable(self, conn, channel, request_id):
+        conn.send(MessageType.EVENT, request_id=request_id, content="secret prompt")
+        kind, message = conn.receive()
+        self.assertEqual((kind, message["request_id"]), (MessageType.UNDELIVERABLE, request_id))
+        self.assertTrue(message["reason"])
+        # The link is dropped, and nothing reached stdout: the next line is the ping answer.
+        with self.assertRaises(EOFError):
+            conn.receive()
+        self.assertEqual(channel.request(90, "ping")["result"], {})
+
+    def test_event_is_not_written_when_the_parent_session_changed(self):
+        _, channel, conn = self.connected()
+        self.write_session("sess-after-clear")  # /clear between the hub's check and the write
+        self.assert_event_undeliverable(conn, channel, "r-1")
+
+    def test_event_is_not_written_when_the_session_file_is_missing_or_unreadable(self):
+        for damage in (lambda path: path.unlink(), lambda path: path.write_text("{not json")):
+            with self.subTest(damage=damage):
+                self.write_session("sess-1")
+                hub, channel, conn = self.connected()
+                damage(self.config.claude_sessions_dir / f"{os.getpid()}.json")
+                self.assert_event_undeliverable(conn, channel, "r-1")
+                self.cleanup()
+                self.channels, self.hubs = [], []
+                self.config.channel_socket.unlink(missing_ok=True)
+
     def test_pings_are_answered_without_reaching_claude(self):
         _, channel, conn = self.connected()
         conn.send(MessageType.PING)
@@ -259,6 +294,87 @@ class ChannelServerTest(unittest.TestCase):
         channel.request(99, "ping")
         conn.send(MessageType.PING)
         self.assertEqual(conn.receive()[0], MessageType.PONG)
+
+    def test_unencodable_and_over_framed_replies_get_tool_errors(self):
+        _, channel, conn = self.connected()
+        cases = [
+            # A lone surrogate cannot be strict UTF-8.
+            {"request_id": "r", "text": "bad \ud800 text", "spoken": "s"},
+            {"request_id": "r", "text": "t", "spoken": "\udfff"},
+            {"request_id": "r\ud800", "text": "t", "spoken": "s"},
+            # 15 KiB of "é" is 30 KiB raw but 6 bytes per character once JSON-escaped.
+            {"request_id": "r", "text": "\u00e9" * (15 * 1024), "spoken": "s"},
+            # Quotes escape to two bytes each: 32 KiB raw, over 64 KiB framed.
+            {"request_id": "r", "text": '"' * protocol.MAX_REPLY_TEXT_BYTES, "spoken": "s"},
+        ]
+        for number, arguments in enumerate(cases, start=1):
+            result = self.call_reply(channel, number, arguments)["result"]
+            self.assertTrue(result["isError"], number)
+        channel.request(99, "ping")
+        conn.send(MessageType.PING)
+        self.assertEqual(conn.receive()[0], MessageType.PONG)
+
+    def reply_call(self, channel, rpc_id, request_id):
+        channel.send({"jsonrpc": "2.0", "id": rpc_id, "method": "tools/call",
+                      "params": {"name": "reply", "arguments": {"request_id": request_id, "text": "t", "spoken": "s"}}})
+
+    def test_second_reply_while_the_first_waits_is_refused_locally(self):
+        _, channel, conn = self.connected()
+        self.reply_call(channel, 1, "r-1")
+        self.assertEqual(conn.receive()[0], MessageType.REPLY)
+        self.reply_call(channel, 2, "r-1")
+        refused = channel.read()
+        channel.assert_id(refused, 2)
+        self.assertTrue(refused["result"]["isError"])
+        self.assertIn("already in flight", refused["result"]["content"][0]["text"])
+        # The first call still gets its own result, and the hub saw only one reply.
+        conn.send(MessageType.REPLY_RESULT, request_id="r-1", ok=True, reason="")
+        first = channel.read()
+        channel.assert_id(first, 1)
+        self.assertNotIn("isError", first["result"])
+        conn.send(MessageType.PING)
+        self.assertEqual(conn.receive()[0], MessageType.PONG)
+
+    def test_reply_after_the_first_finished_goes_to_the_hub_again(self):
+        _, channel, conn = self.connected()
+        self.reply_call(channel, 1, "r-1")
+        conn.receive()
+        conn.send(MessageType.REPLY_RESULT, request_id="r-1", ok=True, reason="")
+        channel.assert_id(channel.read(), 1)
+        self.reply_call(channel, 2, "r-1")
+        kind, message = conn.receive()
+        self.assertEqual((kind, message["request_id"]), (MessageType.REPLY, "r-1"))
+        conn.send(MessageType.REPLY_RESULT, request_id="r-1", ok=False, reason="request already answered")
+        second = channel.read()
+        channel.assert_id(second, 2)
+        self.assertIn("already answered", second["result"]["content"][0]["text"])
+
+    def test_oversize_stdin_line_is_skipped_and_later_lines_still_work(self):
+        channel = self.start_channel()
+        # A well-formed request that is simply too big is discarded unanswered, not buffered and served.
+        channel.send_raw(b'{"jsonrpc":"2.0","id":1,"method":"ping","params":{"p":"' + b"x" * (3 * MAX_MCP_LINE_BYTES) + b'"}}\n')
+        self.assertEqual(channel.request(3, "ping")["result"], {})
+        # A line of exactly the cap is still accepted.
+        pad = MAX_MCP_LINE_BYTES - len(b'{"jsonrpc":"2.0","id":2,"method":"ping","params":{"p":""}}\n')
+        channel.send_raw(b'{"jsonrpc":"2.0","id":2,"method":"ping","params":{"p":"' + b"a" * pad + b'"}}\n')
+        channel.assert_id(channel.read(), 2)
+
+    def test_concurrent_calls_are_bounded_and_ping_stays_responsive(self):
+        _, channel, conn = self.connected()
+        for number in range(8):
+            self.reply_call(channel, 100 + number, f"r-{number}")
+        for _ in range(8):
+            self.assertEqual(conn.receive()[0], MessageType.REPLY)
+        self.reply_call(channel, 200, "r-extra")
+        busy = channel.read()
+        channel.assert_id(busy, 200)
+        self.assertEqual(busy["error"]["code"], -32000)
+        self.assertEqual(channel.request(201, "ping")["result"], {})
+        # A freed slot accepts the next call.
+        conn.send(MessageType.REPLY_RESULT, request_id="r-0", ok=True, reason="")
+        channel.assert_id(channel.read(), 100)
+        self.reply_call(channel, 202, "r-again")
+        self.assertEqual(conn.receive()[0], MessageType.REPLY)
 
     def test_refusal_and_disconnect_lead_to_reconnects(self):
         hub = self.start_hub(refuse=1)
