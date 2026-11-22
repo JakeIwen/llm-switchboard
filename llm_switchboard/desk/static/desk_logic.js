@@ -73,13 +73,16 @@
   }
 
   // Whether the "handed off, waiting" banner for requestId is over. A request
-  // missing from history counts only in a snapshot at least as new as the one
-  // fetched right after the send acknowledgment (ackVersion): an older
-  // snapshot never knew the request, a newer one means it aged out.
-  function waitingOver(requestId, snapshot, ackVersion) {
+  // missing from history counts only when the snapshot is known to postdate the
+  // send acknowledgment: it is at least as new as the fresh snapshot fetched
+  // right after the ack (ackVersion), or its poll started after the ack
+  // (pollSeq > ackSeq; both are the page's request counters). A snapshot
+  // from before the ack never knew the request, so it never settles the banner.
+  function waitingOver(requestId, snapshot, ackVersion, pollSeq, ackSeq) {
     var rq = snapshot.requests.filter(function (x) { return x.request_id === requestId; })[0];
     if (rq) return rq.state !== "handed_off";
-    return typeof ackVersion === "number" && snapshot.version >= ackVersion;
+    if (typeof ackVersion === "number" && snapshot.version >= ackVersion) return true;
+    return typeof pollSeq === "number" && typeof ackSeq === "number" && pollSeq > ackSeq;
   }
 
   // Keeps only ids still present in the current request history.

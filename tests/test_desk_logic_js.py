@@ -18,7 +18,7 @@ process.stdout.write(JSON.stringify({
   valid: input.valid.map(([f, t]) => L.clearStillValid(f, t)),
   describe: L.describeRequestState(input.state),
   ids: Array.from(ids).sort(),
-  over: (input.over || []).map(([id, snap, v]) => L.waitingOver(id, snap, v)),
+  over: (input.over || []).map(([id, snap, v, p, q]) => L.waitingOver(id, snap, v, p, q)),
 }));
 """
 
@@ -99,6 +99,18 @@ class DeskLogicJsTests(unittest.TestCase):
             ["r", snap(9), 5],                        # absent later: evicted
         ])
         self.assertEqual(out["over"], [False, True, True, False, False, True, True])
+
+    def test_waiting_banner_settles_from_a_later_poll_when_the_ack_refresh_failed(self):
+        def snap(version):
+            return {"version": version, "requests": []}
+        out = self.run_node(over=[
+            ["r", snap(4), None, 3, 3],   # poll started before the ack: never settles
+            ["r", snap(4), None, 2, 3],   # an older poll that returns late
+            ["r", snap(7), None, 4, 3],   # first poll started after the ack, request evicted
+            ["r", snap(7), None, None, 3],  # no poll start known: stays waiting
+            ["r", snap(7), None, 4, None],  # no ack recorded: stays waiting
+        ])
+        self.assertEqual(out["over"], [False, False, True, False, False])
 
 
 if __name__ == "__main__":

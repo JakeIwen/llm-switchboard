@@ -21,6 +21,8 @@
   var recognition = null;
   var clearFrozen = null; // {session_id, lock_id, request_id} while the confirmation is open
   var sentRequestId = null; // request whose "waiting" result is on screen
+  var pollSeq = 0; // counts state requests as they start
+  var sentAckSeq = null; // pollSeq when the send was acknowledged
   var sentAckVersion = null; // version of the fresh snapshot fetched after the send ack
   var compose = freshCompose();
 
@@ -184,6 +186,7 @@
       if (mySession !== session || !token) return;
       var ctl = new AbortController();
       var timer = setTimeout(function () { ctl.abort(); }, POLL_ABORT_MS);
+      var startSeq = ++pollSeq;
       var path = "/desk/api/state" + (state ? "?after=" + encodeURIComponent(state.version) : "");
       api("GET", path, undefined, { signal: ctl.signal }).then(function (r) {
         clearTimeout(timer);
@@ -191,7 +194,7 @@
         if (r.status === 200 && r.data) {
           failures = 0;
           setConn("online", "Connected");
-          applyState(r.data);
+          applyState(r.data, startSeq);
           once();
         } else {
           retry();
@@ -213,7 +216,7 @@
     once();
   }
 
-  function applyState(next) {
+  function applyState(next, startSeq) {
     var epochChanged = state && state.epoch !== next.epoch;
     state = next;
     $("banner-sends").hidden = next.sends_enabled !== false;
@@ -228,17 +231,18 @@
     else validateCompose();
     speakNewReplies(next);
     Logic.pruneIds(spoken, next.requests);
-    expireWaitingResult(next);
+    expireWaitingResult(next, startSeq);
     if (clearFrozen && !Logic.clearStillValid(clearFrozen, findTarget(clearFrozen.session_id))) clearFrozen = null;
     render();
   }
 
   // "Delivered, waiting" must not outlive the wait.
-  function expireWaitingResult(next) {
+  function expireWaitingResult(next, startSeq) {
     if (!sentRequestId) return;
     // Gone from history (aged out before this tab saw the end) is as final as answered.
-    if (Logic.waitingOver(sentRequestId, next, sentAckVersion)) {
+    if (Logic.waitingOver(sentRequestId, next, sentAckVersion, startSeq, sentAckSeq)) {
       sentAckVersion = null;
+      sentAckSeq = null;
       sentRequestId = null;
       if (compose.phase === "done") compose = freshCompose();
       hideResult();
@@ -491,17 +495,18 @@
   // poll still settles the banner.
   function refreshAfterSend(requestId) {
     var mySession = session;
+    pollSeq++;
     api("GET", "/desk/api/state", undefined, {}).then(function (r) {
       if (mySession !== session || sentRequestId !== requestId || r.status !== 200 || !r.data) return;
       sentAckVersion = r.data.version;
       expireWaitingResult(r.data);
-    }, function () { /* the poll loop's next snapshot decides; absence alone stays "waiting" */ });
+    }, function () { /* the first poll started after the ack decides */ });
   }
 
   // Shows exactly what the hub said. Unknown is never retried.
   function settleSend(result) {
     stopRecognition();
-    if (result.outcome === "handed_off") { sentRequestId = result.request_id; sentAckVersion = null; refreshAfterSend(result.request_id); }
+    if (result.outcome === "handed_off") { sentRequestId = result.request_id; sentAckVersion = null; sentAckSeq = pollSeq; refreshAfterSend(result.request_id); }
     if (result.outcome === "handed_off" || result.outcome === "answered") $("draft").value = "";
     if (result.outcome === "unknown") {
       compose = freshCompose();
