@@ -84,8 +84,8 @@
     var quietAt = -Infinity; // the latest end, error or cancel of this page's speech
     var uncertainUntil = 0;  // Start stays refused until then
     var cutOff = false;      // this conversation stopped an utterance before its end
-    var quietHandle = null;
-    var tracked = [];        // the page's own utterances still playing
+    var quietHandle = null;  // tells the page when the quiet rules have passed
+    var sounding = [];       // submitted utterances with no terminal event yet
     var interim = "";
 
     function nextId() { return ++seq; }
@@ -414,25 +414,72 @@
     }
 
     // ---- speech -----------------------------------------------------------
+    //
+    // Two kinds of bookkeeping. `utt` is the conversation utterance's role in
+    // the state machine, and ends at its end, error, timeout or cut. `sounding`
+    // is acoustic: every utterance this page submitted (the conversation's and
+    // the tracked ones) until a terminal event, its own `end` or `error` or a
+    // cancel this page issued. Listeners stay attached after either ends, so a
+    // real `end` or `error` that comes later still moves `quietAt`, which the
+    // guard before every mic opening measures from: sound may have played
+    // until then.
 
     function markUncertain(estimate) {
       cutOff = true;
       var until = env.now() + estimate * L.SPEECH_DEADLINE_FACTOR;
-      if (until <= uncertainUntil) return;
-      uncertainUntil = until;
-      if (quietHandle !== null) env.clearTimeout(quietHandle);
-      quietHandle = env.setTimeout(function () { quietHandle = null; notify(); }, until - env.now());
+      if (until > uncertainUntil) uncertainUntil = until;
     }
 
-    // Stops the current utterance before its own end: sound is uncertain
-    // first, then the id is cleared, then the voice is cancelled.
-    function cutSpeech() {
-      if (!utt) return false;
-      markUncertain(utt.estimate);
+    // Start's quiet period and the guard pass with time, not with an event:
+    // one timer tells the page when they have.
+    function soundChanged() {
+      if (quietHandle !== null) env.clearTimeout(quietHandle);
+      quietHandle = null;
+      var wait = Math.max(uncertainUntil, quietAt + LIMITS.GUARD_MS) - env.now();
+      if (wait > 0) quietHandle = env.setTimeout(function () { quietHandle = null; notify(); }, wait);
+    }
+
+    function cancelSynth() {
+      try { env.synth.cancel(); } catch (e) { /* nothing queued */ }
+    }
+
+    // Registers a submitted utterance; the returned `heard(error)` is its
+    // own terminal event, early or late.
+    function submitted(estimate) {
+      var entry = { estimate: estimate };
+      sounding.push(entry);
+      return function heard(error) {
+        quietAt = env.now();
+        var i = sounding.indexOf(entry);
+        if (i >= 0) {
+          sounding.splice(i, 1);
+          if (error) markUncertain(estimate);
+        }
+        soundChanged();
+      };
+    }
+
+    // A cancel this page issues ends every submitted utterance still
+    // sounding: sound is marked uncertain first, then the conversation
+    // utterance's id is cleared, then the voice is cancelled. Returns the
+    // conversation utterance that was cut, if any.
+    function cancelSpeech() {
+      var cut = utt;
+      if (!cut && !sounding.length) return null;
+      sounding.forEach(function (entry) { markUncertain(entry.estimate); });
+      sounding = [];
       utt = null;
       clearTimer(TIMER.SPEECH);
       quietAt = env.now();
-      try { env.synth.cancel(); } catch (e) { /* nothing queued */ }
+      cancelSynth();
+      soundChanged();
+      return cut;
+    }
+
+    // Stops the conversation's current utterance before its own end.
+    function cutSpeech() {
+      if (!utt) return false;
+      cancelSpeech();
       return true;
     }
 
@@ -442,21 +489,23 @@
       u.lang = "en-US";
       var id = nextId();
       var estimate = L.estimateMs(text);
+      var heard = submitted(estimate);
       utt = { id: id, u: u, kind: kind, estimate: estimate };
       function mine() { return !!utt && utt.id === id; }
       u.onend = function () {
-        if (!mine()) return;
+        heard(false);
+        if (!mine()) return notify();
         utt = null;
         clearTimer(TIMER.SPEECH);
-        quietAt = env.now();
         said(kind, true);
       };
+      // An error is a stop before the end: uncertain, and cancel as cleanup.
       u.onerror = function () {
-        if (!mine()) return;
-        markUncertain(estimate);
+        heard(true);
+        if (!mine()) return notify();
         utt = null;
         clearTimer(TIMER.SPEECH);
-        quietAt = env.now();
+        cancelSynth();
         said(kind, false);
       };
       setTimer(TIMER.SPEECH, estimate * L.SPEECH_DEADLINE_FACTOR);
@@ -469,10 +518,8 @@
 
     // No `end` within twice the estimate: cancel as cleanup and fail.
     function speechTimedOut() {
-      if (!utt) return;
-      var kind = utt.kind;
-      cutSpeech();
-      said(kind, false);
+      var cut = cancelSpeech();
+      if (cut) said(cut.kind, false);
     }
 
     function said(kind, ok) {
@@ -524,7 +571,7 @@
     function active() { return L.active(c); }
 
     function canStart() {
-      if (active() || utt || tracked.length) return false;
+      if (active() || utt || sounding.length) return false;
       if (env.now() < uncertainUntil) return false;
       // Not proof of quiet when false, but proof of sound when true.
       return !(env.synth && (env.synth.speaking || env.synth.pending));
@@ -553,22 +600,22 @@
       if (active() && id !== c.dest.session_id) dispatch({ type: EV.END, reason: REASON.RETARGET });
     }
 
-    // A page utterance that never reports its end counts as cut off once
-    // twice its estimate has passed.
+    // A page utterance that hasn't ended within twice its estimate is
+    // cancelled as cleanup and counts as cut off; its real end or error,
+    // whenever it comes, still moves the guard.
     function track(u) {
       var estimate = L.estimateMs(u.text || "");
-      var entry = { u: u };
-      function done(cut) {
-        var i = tracked.indexOf(entry);
-        if (i < 0) return;
-        tracked.splice(i, 1);
-        env.clearTimeout(entry.handle);
-        quietAt = env.now();
-        if (cut) markUncertain(estimate);
+      var heard = submitted(estimate);
+      var handle = env.setTimeout(function () {
+        var cut = cancelSpeech();
+        if (cut) said(cut.kind, false);
+        notify();
+      }, estimate * L.SPEECH_DEADLINE_FACTOR);
+      function done(error) {
+        env.clearTimeout(handle);
+        heard(error);
         notify();
       }
-      entry.handle = env.setTimeout(function () { done(true); }, estimate * L.SPEECH_DEADLINE_FACTOR);
-      tracked.push(entry);
       u.addEventListener("end", function () { done(false); });
       u.addEventListener("error", function () { done(true); });
       // Start's enabled state changed.

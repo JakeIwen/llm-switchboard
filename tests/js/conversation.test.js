@@ -541,6 +541,72 @@ test("the page's own utterances hold Start and set the guard", async () => {
   assert.equal(g.ctl.canStart(), true);
 });
 
+// Starts a conversation whose grant answers at the current instant.
+async function startUntilGrant(h, grantId) {
+  assert.equal(h.ctl.start(DEST), true);
+  await flush();
+  await h.answer(PATH.STATE, 200, snap());
+  assert.equal(h.pending(PATH.GRANT).length, 1);
+  return async () => h.answer(PATH.GRANT, 200, { grant: grantId || "g1" });
+}
+
+test("a Play that outlives its deadline is cancelled, and its real end still holds the next mic for the guard", async () => {
+  const h = harness();
+  // One long number is one word to the estimator.
+  const u = new h.Utterance("4815162342");
+  h.ctl.track(u);
+  const deadline = L.estimateMs(u.text) * L.SPEECH_DEADLINE_FACTOR;
+  await h.advance(deadline);
+  assert.equal(h.synth.cancels, 1);
+  assert.equal(h.ctl.canStart(), false);
+  await h.advance(deadline);
+  assert.equal(h.ctl.canStart(), true);
+  const grantArrives = await startUntilGrant(h);
+  // Its real end comes now, at the very instant the grant arrives.
+  u.fire("end");
+  await grantArrives();
+  assert.equal(h.recs.length, 0);
+  await h.advance(LIMITS.GUARD_MS - 1);
+  assert.equal(h.recs.length, 0);
+  await h.advance(1);
+  assert.equal(h.recs.length, 1);
+  assert.equal(h.phase(), PHASE.LISTENING);
+});
+
+test("a conversation utterance's real end after its cut still holds the next mic for the guard", async () => {
+  const h = await listening(harness());
+  await h.hear("one two");
+  await h.hear("read it back");
+  const readback = h.utt();
+  const deadline = L.estimateMs("one two") * L.SPEECH_DEADLINE_FACTOR;
+  await h.alive(deadline);
+  assert.equal(h.view().reason, REASON.SPEECH);
+  await h.advance(deadline);
+  assert.equal(h.ctl.canStart(), true);
+  const grantArrives = await startUntilGrant(h, "g2");
+  readback.fire("end");
+  await grantArrives();
+  assert.equal(h.recs.length, 1);
+  await h.advance(LIMITS.GUARD_MS - 1);
+  assert.equal(h.recs.length, 1);
+  await h.advance(1);
+  assert.equal(h.recs.length, 2);
+});
+
+test("a conversation utterance's error cancels the voice as cleanup and holds Start", async () => {
+  const h = await listening(harness());
+  await h.hear("one two");
+  await h.hear("read it back");
+  h.utt().fire("error", { error: "synthesis-failed" });
+  await flush();
+  assert.equal(h.view().reason, REASON.SPEECH);
+  assert.equal(h.synth.cancels, 1);
+  assert.deepEqual(releases(h), ["g1"]);
+  assert.equal(h.ctl.canStart(), false);
+  await h.advance(L.estimateMs("one two") * L.SPEECH_DEADLINE_FACTOR);
+  assert.equal(h.ctl.canStart(), true);
+});
+
 test("the wake lock released by the system ends it", async () => {
   const h = await listening(harness());
   h.sentinels[0].listeners.forEach((fn) => fn());
