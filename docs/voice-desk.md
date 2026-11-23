@@ -14,7 +14,8 @@ tap starts a hands-free conversation with one session, sent on a spoken
 Phase 2 (the Mac relay) and phase 3 (a "prime" orchestrator) are not built.
 Production sends are off (`desk sends off`, the default) until a live tablet
 round trip passes, and conversations are off (`desk voice off`, the default)
-until the voice readiness check (in "Conversation mode") passes.
+until the voice readiness check (in "Conversation mode") passes. Stage 1 of
+conversation mode has not been qualified for driving.
 
 ## Modules
 
@@ -767,7 +768,8 @@ that ended never resumes when the link returns.
 - **The grant** (`desk/grants.py`). `POST /desk/api/conversation {session_id,
   generation, epoch}` returns `{grant, expires_in: 15}`: a random id bound to
   the token and that target, which expires 15 s after the hub last renewed
-  it. It is refused like a ticket (400 bad input, 409 `stale epoch`, `stale
+  it, measured on the hub's monotonic clock (a wall-clock correction neither
+  extends nor shortens it). It is refused like a ticket (400 bad input, 409 `stale epoch`, `stale
   generation`, `not enrolled`, `not registered`, `ambiguous`, `busy`, 403
   `sends off`, 503 a lock-store error) and also with 403 `voice confirm off` and 409 `another page is
   paired; revoke its token first`. At most one grant exists; a new one
@@ -789,7 +791,13 @@ that ended never resumes when the link returns.
   The mode and the grant id are stored on the request and both are checked
   again at `hand_off`, so a grant that expired or was replaced, or the gate
   switched off, between `begin_send` and the handoff refuses it (the request
-  expires; nothing was written). An omitted `confirm` is a tap, exactly as
+  expires; nothing was written). The grant is checked once more after the
+  target lock is on disk and before handed_off is recorded, since a slow
+  write can outlast it: then the handoff is refused the same way and the
+  lock just written is removed. If that removal fails, the lock stays and
+  the lock store counts as failed, as after any failed write (every send is
+  refused until the hub restarts); in that run it clears without a channel
+  check, since nothing reached the channel. An omitted `confirm` is a tap, exactly as
   before. Tickets, one outstanding request per target, the target lock,
   reply acceptance and channel identity are the same as for a tap. Logs
   record the mode, never content.
@@ -811,10 +819,26 @@ that ended never resumes when the link returns.
 ### Voice readiness check
 
 The notice is best-effort guidance, and the hub can't see which model a
-session runs, so voice readiness is an operator gate. Before `desk voice
-on`, and before using a session on a model not yet tried in a conversation:
-with only a disposable session enrolled, parked, run one full voice round
-trip (Start, a short prompt, "read it back", "send it", the reply spoken,
-then "stop listening"), and send one prompt that should draw a confirming
-question (a request to delete something, say); the reply must ask Jacob to
-confirm instead of acting. Switch `desk voice off` again if either fails.
+session runs, so voice readiness is an operator gate. A voice round trip
+needs both gates on (a grant is refused while voice is off), so the check
+switches them on for the test only. Run it before normal use is first
+authorized, and again before using a session on a model not yet tried in a
+conversation, in this order:
+
+1. Park the van.
+2. Enroll only a disposable test session: `desk unenroll` every other
+   target, and confirm with `desk status` that the test session is the
+   only one enrolled.
+3. Switch both gates on for the test: `desk sends on`, `desk voice on`.
+4. Run one full voice round trip (Start, a short prompt, "read it back",
+   "send it", the reply spoken, then "stop listening"), and send one prompt
+   that should draw a confirming question (a request to delete something,
+   say); the reply must ask Jacob to confirm instead of acting.
+5. Switch `desk voice off` again, pass or fail, and `desk sends off` too
+   unless the tap flow's own tablet checks have already authorized sends.
+   Only then re-enroll other sessions.
+
+Normal use (voice on with real sessions enrolled) is authorized by Jacob
+separately, after a passing check, never by leaving the test's switches on.
+Even then, stage 1 has not been qualified for driving: a passing check
+covers parked use only.
