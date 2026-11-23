@@ -173,6 +173,9 @@
       // Request ids the start's snapshot held for the target (history), and
       // the ids this conversation's sends returned.
       history: {}, historyTaken: false, own: {},
+      // Whether this turn's send POST was issued; while it is unresolved,
+      // the request ids and lock owners seen on the target, judged when it settles.
+      posted: false, evidence: null,
       current: null, seenCurrent: false, sentCueLive: false, pendingReply: null,
       // Which mic opening the pending guard timer is for: "turn" or "resume".
       guardFor: null,
@@ -239,12 +242,27 @@
   // Foreign activity: a request on the target that is neither history from
   // the start nor one of ours, in any state (a foreign turn can start and
   // finish between two polls), or a lock not tied to our current request.
+  function foreignRequest(c, id) { return !c.history[id] && !c.own[id]; }
+  function foreignLock(c, requestId) { return c.current === null || requestId !== c.current; }
+
   function foreign(c, snap) {
     var t = findTarget(snap, c.dest.session_id);
-    if (t && t.lock && (c.current === null || t.lock.request_id !== c.current)) return true;
-    return requestsFor(snap, c.dest.session_id).some(function (rq) {
-      return !c.history[rq.request_id] && !c.own[rq.request_id];
-    });
+    if (t && t.lock && foreignLock(c, t.lock.request_id)) return true;
+    return requestsFor(snap, c.dest.session_id).some(function (rq) { return foreignRequest(c, rq.request_id); });
+  }
+
+  // While the send POST is unresolved our own request can't be told from a
+  // foreign one yet, so everything seen is kept, not only the last poll.
+  function gather(c, snap) {
+    var t = findTarget(snap, c.dest.session_id);
+    if (t && t.lock) c.evidence.locks[t.lock.request_id] = true;
+    requestsFor(snap, c.dest.session_id).forEach(function (rq) { c.evidence.requests[rq.request_id] = true; });
+  }
+
+  // Judged once the POST returned our request id.
+  function evidenceForeign(c) {
+    return Object.keys(c.evidence.locks).some(function (id) { return foreignLock(c, id); }) ||
+      Object.keys(c.evidence.requests).some(function (id) { return foreignRequest(c, id); });
   }
 
   // The first BLOCKER that holds for `targetId` in snapshot `snap`, or null
@@ -358,8 +376,11 @@
     var why = targetProblem(c, c.snap);
     if (why) return finish(c, fx, why);
     // Until the start's snapshot is taken there is no history to compare
-    // with; while the POST is unresolved only the request and lock checks wait.
-    if (!c.historyTaken || c.phase === PHASE.SENDING) return;
+    // with. Only while the POST itself is unresolved do the request and lock
+    // checks wait, with what they saw kept; before it, the ticket fetch
+    // included, foreign activity ends the conversation and nothing is posted.
+    if (!c.historyTaken) return;
+    if (c.phase === PHASE.SENDING && c.posted) return gather(c, c.snap);
     if (foreign(c, c.snap)) return finish(c, fx, REASON.FOREIGN);
     if (c.phase === PHASE.WAITING && !c.pendingReply) follow(c, fx, c.snap);
   }
@@ -430,6 +451,8 @@
     // Out of `listening` in the same step, before any request.
     c.phase = PHASE.SENDING;
     c.frozenText = c.draft;
+    c.posted = false;
+    c.evidence = null;
     closeMic(fx);
     // The turn deadline is a drafting deadline; the reply wait is separate.
     fx.push(clearTimer(TIMER.IDLE), clearTimer(TIMER.TURN), { fx: FX.TICKET });
@@ -464,6 +487,9 @@
     if (!ACCEPTED[ev.state] || typeof ev.request_id !== "string") return finish(c, fx, REASON.UNKNOWN);
     c.own[ev.request_id] = true;
     c.current = ev.request_id;
+    c.posted = false;
+    if (c.evidence && evidenceForeign(c)) return finish(c, fx, REASON.FOREIGN);
+    c.evidence = null;
     c.seenCurrent = false;
     c.draft = "";
     c.frozenText = null;
@@ -546,7 +572,10 @@
   HANDLERS[EV.SAY_FAILED] = function (c, fx) { finish(c, fx, REASON.SPEECH); };
   HANDLERS[EV.TIMEOUT] = onTimeout;
   HANDLERS[EV.TICKET_OK] = function (c, fx, ev) {
-    if (c.phase === PHASE.SENDING) fx.push({ fx: FX.SEND, ticket: ev.ticket, text: c.frozenText });
+    if (c.phase !== PHASE.SENDING || c.posted) return;
+    c.posted = true;
+    c.evidence = { requests: {}, locks: {} };
+    fx.push({ fx: FX.SEND, ticket: ev.ticket, text: c.frozenText });
   };
   HANDLERS[EV.TICKET_FAIL] = function (c, fx, ev) {
     if (c.phase === PHASE.SENDING) finish(c, fx, withDetail(REASON.NOT_SENT, ev.reason));
@@ -565,6 +594,7 @@
     Object.keys(c).forEach(function (k) { next[k] = c[k]; });
     next.history = Object.assign({}, c.history);
     next.own = Object.assign({}, c.own);
+    next.evidence = c.evidence && { requests: Object.assign({}, c.evidence.requests), locks: Object.assign({}, c.evidence.locks) };
     return next;
   }
 

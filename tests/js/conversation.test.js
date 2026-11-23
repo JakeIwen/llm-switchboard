@@ -348,6 +348,19 @@ test("an answer that beats the POST is spoken after the sent cue", async () => {
   assert.deepEqual(texts(h), [CUE.SENT, "Yes."]);
 });
 
+test("a foreign request seen while the ticket is outstanding ends it before any POST", async () => {
+  const h = harness();
+  h.honorAbort = false;
+  await listening(h);
+  await h.hear("x");
+  await h.hear("send it");
+  h.ctl.snapshot(snap({ requests: [rq("f1", "answered", "Someone else.")] }));
+  await flush();
+  assert.equal(h.view().reason, REASON.FOREIGN);
+  await h.answer(PATH.TICKET, 200, { ticket: "t" });
+  assert.equal(h.all(PATH.SEND).length, 0);
+});
+
 test("a send with no answer is unknown and never retried", async () => {
   const h = await listening(harness());
   await h.hear("x");

@@ -468,6 +468,55 @@ test("the end conditions hold while sending, and refusals end it without a retry
   ended(t, L.withDetail(REASON.NOT_SENT, "too many tickets"));
 });
 
+test("foreign activity seen before the POST is issued ends it, and nothing is posted", () => {
+  const m = listening();
+  say(m, "x");
+  say(m, "send it");
+  // The ticket is still outstanding: a foreign request starts and finishes.
+  m.ev(EV.SNAPSHOT, { snapshot: snap({ version: 2, requests: [rq("f1", "answered", { text: "t", spoken: "s" })] }) });
+  ended(m, REASON.FOREIGN);
+  assert.deepEqual(m.ev(EV.TICKET_OK, { ticket: "t1" }), []);
+
+  const l = listening();
+  say(l, "x");
+  say(l, "send it");
+  l.ev(EV.SNAPSHOT, { snapshot: snap({ version: 2, targets: [target({ lock: { lock_id: "L", request_id: "f1" } })] }) });
+  ended(l, REASON.FOREIGN);
+});
+
+test("while the POST is unresolved every request and lock seen is kept and judged when it settles", () => {
+  // A foreign request seen in one poll and gone from the next still counts.
+  const m = listening();
+  say(m, "x");
+  say(m, "send it");
+  m.ev(EV.TICKET_OK, { ticket: "t1" });
+  m.ev(EV.SNAPSHOT, { snapshot: snap({ version: 2, requests: [rq("f1", "pending")] }) });
+  m.ev(EV.SNAPSHOT, { snapshot: snap({ version: 3, requests: [rq("r1", "handed_off")] }) });
+  assert.equal(m.phase(), PHASE.SENDING);
+  m.ev(EV.SEND_OK, { request_id: "r1", state: "handed_off" });
+  ended(m, REASON.FOREIGN);
+  assert.ok(!has(m.fx, FX.SAY));
+
+  // So does a lock tied to another request, seen once.
+  const l = listening();
+  say(l, "x");
+  say(l, "send it");
+  l.ev(EV.TICKET_OK, { ticket: "t1" });
+  l.ev(EV.SNAPSHOT, { snapshot: snap({ version: 2, targets: [target({ lock: { lock_id: "L", request_id: "f1" } })] }) });
+  l.ev(EV.SNAPSHOT, { snapshot: snap({ version: 3 }) });
+  l.ev(EV.SEND_OK, { request_id: "r1", state: "handed_off" });
+  ended(l, REASON.FOREIGN);
+
+  // Our own request and its lock, seen before the POST answered, are not foreign.
+  const o = listening();
+  say(o, "x");
+  say(o, "send it");
+  o.ev(EV.TICKET_OK, { ticket: "t1" });
+  o.ev(EV.SNAPSHOT, { snapshot: snap({ version: 2, requests: [rq("r1", "handed_off")], targets: [target({ lock: { lock_id: "L", request_id: "r1" } })] }) });
+  o.ev(EV.SEND_OK, { request_id: "r1", state: "handed_off" });
+  assert.equal(o.phase(), PHASE.WAITING);
+});
+
 test("foreign activity during a turn ends it and discards the draft", () => {
   const m = listening(snap({ requests: [rq("old", "answered", { text: "t", spoken: "s" })] }));
   say(m, "half");
