@@ -374,3 +374,35 @@ test("the page's own Play utterance is tracked toward Start's quiet rule", async
   await settle();
   assert.equal(h.$("conv-start").disabled, false);
 });
+
+test("a reply that removes the lock under an open Clear confirmation is spoken and polling goes on", async () => {
+  const lock = { lock_id: "L1", request_id: "r1", since: 1, earlier_run: false };
+  const h = await paired(snap({ targets: [target("s1", { lock })], requests: [rq("r1", "handed_off")] }));
+  h.$("clear-btn").click();
+  assert.equal(h.$("clear-confirm").hidden, false);
+  // The reply's own speech asks for a render before the new snapshot is fully applied.
+  await h.answer(POLL, 200, snap({ requests: [rq("r1", "answered", "All good.")] }));
+  assert.equal(h.utt().text, "All good.");
+  assert.equal(h.$("clear-confirm").hidden, true);
+  assert.equal(h.$("clear-area").hidden, true);
+  assert.equal(h.pending(POLL).length, 1, "polling stopped");
+  assert.equal(h.$("conn").textContent, "Connected");
+});
+
+test("a fault while applying one snapshot is shown, still reaches the conversation, and polling goes on", async () => {
+  const h = await paired();
+  await converse(h);
+  const title = h.$("detail-title");
+  let faults = 1;
+  Object.defineProperty(title, "textContent", { configurable: true, get: () => "", set: () => {
+    if (faults-- > 0) throw new Error("render fault");
+  } });
+  // Sends turned off: the conversation must still see this snapshot and end.
+  await h.answer(POLL, 200, snap({ sends_enabled: false }));
+  assert.equal(h.state(), ended(REASON.SENDS_OFF));
+  assert.equal(h.$("conn").getAttribute("data-state"), "fault");
+  assert.equal(h.pending(POLL).length, 1, "polling stopped");
+  await h.answer(POLL, 200, snap());
+  assert.equal(h.$("conn").textContent, "Connected");
+  assert.equal(h.pending(POLL).length, 1);
+});

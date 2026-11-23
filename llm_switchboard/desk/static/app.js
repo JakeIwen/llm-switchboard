@@ -92,23 +92,25 @@
     token = null;
     state = null;
     session++;
-    conv.unpaired();
-    voidCompose(null);
-    audio.stopSpeaking();
-    // A new pairing starts clean: no old draft, target, result or settings.
-    selectedId = null;
-    clearFrozen = null;
-    sentRequestId = null;
-    audio.forgetReplies();
-    $("draft").value = "";
-    $("interim").textContent = "";
-    hideResult();
-    clear($("enroll-list"));
-    $("settings-note").textContent = "";
-    $("desk").hidden = true;
-    startup.stop();
-    $("banner-sends").hidden = true;
-    $("banner-lock-store").hidden = true;
+    batch(function () {
+      conv.unpaired();
+      voidCompose(null);
+      audio.stopSpeaking();
+      // A new pairing starts clean: no old draft, target, result or settings.
+      selectedId = null;
+      clearFrozen = null;
+      sentRequestId = null;
+      audio.forgetReplies();
+      $("draft").value = "";
+      $("interim").textContent = "";
+      hideResult();
+      clear($("enroll-list"));
+      $("settings-note").textContent = "";
+      $("desk").hidden = true;
+      startup.stop();
+      $("banner-sends").hidden = true;
+      $("banner-lock-store").hidden = true;
+    });
     setConn("offline", "Not paired");
     startPairing(reason);
   }
@@ -203,7 +205,7 @@
         if (r.status === 200 && r.data) {
           failures = 0;
           setConn("online", "Connected");
-          applyState(r.data, startSeq);
+          try { applyState(r.data, startSeq); } catch (e) { pageFault(e); }
           once();
         } else {
           retry();
@@ -225,7 +227,30 @@
     once();
   }
 
+  // A fault in the page's own handling of a snapshot is shown, and polling
+  // goes on: the next poll waits on the version already stored, so a fault
+  // that repeats can't spin, and the next good snapshot shows Connected again.
+  function pageFault(e) {
+    setConn("fault", "Page error; reload if this stays");
+    if (window.console) window.console.error(e);
+  }
+
+  // Everything that depends on the snapshot is reconciled before anything
+  // can render it; the speech and the controller's snapshot come after, and
+  // the renders they ask for wait for the batch's one render.
   function applyState(next, startSeq) {
+    batch(function () {
+      runAll([
+        function () { reconcile(next, startSeq); },
+        function () { audio.repliesArrived(next, selectedId); },
+        function () { conv.snapshot(next); },
+        function () { audio.pruneReplies(next.requests); }
+      ]);
+    });
+  }
+
+  // The page state the snapshot decides. Renders nothing, speaks nothing.
+  function reconcile(next, startSeq) {
     var epochChanged = state && state.epoch !== next.epoch;
     state = next;
     $("banner-sends").hidden = next.sends_enabled !== false;
@@ -238,12 +263,8 @@
     if (selectedId !== null && !findTarget(selectedId)) selectedId = null;
     if (epochChanged) voidCompose("The hub restarted: the review was discarded.");
     else validateCompose();
-    audio.repliesArrived(next, selectedId);
-    conv.snapshot(next);
-    audio.pruneReplies(next.requests);
     expireWaitingResult(next, startSeq);
     if (clearFrozen && !Logic.clearStillValid(clearFrozen, findTarget(clearFrozen.session_id))) clearFrozen = null;
-    render();
   }
 
   // "Delivered, waiting" must not outlive the wait.
@@ -289,11 +310,34 @@
 
   function folderOf(t) { return t.cwd || ""; }
 
+  // ---- Rendering ----------------------------------------------------------
+  //
+  // A render shows one consistent page. While a batch changes several pieces
+  // of page state (a snapshot applied, a target selected, the token dropped),
+  // a render asked for in between, such as the controller's onChange from
+  // track() or snapshot(), waits, and the batch renders once at its end.
+  var held = 0;
+
+  function batch(fn) {
+    held++;
+    try { fn(); } finally {
+      held--;
+      if (!held) render();
+    }
+  }
+
+  // Every step runs even when an earlier one throws, so one fault can't keep
+  // the rest (the controller's snapshot above all) from running; the first
+  // fault is thrown after.
+  function runAll(steps) {
+    var fault = null;
+    steps.forEach(function (step) { try { step(); } catch (e) { if (!fault) fault = e; } });
+    if (fault) throw fault;
+  }
+
   function render() {
-    renderTargets();
-    renderDetail();
-    renderSettings();
-    convView.render(conv.view(), startBlocker());
+    if (held) return;
+    runAll([renderTargets, renderDetail, renderSettings, function () { convView.render(conv.view(), startBlocker()); }]);
   }
 
   function renderTargets() {
@@ -316,17 +360,18 @@
 
   function selectTarget(id) {
     if (id === selectedId) return;
-    conv.targetSelected(id);
-    audio.stopDictation();
-    audio.stopSpeaking();
-    voidCompose(null);
-    $("draft").value = "";
-    $("interim").textContent = "";
-    clearFrozen = null;
-    sentRequestId = null;
-    hideResult();
-    selectedId = id;
-    render();
+    batch(function () {
+      conv.targetSelected(id);
+      audio.stopDictation();
+      audio.stopSpeaking();
+      voidCompose(null);
+      $("draft").value = "";
+      $("interim").textContent = "";
+      clearFrozen = null;
+      sentRequestId = null;
+      hideResult();
+      selectedId = id;
+    });
   }
 
   function renderDetail() {
@@ -342,13 +387,15 @@
     b.setAttribute("data-tone", badge.tone);
 
     $("clear-area").hidden = !t.lock;
-    var showConfirm = !!clearFrozen;
-    $("clear-confirm").hidden = !showConfirm;
-    $("clear-btn").hidden = showConfirm;
-    if (showConfirm) {
+    // Shown only while the target still shows the lock it names, whatever
+    // the order the page's state was updated in.
+    var confirm = Logic.clearStillValid(clearFrozen, t) ? clearFrozen : null;
+    $("clear-confirm").hidden = !confirm;
+    $("clear-btn").hidden = !!confirm;
+    if (confirm) {
       $("clear-text").textContent =
         "Only clear if you checked the session and the earlier request is finished or lost. Lock " +
-        clearFrozen.lock_id + " for request " + clearFrozen.request_id + ", since " +
+        confirm.lock_id + " for request " + confirm.request_id + ", since " +
         formatTime(t.lock.since) + ".";
     }
 
@@ -696,13 +743,14 @@
     $("clear-yes").addEventListener("click", doClear);
     document.addEventListener("visibilitychange", function () {
       if (document.visibilityState !== "hidden") return;
-      conv.hidden();
-      audio.stopDictation();
-      audio.stopSpeaking();
-      if (compose.phase === "edit" || compose.phase === "review") {
-        voidCompose("The page was hidden: the review and ticket were discarded.");
-        render();
-      }
+      batch(function () {
+        conv.hidden();
+        audio.stopDictation();
+        audio.stopSpeaking();
+        if (compose.phase === "edit" || compose.phase === "review") {
+          voidCompose("The page was hidden: the review and ticket were discarded.");
+        }
+      });
     });
     if ("speechSynthesis" in window) {
       window.speechSynthesis.addEventListener("voiceschanged", function () { if (state) render(); });
