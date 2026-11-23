@@ -191,6 +191,8 @@
       // Which mic opening the pending guard timer is for: "turn" or "resume".
       guardFor: null,
       quickEnds: 0, listenAt: null, freshUntil: 0, snap: null,
+      // The drafting deadlines as absolute times; their timers may fire late.
+      turnAt: null, idleAt: null,
       reason: null, lost: false
     };
   }
@@ -264,9 +266,23 @@
     if (snap.voice_confirm_enabled !== true) return problem(REASON.VOICE_OFF);
     if (snap.lock_store_error) return problem(REASON.LOCK_STORE);
     var t = findTarget(snap, c.dest.session_id);
-    if (!t || t.generation !== c.dest.generation || !USABLE[t.registration]) {
+    if (!t || t.enrolled !== true || t.generation !== c.dest.generation || !USABLE[t.registration]) {
       return problem(REASON.TARGET, grantGoneIn(snap, c.dest));
     }
+    return null;
+  }
+
+  // Checked at every mic opening and before a final result is used: the
+  // grant fresh, the tablet's voice there (`ev.voice`, read by the
+  // controller for every event), the target available, and the turn's
+  // absolute deadlines not passed, whether or not their timers have run.
+  function admissionProblem(c, ev) {
+    if (!fresh(c, ev.now)) return problem(REASON.HUB_LOST, true);
+    if (!ev.voice) return problem(REASON.NO_VOICE);
+    var why = targetProblem(c, c.snap);
+    if (why) return why;
+    if (c.turnAt !== null && ev.now >= c.turnAt) return problem(REASON.TURN);
+    if (c.idleAt !== null && ev.now >= c.idleAt) return problem(REASON.IDLE);
     return null;
   }
 
@@ -305,7 +321,7 @@
     if (snap.voice_confirm_enabled !== true) return BLOCKER.VOICE_OFF;
     if (snap.lock_store_error) return BLOCKER.LOCK_STORE;
     var t = findTarget(snap, targetId);
-    if (!t || !USABLE[t.registration]) return BLOCKER.UNAVAILABLE;
+    if (!t || t.enrolled !== true || !USABLE[t.registration]) return BLOCKER.UNAVAILABLE;
     if (t.lock || requestsFor(snap, targetId).some(function (rq) { return OUTSTANDING[rq.state]; })) return BLOCKER.BUSY;
     if (!page.recognizer) return BLOCKER.NO_RECOGNIZER;
     if (!page.voice) return BLOCKER.NO_VOICE;
@@ -332,12 +348,13 @@
     fx.push({ fx: FX.END, reason: reason, lost: !!lost, silent: !!silent });
   }
 
-  // Every mic opening: only while the grant is fresh, and never sooner than
-  // the guard after this page's last sound. Until the guard has passed the
-  // phase stays where it is (starting, reading, speaking, or listening
-  // between recognizers).
+  // Every mic opening: only while admissionProblem finds nothing, and never
+  // sooner than the guard after this page's last sound. Until the guard has
+  // passed the phase stays where it is (starting, reading, speaking, or
+  // listening between recognizers).
   function toListening(c, ev, fx, newTurn) {
-    if (!fresh(c, ev.now)) return finish(c, fx, REASON.HUB_LOST, true);
+    var why = admissionProblem(c, ev);
+    if (why) return finish(c, fx, why.reason, why.lost);
     var wait = ev.quietAt + LIMITS.GUARD_MS - ev.now;
     if (wait > 0) {
       c.guardFor = newTurn ? "turn" : "resume";
@@ -350,6 +367,8 @@
       c.draft = "";
       c.quickEnds = 0;
       // The turn's deadline runs from its first mic opening; nothing resets it.
+      c.turnAt = ev.now + LIMITS.TURN_MS;
+      c.idleAt = ev.now + LIMITS.IDLE_MS;
       fx.push(timer(TIMER.TURN, LIMITS.TURN_MS), timer(TIMER.IDLE, LIMITS.IDLE_MS));
     }
     c.listenAt = ev.now;
@@ -449,7 +468,7 @@
     var ctx = ev.ctx || {};
     if (ctx.selectedId !== c.dest.session_id) return finish(c, fx, REASON.RETARGET);
     if (!ctx.visible) return finish(c, fx, REASON.HIDDEN);
-    if (!ctx.voice) return finish(c, fx, REASON.NO_VOICE);
+    if (!ev.voice) return finish(c, fx, REASON.NO_VOICE);
     var why = targetProblem(c, c.snap);
     if (why) return finish(c, fx, why.reason, why.lost);
     if (foreign(c, c.snap)) return finish(c, fx, REASON.BUSY);
@@ -459,8 +478,10 @@
   function onResult(c, fx, ev) {
     if (c.phase !== PHASE.LISTENING) return;
     if (!ev.final) { fx.push({ fx: FX.INTERIM, text: String(ev.text || "") }); return; }
-    if (!fresh(c, ev.now)) return finish(c, fx, REASON.HUB_LOST, true);
+    var why = admissionProblem(c, ev);
+    if (why) return finish(c, fx, why.reason, why.lost);
     c.quickEnds = 0;
+    c.idleAt = ev.now + LIMITS.IDLE_MS;
     fx.push({ fx: FX.INTERIM, text: "" }, timer(TIMER.IDLE, LIMITS.IDLE_MS));
     var cmd = command(ev.text);
     if (cmd === COMMAND.SEND) return onSendCommand(c, fx);
@@ -489,6 +510,8 @@
     c.evidence = null;
     closeMic(fx);
     // The turn deadline is a drafting deadline; the reply wait is separate.
+    c.turnAt = null;
+    c.idleAt = null;
     fx.push(clearTimer(TIMER.IDLE), clearTimer(TIMER.TURN), { fx: FX.TICKET });
   }
 

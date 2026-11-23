@@ -13,7 +13,7 @@ const DEST = { host: "pi", session_id: "s1", generation: 3, label: "one", epoch:
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
 function target(over) {
-  return Object.assign({ session_id: "s1", generation: 3, registration: "replied", lock: null }, over);
+  return Object.assign({ session_id: "s1", generation: 3, registration: "replied", enrolled: true, lock: null }, over);
 }
 let version = 100;
 function snap(over) {
@@ -645,6 +645,21 @@ test("a Play that outlives its deadline is cancelled, and its real end still hol
   await h.advance(1);
   assert.equal(h.recs.length, 1);
   assert.equal(h.phase(), PHASE.LISTENING);
+});
+
+test("the voice list emptying during the start's guard keeps the mic closed", async () => {
+  const h = harness();
+  const u = new h.Utterance("Play this.");
+  h.ctl.track(u);
+  u.fire("end");
+  const grantArrives = await startUntilGrant(h);
+  await grantArrives();
+  assert.equal(h.recs.length, 0);
+  h.voice = false;
+  await h.advance(LIMITS.GUARD_MS);
+  assert.equal(h.recs.length, 0);
+  assert.equal(h.view().reason, REASON.NO_VOICE);
+  assert.deepEqual(releases(h), ["g1"]);
 });
 
 test("a conversation utterance's real end after its cut still holds the next mic for the guard", async () => {

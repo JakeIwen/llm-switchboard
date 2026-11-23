@@ -108,6 +108,7 @@
           var next = queue.shift();
           next.now = env.now();
           next.quietAt = quietAt;
+          next.voice = !!deps.voiceAvailable();
           var r = L.reduce(c, next);
           c = r.c;
           r.fx.forEach(run);
@@ -303,7 +304,7 @@
         grant = got;
         setTimer(TIMER.BEAT, LIMITS.BEAT_MS);
         dispatch({ type: EV.GRANT_OK, startedAt: startedAt,
-          ctx: { selectedId: deps.selectedId(), visible: deps.visible(), voice: deps.voiceAvailable() } });
+          ctx: { selectedId: deps.selectedId(), visible: deps.visible() } });
       }, function () {
         if (!settle(FETCH.GRANT, id)) return;
         clearTimer(TIMER.STEP);

@@ -9,7 +9,7 @@ const { PHASE, EV, FX, TIMER, SAY, REASON, CUE, LIMITS, COMMAND } = L;
 const DEST = { host: "pi", session_id: "s1", generation: 3, label: "one", epoch: "e1" };
 
 function target(over) {
-  return Object.assign({ session_id: "s1", generation: 3, registration: "replied", lock: null }, over);
+  return Object.assign({ session_id: "s1", generation: 3, registration: "replied", enrolled: true, lock: null }, over);
 }
 function snap(over) {
   return Object.assign({
@@ -24,9 +24,9 @@ function rq(id, state, reply, session) {
 // A conversation driven event by event, with its own clock and quietAt.
 function machine() {
   let c = L.initial();
-  const m = { now: 100000, quietAt: 0, fx: [] };
+  const m = { now: 100000, quietAt: 0, voice: true, fx: [] };
   m.ev = (type, fields) => {
-    const r = L.reduce(c, Object.assign({ type: type, now: m.now, quietAt: m.quietAt }, fields || {}));
+    const r = L.reduce(c, Object.assign({ type: type, now: m.now, quietAt: m.quietAt, voice: m.voice }, fields || {}));
     c = r.c;
     m.fx = r.fx;
     return r.fx;
@@ -52,7 +52,7 @@ function listening(s) {
   m.ev(EV.START, { dest: DEST });
   m.ev(EV.SNAPSHOT_FETCHED, { snapshot: s || snap() });
   m.ev(EV.WAKE_OK);
-  m.ev(EV.GRANT_OK, { startedAt: m.now, ctx: { selectedId: "s1", visible: true, voice: true } });
+  m.ev(EV.GRANT_OK, { startedAt: m.now, ctx: { selectedId: "s1", visible: true } });
   assert.equal(m.phase(), PHASE.LISTENING);
   return m;
 }
@@ -104,7 +104,7 @@ test("a start takes a snapshot, the wake lock and the grant, then opens the mic 
   assert.equal(m.phase(), PHASE.STARTING);
   assert.ok(has(m.ev(EV.SNAPSHOT_FETCHED, { snapshot: snap() }), FX.WAKE_LOCK));
   assert.ok(has(m.ev(EV.WAKE_OK), FX.GRANT));
-  const fx = m.ev(EV.GRANT_OK, { startedAt: m.now, ctx: { selectedId: "s1", visible: true, voice: true } });
+  const fx = m.ev(EV.GRANT_OK, { startedAt: m.now, ctx: { selectedId: "s1", visible: true } });
   assert.equal(m.phase(), PHASE.LISTENING);
   for (const [name, ms] of [[TIMER.TURN, LIMITS.TURN_MS], [TIMER.IDLE, LIMITS.IDLE_MS], [TIMER.WATCHDOG, LIMITS.WATCHDOG_MS]]) {
     assert.ok(has(fx, FX.TIMER, { name: name, ms: ms }), name);
@@ -138,12 +138,13 @@ test("a start ends when the target is not free or the switches are off", () => {
 });
 
 test("the grant's checks use the page as it is when the grant arrives", () => {
-  for (const [ctx, reason] of [
-    [{ selectedId: "s2", visible: true, voice: true }, REASON.RETARGET],
-    [{ selectedId: "s1", visible: false, voice: true }, REASON.HIDDEN],
-    [{ selectedId: "s1", visible: true, voice: false }, REASON.NO_VOICE],
+  for (const [ctx, voice, reason] of [
+    [{ selectedId: "s2", visible: true }, true, REASON.RETARGET],
+    [{ selectedId: "s1", visible: false }, true, REASON.HIDDEN],
+    [{ selectedId: "s1", visible: true }, false, REASON.NO_VOICE],
   ]) {
     const m = machine();
+    m.voice = voice;
     m.ev(EV.START, { dest: DEST });
     m.ev(EV.SNAPSHOT_FETCHED, { snapshot: snap() });
     m.ev(EV.WAKE_OK);
@@ -181,7 +182,7 @@ test("no mic opens sooner than the guard after the last sound, at the start too"
   m.ev(EV.START, { dest: DEST });
   m.ev(EV.SNAPSHOT_FETCHED, { snapshot: snap() });
   m.ev(EV.WAKE_OK);
-  const fx = m.ev(EV.GRANT_OK, { startedAt: m.now, ctx: { selectedId: "s1", visible: true, voice: true } });
+  const fx = m.ev(EV.GRANT_OK, { startedAt: m.now, ctx: { selectedId: "s1", visible: true } });
   assert.equal(m.phase(), PHASE.STARTING);
   assert.ok(has(fx, FX.TIMER, { name: TIMER.GUARD, ms: LIMITS.GUARD_MS - 100 }));
   assert.ok(!has(fx, FX.LISTEN));
@@ -407,6 +408,78 @@ test("past the freshness deadline no event acts or renews, before the tick has r
   late(e);
   e.ev(EV.END, { reason: REASON.END_TAPPED });
   ended(e, REASON.END_TAPPED);
+});
+
+// Time passes with the hub answering every beat and no timer firing.
+function keepFresh(m, ms) {
+  for (let left = ms; left > 0; left -= 4000) {
+    m.now += Math.min(4000, left);
+    m.ev(EV.BEAT_OK, { startedAt: m.now });
+  }
+}
+
+test("a final result after the idle or turn deadline ends it, even before the timer fires", () => {
+  const m = listening();
+  say(m, "a draft");
+  keepFresh(m, LIMITS.IDLE_MS);
+  assert.equal(m.phase(), PHASE.LISTENING);
+  say(m, "send it");
+  ended(m, REASON.IDLE);
+  assert.ok(!has(m.fx, FX.TICKET));
+  assert.ok(!has(m.fx, FX.TIMER, { name: TIMER.IDLE }));
+
+  // Finals keep it from going idle, but the turn deadline is absolute.
+  const t = listening();
+  say(t, "a draft");
+  keepFresh(t, LIMITS.IDLE_MS - 1000);
+  say(t, "more");
+  keepFresh(t, LIMITS.TURN_MS - LIMITS.IDLE_MS + 1000);
+  say(t, "send it");
+  ended(t, REASON.TURN);
+  assert.ok(!has(t.fx, FX.TICKET));
+
+  // A mic opening after the deadline: the recognizer's end doesn't restart it.
+  const r = listening();
+  keepFresh(r, LIMITS.IDLE_MS);
+  r.ev(EV.REC_END);
+  ended(r, REASON.IDLE);
+  assert.ok(!has(r.fx, FX.LISTEN));
+});
+
+test("every mic opening and final rechecks the voice and the target, enrolled included", () => {
+  // The voice list empties while the start's guard runs.
+  const m = machine();
+  m.quietAt = m.now - 100;
+  m.ev(EV.START, { dest: DEST });
+  m.ev(EV.SNAPSHOT_FETCHED, { snapshot: snap() });
+  m.ev(EV.WAKE_OK);
+  m.ev(EV.GRANT_OK, { startedAt: m.now, ctx: { selectedId: "s1", visible: true } });
+  assert.equal(m.phase(), PHASE.STARTING);
+  m.voice = false;
+  m.now += LIMITS.GUARD_MS;
+  m.ev(EV.TIMEOUT, { name: TIMER.GUARD });
+  ended(m, REASON.NO_VOICE);
+  assert.ok(!has(m.fx, FX.LISTEN));
+
+  const f = listening();
+  say(f, "a draft");
+  f.voice = false;
+  say(f, "send it");
+  ended(f, REASON.NO_VOICE);
+  assert.ok(!has(f.fx, FX.TICKET));
+
+  // Registered but no longer enrolled: not available.
+  const e = listening();
+  e.ev(EV.SNAPSHOT, { snapshot: snap({ version: 2, targets: [target({ enrolled: false })] }) });
+  ended(e, REASON.TARGET);
+  assert.equal(e.c().lost, false);
+  const s = machine();
+  s.ev(EV.START, { dest: DEST });
+  s.ev(EV.SNAPSHOT_FETCHED, { snapshot: snap({ targets: [target({ enrolled: false })] }) });
+  ended(s, REASON.TARGET);
+  const page = { recognizer: true, voice: true, tapSending: false, canStart: true };
+  assert.equal(L.startBlocker(snap({ targets: [target({ enrolled: false })] }), "s1", page), L.BLOCKER.UNAVAILABLE);
+  assert.equal(L.startBlocker(snap(), "s1", page), null);
 });
 
 test("waiting follows the exact request: absent before the ack, then answered", () => {
