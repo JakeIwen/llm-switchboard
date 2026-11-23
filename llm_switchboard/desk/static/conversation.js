@@ -123,7 +123,7 @@
     var sound = T.create({ env: env, onChange: notify, onLate: lateSound });
     var cutsAtStart = 0;     // sound.cuts() at the Start tap: more means this conversation cut one off
     var interim = "";
-    var lastFinalAt = -Infinity; // when the current recognizer last gave a final result
+    var lastFinalAt = -Infinity; // when the conversation's mic last gave a final result
 
     function nextId() { return ++seq; }
 
