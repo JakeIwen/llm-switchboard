@@ -799,11 +799,13 @@ its utterance off (it timed out, was cancelled or had already ended) shows
 it may have sounded until then, so whatever a mic heard since is suspect.
 If a conversation has its mic open, or a draft holding words recognized
 since that utterance was written off, it ends silently with "the desk may
-have heard its own speech", the draft discarded and never sent; a running
-one-shot dictation stops and the words it added are removed, with the note
-"Dictation stopped: the desk may have heard its own speech. Its words were
-discarded.". Either way sound is uncertain again for twice that
-utterance's estimate. Otherwise the late event only moves the guard.
+have heard its own speech" and the draft discarded. While the turn's ticket
+is still being fetched, the draft is never sent; once its send POST is out,
+the end says delivery is unknown and that POST's own answer, if it comes,
+settles it (see the end reasons below). A running one-shot dictation
+stops and the words it added are removed, with the note "Dictation stopped:
+the desk may have heard its own speech. Its words were discarded.". Either
+way sound is uncertain again for twice that utterance's estimate. Otherwise the late event only moves the guard.
 
 End reasons, as the overlay and the cue word them: you said stop listening;
 End was tapped; the page was hidden; the page was closed or frozen (on
