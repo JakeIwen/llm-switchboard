@@ -57,6 +57,9 @@
       $("conv-draft-area").hidden = ended;
       $("conv-draft").textContent = v.draft;
       $("conv-interim").textContent = v.interim;
+      // The full reply, the spoken summary's source, as text.
+      $("conv-reply-area").hidden = !v.reply;
+      $("conv-reply").textContent = v.reply ? v.reply.text : "";
       $("conv-end").textContent = ended ? END_LABEL.ended : END_LABEL.active;
     }
 

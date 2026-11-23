@@ -112,4 +112,6 @@ textarea { resize: vertical; min-height: 7rem; }
 .conv-draft { flex: 1; min-height: 5rem; overflow-y: auto; font-size: 1.3rem; }
 .conv-draft:empty::before { content: "Nothing yet."; color: var(--muted); }
 .conv-overlay .interim { font-size: 1.2rem; }
+.conv-reply-area { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.conv-reply { flex: 1; min-height: 4rem; overflow-y: auto; font-size: 1.2rem; }
 .btn.conv-end { width: 100%; min-height: 7rem; font-size: 1.8rem; background: var(--bad-bg); color: var(--bad); border-color: var(--bad); }

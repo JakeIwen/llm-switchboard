@@ -654,7 +654,8 @@ the full-screen **End conversation** control and the limits below.
 ### States
 
 The overlay covers the page for the whole conversation and shows the
-session's label, the state in words, the draft and the words being heard.
+session's label, the state in words, the draft and the words being heard,
+and, once the current request's reply has come, the reply's full text.
 
 | State | Overlay | What happens |
 | --- | --- | --- |
@@ -663,7 +664,7 @@ session's label, the state in words, the draft and the words being heard.
 | `reading` | Speaking. The mic is closed. | A read-back or a cue inside a turn |
 | `sending` | Sending. The mic is closed. | A ticket for the frozen identity, then `POST /desk/api/send {ticket, text, confirm: "voice", grant}`. No retry: a refusal ends the conversation with its reason, and a send with no usable answer is unknown |
 | `waiting` | Sent. Waiting for the reply. The mic is closed. | After the "Sent." cue; follows the exact request id the send returned |
-| `speaking` | Reading the reply. The mic is closed. | The reply's `spoken` text exactly as received ("No spoken summary." when it is empty; the full text is on screen). On its `end` and the guard, `listening` with an empty draft and a new turn |
+| `speaking` | Reading the reply. The mic is closed. | The reply's `spoken` text exactly as received ("No spoken summary." when it is empty; the full text is in the overlay). On its `end` and the guard, `listening` with an empty draft and a new turn |
 | `ended` | Conversation ended: <reason>. | Mic and speech stopped, draft discarded, wake lock released. The overlay stays, with **Close**, until tapped; only a new tap starts another conversation |
 
 While a conversation runs or its closing cue plays, Dictate, Review, Send,

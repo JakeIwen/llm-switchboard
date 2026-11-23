@@ -414,6 +414,15 @@
     finish(c, fx, rq.state === REQUEST_STATE.UNKNOWN ? REASON.UNKNOWN : REASON.NO_REPLY);
   }
 
+  // The reply to the current request in the latest snapshot the conversation
+  // took, or null. The overlay shows its full text, which matters most when
+  // only "No spoken summary." was heard.
+  function currentReply(c) {
+    if (!c.current || !c.snap) return null;
+    var rq = requestsFor(c.snap, c.dest.session_id).filter(function (x) { return x.request_id === c.current; })[0];
+    return rq && rq.reply ? rq.reply : null;
+  }
+
   function newer(c, snap) {
     return !c.snap || snap.epoch !== c.snap.epoch || snap.version >= c.snap.version;
   }
@@ -687,7 +696,7 @@
     BLOCKER: BLOCKER, SPEECH_DEADLINE_FACTOR: SPEECH_DEADLINE_FACTOR, GRANT_GONE: GRANT_GONE,
     grantGone: grantGone, grantGoneIn: grantGoneIn,
     initial: initial, reduce: reduce, active: active, fresh: fresh, renew: renew, withDetail: withDetail,
-    startBlocker: startBlocker,
+    startBlocker: startBlocker, currentReply: currentReply,
     command: command, appendDraft: appendDraft, draftProblem: draftProblem, estimateMs: estimateMs
   };
   root.DeskConversationLogic = api;

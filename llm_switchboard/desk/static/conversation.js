@@ -57,7 +57,9 @@
 //                     the quiet period end on a timer). It says nothing about
 //                     a conversation: Dictate also needs !holds().
 //   view()            {phase, active, dest, draft, interim, reason, lost,
-//                     speaking, canStart, soundClear}: everything the view shows.
+//                     speaking, canStart, soundClear, reply}: everything the
+//                     view shows; `reply` is {text, spoken} of the current
+//                     request once a snapshot holds it, else null.
 //   holds()           A conversation is active or its closing cue plays: the
 //                     page disables Dictate, Review, Send, Test, Play and its
 //                     own reply speech, and leaves speech to the controller.
@@ -741,7 +743,8 @@
     function view() {
       return {
         phase: c.phase, active: active(), dest: c.dest, draft: c.draft, interim: interim,
-        reason: c.reason, lost: c.lost, speaking: !!utt, canStart: canStart(), soundClear: soundClear()
+        reason: c.reason, lost: c.lost, speaking: !!utt, canStart: canStart(), soundClear: soundClear(),
+        reply: L.currentReply(c)
       };
     }
 

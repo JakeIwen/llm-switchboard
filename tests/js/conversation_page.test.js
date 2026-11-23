@@ -574,3 +574,20 @@ test("Start's reason names a conversation in progress, and an abandoned grant re
   await settle();
   assert.equal(h.$("conv-start").disabled, false);
 });
+
+test("the overlay shows the reply's text, also when it has no spoken summary", async () => {
+  const h = await paired();
+  await converse(h);
+  assert.equal(h.$("conv-reply-area").hidden, true);
+  await voiceSend(h, "check the logs");
+  await h.answer(PATH.SEND, 200, { request_id: "r1", state: "handed_off" });
+  h.utt().fire("end");
+  await settle();
+  const reply = voiceRq("r1", "answered", "");
+  reply.reply.text = "<b>Build</b> is green.";
+  await h.answer(POLL, 200, snap({ requests: [reply] }));
+  assert.equal(h.utt().text, CUE.NO_SPOKEN);
+  assert.equal(h.$("conv-reply-area").hidden, false);
+  assert.equal(h.$("conv-reply").textContent, "<b>Build</b> is green.");
+  assert.equal(h.$("conv-reply").children.length, 0, "the reply went in as markup");
+});
