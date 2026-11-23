@@ -361,6 +361,54 @@ test("freshness is checked before every mic opening and every final result", () 
   ended(t, REASON.HUB_LOST);
 });
 
+test("past the freshness deadline no event acts or renews, before the tick has run", () => {
+  const late = (m) => { m.now = m.c().freshUntil + 1; };
+  const acting = [
+    ["a beat success", (m) => m.ev(EV.BEAT_OK, { startedAt: m.now - 100 })],
+    ["an interim result", (m) => m.ev(EV.RESULT, { text: "hel", final: false })],
+    ["a final result", (m) => say(m, "send it")],
+    ["a recognizer end", (m) => m.ev(EV.REC_END)],
+    ["a guard timer", (m) => m.ev(EV.TIMEOUT, { name: TIMER.GUARD })],
+    ["a poll", (m) => m.ev(EV.SNAPSHOT, { snapshot: snap({ version: 9 }) })],
+  ];
+  for (const [name, act] of acting) {
+    const m = listening();
+    late(m);
+    act(m);
+    ended(m, REASON.HUB_LOST);
+    assert.equal(m.c().lost, true, name);
+    assert.ok(!m.fx.some((f) => f.fx === FX.LISTEN || f.fx === FX.SAY || f.fx === FX.TICKET), name);
+  }
+  // A ticket or send answer after the deadline posts and speaks nothing.
+  const t = listening();
+  say(t, "x");
+  say(t, "send it");
+  late(t);
+  t.ev(EV.TICKET_OK, { ticket: "t1" });
+  ended(t, REASON.HUB_LOST);
+  assert.ok(!has(t.fx, FX.SEND));
+  const s = listening();
+  say(s, "x");
+  say(s, "send it");
+  s.ev(EV.TICKET_OK, { ticket: "t1" });
+  late(s);
+  s.ev(EV.SEND_OK, { request_id: "r1", state: "handed_off" });
+  ended(s, REASON.HUB_LOST);
+  assert.ok(!has(s.fx, FX.SAY));
+  // A grant whose own request started more than FRESH_MS ago never opens the mic.
+  const g = machine();
+  g.ev(EV.START, { dest: DEST });
+  g.ev(EV.SNAPSHOT_FETCHED, { snapshot: snap() });
+  g.ev(EV.WAKE_OK);
+  g.ev(EV.GRANT_OK, { startedAt: g.now - LIMITS.FRESH_MS - 1, ctx: { selectedId: "s1", visible: true } });
+  ended(g, REASON.HUB_LOST);
+  // The page's own end keeps its reason.
+  const e = listening();
+  late(e);
+  e.ev(EV.END, { reason: REASON.END_TAPPED });
+  ended(e, REASON.END_TAPPED);
+});
+
 test("waiting follows the exact request: absent before the ack, then answered", () => {
   const m = waiting(listening());
   m.ev(EV.SNAPSHOT, { snapshot: snap({ version: 2 }) });

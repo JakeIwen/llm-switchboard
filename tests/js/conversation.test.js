@@ -303,6 +303,31 @@ test("a late beat success does not renew the grant", async () => {
   assert.deepEqual(releases(h), ["g1"]);
 });
 
+test("a beat success that arrives after the deadline revives nothing", async () => {
+  const h = await listening(harness());
+  // The first beat is abandoned unanswered; the second starts at the deadline.
+  await h.advance(LIMITS.FRESH_MS);
+  assert.equal(h.phase(), PHASE.LISTENING);
+  const second = h.pending(PATH.BEAT);
+  assert.equal(second.length, 1);
+  h.t += 100;
+  second[0].answer(200, { grant: "g1", expires_in: 15 });
+  await flush();
+  assert.equal(h.view().reason, REASON.HUB_LOST);
+  assert.equal(h.view().lost, true);
+  assert.equal(h.rec().aborts, 1);
+  assert.equal(h.said.length, 0);
+});
+
+test("an interim result after the deadline ends it before the tick runs", async () => {
+  const h = await listening(harness());
+  h.t += LIMITS.FRESH_MS + 1;
+  h.rec().result("hel", false);
+  await flush();
+  assert.equal(h.view().reason, REASON.HUB_LOST);
+  assert.equal(h.view().interim, "");
+});
+
 test("a refused beat means the grant is gone", async () => {
   const h = await listening(harness());
   await h.advance(LIMITS.BEAT_MS);

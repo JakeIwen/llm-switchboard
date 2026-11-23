@@ -187,6 +187,14 @@
   function active(c) { return c.phase !== PHASE.OFF && c.phase !== PHASE.ENDED; }
   function fresh(c, now) { return c.freshUntil > 0 && now <= c.freshUntil; }
 
+  // The deadline after a beat started at `startedAt` succeeded at `now`: 0
+  // when the old deadline had already passed, since nothing revives a grant
+  // the page gave up on, and never earlier than the old one.
+  function renew(freshUntil, startedAt, now) {
+    if (!(freshUntil > 0 && now <= freshUntil)) return 0;
+    return Math.max(freshUntil, startedAt + LIMITS.FRESH_MS);
+  }
+
   function utf8Bytes(text) { return new TextEncoder().encode(text).length; }
 
   // "Send it." / " SEND IT " -> COMMAND.SEND; anything else -> null.
@@ -411,6 +419,7 @@
   function onGrant(c, fx, ev) {
     if (c.phase !== PHASE.STARTING) return;
     c.freshUntil = ev.startedAt + LIMITS.FRESH_MS;
+    if (!fresh(c, ev.now)) return finish(c, fx, REASON.HUB_LOST, true);
     fx.push(timer(TIMER.TICK, LIMITS.TICK_MS));
     var ctx = ev.ctx || {};
     if (ctx.selectedId !== c.dest.session_id) return finish(c, fx, REASON.RETARGET);
@@ -548,10 +557,10 @@
   }
 
   // Only the newest beat's success reaches here (the controller drops the
-  // rest); a grant is never made fresher by an older start.
+  // rest), and only while the grant is still fresh (reduce checks that).
   function onBeatOk(c, fx, ev) {
     if (c.freshUntil === 0) return;
-    c.freshUntil = Math.max(c.freshUntil, ev.startedAt + LIMITS.FRESH_MS);
+    c.freshUntil = renew(c.freshUntil, ev.startedAt, ev.now);
   }
 
   var HANDLERS = {};
@@ -612,7 +621,11 @@
     if (!active(prev) || !handler) return { c: prev, fx: [] };
     var c = copy(prev);
     var fx = [];
-    handler(c, fx, ev);
+    // Freshness is an absolute deadline: once it has passed, no event acts
+    // or renews, whether or not the 1 s tick has run yet. Only the page's
+    // own end keeps its reason.
+    if (ev.type !== EV.END && c.freshUntil > 0 && !fresh(c, ev.now)) finish(c, fx, REASON.HUB_LOST, true);
+    else handler(c, fx, ev);
     return { c: c, fx: fx };
   }
 
@@ -620,7 +633,8 @@
     PHASE: PHASE, CONFIRM: CONFIRM, REQUEST_STATE: REQUEST_STATE, REGISTRATION: REGISTRATION,
     LIMITS: LIMITS, TIMER: TIMER, SAY: SAY, FX: FX, EV: EV, COMMAND: COMMAND, CUE: CUE, REASON: REASON,
     BLOCKER: BLOCKER, SPEECH_DEADLINE_FACTOR: SPEECH_DEADLINE_FACTOR,
-    initial: initial, reduce: reduce, active: active, fresh: fresh, withDetail: withDetail, startBlocker: startBlocker,
+    initial: initial, reduce: reduce, active: active, fresh: fresh, renew: renew, withDetail: withDetail,
+    startBlocker: startBlocker,
     command: command, appendDraft: appendDraft, draftProblem: draftProblem, estimateMs: estimateMs
   };
   root.DeskConversationLogic = api;
