@@ -1362,9 +1362,14 @@ the candidates list, the unattributed admission refusals.
      side, below): holding the lock, it rereads `link-signers` through the
      hub's reader and reports `no hub running: no link to drop` as done when
      the host's line has its key, or the message above when it doesn't; with
-     the lock held elsewhere the step fails with the run lock's refusal. When
-     a lock of that host was handed over a link with another key, it prints
-     that those locks now need `desk clear-stopped` (Hub side, below).
+     the lock held elsewhere the step fails with the run lock's refusal:
+     confirmation changed nothing, the credential edits already made stand,
+     and running the command again confirms them. Each outcome holds as of
+     the hub's answer (or the offline reread): an edit that starts after it
+     is not this command's to report, and the next command run sees it.
+     When a lock of that host was handed over a link with another key, it
+     prints that those locks now need `desk clear-stopped` (Hub side,
+     below).
 
   Each step is idempotent. The command prints one line per step (`done`,
   `already so`, or the failure) and, on a failure, exits 1 naming the steps
@@ -1401,8 +1406,10 @@ the candidates list, the unattributed admission refusals.
      registrations, and answers, from that one hold of the links lock, with
      the host's signer line as it read it and the host's live link, if any:
      `{ok: true, signer: null | {fingerprint}, link: null | {fingerprint}}`.
-     The command prints `done` when both are null: the signer state this
-     command left still held when the hub checked, and no link remains. When
+     The command prints `done` when both are null: as of the hub's answer,
+     the signer state this command left still held and no link remained (an
+     edit that starts after the answer is not this command's to report; the
+     next command run sees it). When
      `signer` is a key, a `link-authorize` for that host ran after this
      command released its locks; the command prints "a later link-authorize
      listed key <fingerprint> for <mac>; this revocation was overtaken and the
@@ -1428,8 +1435,9 @@ the candidates list, the unattributed admission refusals.
   running: no link to drop` as done when the host has no line, or the
   overtaken message above when a later authorization listed one; with the
   lock held elsewhere (a hub starting or stopping, which may still hold a
-  link) step 3 fails with the run lock's refusal, exit 1. A hub that
-  doesn't answer leaves step 3 failed ("cutoff not confirmed; the hub
+  link) step 3 fails with the run lock's refusal, exit 1: confirmation
+  changed nothing, and the credential edits steps 1 and 2 already made
+  stand. A hub that doesn't answer leaves step 3 failed ("cutoff not confirmed; the hub
   retires the link at its next housekeeping pass; run link-revoke again to
   confirm"), exit 1.
 
@@ -1602,8 +1610,8 @@ objects, below). It runs at two points:
   read it and its live link, both from the check's one hold of the links
   lock: `{ok: true, signer: null | {fingerprint}, link: null |
   {fingerprint}}`. This answer is the confirmed cutoff the commands report,
-  and its `signer` is what each command compares with the state it
-  intended (SSH, above). An unreadable or malformed file answers
+  as of the answer, and its `signer` is what each command compares with the
+  state it intended (SSH, above). An unreadable or malformed file answers
   `{ok: false, error: "link-signers is unreadable or malformed"}` after
   retiring every link.
 - As the first step of every housekeeping pass. A pass starts 5 s after the
@@ -2162,26 +2170,42 @@ the relay is down is out of scope.
   starting (before `OperatorServer.start`) or stopping (after `Hub.close`,
   which closes its listeners but can't join the daemon HTTP, operator,
   channel and link threads still running a request) has none, and such a
-  thread can still be inside the handoff gate or hold a link. So `desk
-  serve` (`Hub.serve`), after making the run directory and before
-  `Hub.start` opens any file or socket, takes an exclusive `flock` on
+  thread can still be inside the handoff gate or hold a link. So the `desk
+  serve` command (`cli._serve`), after making the run directory and before
+  it constructs anything of the hub, takes an exclusive `flock` on
   `runtime_dir/hub.lock` (created 0600 if missing, opened `O_NOFOLLOW`
   and `O_CLOEXEC`, so no child the hub spawns inherits the descriptor) and
   never releases it: the descriptor closes when the process exits, which
-  ends every thread. It tries non-blocking every 0.1 s for up to 5 s (longer than any
-  command's hold, below) and otherwise exits 3, "another desk hub or a desk
-  command holds hub.lock", and systemd starts it again 5 s later. The lock
-  is therefore held from before a hub process's first socket until after
-  its last thread, and two hub processes never overlap, so a hub that
-  answers on the operator socket is the only one that can hold a link or a
-  handoff.
+  ends every thread. It tries non-blocking every 0.1 s for up to 5 s
+  (longer than any command's hold, below) and otherwise exits 3, "another
+  desk hub or a desk command holds hub.lock", and systemd starts it again
+  5 s later. Only then does it call `Hub(config).serve(run_lock)`;
+  `Hub.serve` takes the held lock as an argument, so a hub can't be served
+  without one.
+  - **Nothing is read before the lock.** No hub state is read from disk
+    for a live hub until the run lock is held: not the lock table, the
+    enrollment files, the settings, `link-signers` or the TLS files. Taking
+    the lock before `Hub(config)` puts every read the constructors and
+    `Hub.start` make after it. `Hub.__init__`'s chain reads only the lock
+    table (`HubState.__init__` calls `LockStore.load`); `Enrollment`,
+    `DeskSettings`, `SessionLabels`, `StartupAck` and the two servers read
+    nothing until called or started, and `LinkHub`'s constructor reads
+    nothing (`link-signers` is read by the self-test, at admission and at
+    the signer check, all from `Hub.start` on). An incoming hub that waited
+    for an outgoing one therefore loads the lock table the outgoing hub
+    left, never one read while that hub could still write.
+  - **What it gives.** The lock is held from before a hub process's first
+    read of its state until after its last thread, and two hub processes
+    never overlap, so a hub that answers on the operator socket is the only
+    one that can hold a link or a handoff.
   - **The rule.** Every offline decision that rests on there being no hub
     (no live link, no handoff in progress, no in-memory state that
     disagrees with the files) takes `hub.lock` non-blocking on `HubAbsent`
     (creating it as the hub does) and holds it while it reads and decides;
     while it holds it no hub process exists and none can start. It never
-    waits for the lock: held elsewhere, the command refuses with nothing
-    changed, "a desk hub process is starting or stopping; run <command>
+    waits for the lock: held elsewhere, the step refuses and changes
+    nothing (edits an earlier step of the same command made stand), "a
+    desk hub process is starting or stopping; run <command>
     again once the hub answers, or once `systemctl --user is-active
     llm-switchboard-desk` prints inactive", exit 1. Its hold covers only
     bounded, non-blocking reads of `link-signers` and `locks.json`. The
@@ -2645,8 +2669,8 @@ the same change adds
   launching with `--desk` stays harmless while it's off.
 - **Withdraw the Mac's credential (Pi)**: `llm-switchboard desk link-revoke
   <mac>` (Revocation, under SSH, above): the signer line, then the key line,
-  in one hold of both file locks, then `link_drop`, whose answer confirms
-  that no link for that Mac is live, that none can be published from the
+  in one hold of both file locks, then `link_drop`, whose answer confirms,
+  as of the answer, that no link for that Mac is live, that none can be published from the
   removed line, and that the hub read no signer line for that Mac (one
   listed by a later `link-authorize` is reported, exit 1). A hub that doesn't
   answer leaves the cutoff unconfirmed (exit 1); it still retires the link
@@ -2705,8 +2729,8 @@ the same change adds
      Any refusal exits 1 naming what is left; a handoff in progress reads "a
      Mac send is being handed off; run link-fence again". The fence never
      waits for a handoff or for the run lock (it takes the state's lock as
-     any operator op does) and holds nothing after it answers. After a
-     confirmed fence no Mac link
+     any operator op does) and holds nothing after it answers. Its exit 0
+     holds as of its answer; after a confirmed fence no Mac link
      can be admitted, so no Mac handoff and no new Mac lock can happen until
      `link-authorize` runs again; don't run it between this step and the
      downgrade.
@@ -2773,7 +2797,7 @@ none importing the HTTP stack:
 | `desk/link_hub.py` | Pi | `LinkHub`: admission, `LinkSession` objects and their writers, `RemoteChannel` proxies, presence queries, the signer check (housekeeping and `link_drop`, with its answer: the signer fingerprint it read and the live link, from one hold of the links lock), the handoff gate and its count, the unattributed refusals, the link-wait caps, candidates, link records, the fence check |
 | `desk/remote_enrollment.py` | Pi | `enrolled-hosts.json` under `enrolled.json`'s lock; the owners map, conflicts and the published view; the edit checks over both files and the locks, online and offline |
 | `desk/link_authorize.py` | Pi | `desk link-authorize` (and `--self-test`) / `link-revoke`: the Ed25519 check, the checks and the whole proposed `link-signers` validated by the hub's reader inside both locks, the `link-signers` line and the `authorized_keys` line in their order, both commands holding both locks across both edits, the `link_drop` confirmation against the answer's signer fingerprint, the no-hub outcomes under the run lock, idempotent steps and their report; the offline half of `link-fence` (under the run lock, through `inspect_lock_file`) |
-| `desk/run_lock.py` | both | A process-lifetime exclusive `flock` (`O_NOFOLLOW`, `O_CLOEXEC`, never released before exit; the hub's bounded start wait) and the non-blocking probe held for a block; used by `desk serve` and the offline decisions (`hub.lock`), and by the relay and `relay-install --unload` (`relay.lock`) |
+| `desk/run_lock.py` | both | A process-lifetime exclusive `flock` (`O_NOFOLLOW`, `O_CLOEXEC`, never released before exit; the hub's bounded start wait) and the non-blocking probe held for a block; used by `desk serve` before it constructs the hub and by the offline decisions (`hub.lock`), and by the relay and `relay-install --unload` (`relay.lock`) |
 | `ssh_authorized_keys.py` | Pi | (tidying) the marked-line edit and its lock, shared by `host_authorize` and `link_authorize` |
 | `desk/peer_mac.py` | Mac | macOS process facts through `ctypes` (loaded on first use, so the module imports on Linux for tests): the pinned-interpreter rule, the channel check, `procStart` and mtime rules, recheck, presence |
 | `desk/relay_channels.py` | Mac | The relay's channel socket: accept, uid, hello, verify, local ping/pong and idle, per-channel writers, the 5 s recheck, the refusal cache, local reply refusals |
@@ -2801,7 +2825,7 @@ branch also edits several of them:
   `set_candidates` (like `set_labels`) and their snapshot fields; `host` in
   target and request views; `fence_lock_view(inspect)`: the in-memory
   list, the store's error and the disk read, in one hold of the mutex.
-- `desk/hub.py`: `Hub.serve` takes the run lock before `Hub.start`; build,
+- `desk/hub.py`: `Hub.serve(run_lock)` takes the held run lock; build,
   start and close `LinkHub`; `Hub.send` through
   `send_event` (commit 4) and the link-wait cap for Mac targets; `_recheck`
   dispatch for `RemoteIdentity`; `refresh_files` publishes the combined
@@ -2818,7 +2842,8 @@ branch also edits several of them:
   `relay_argv`, `relay_lock`, `remote_enrolled_file`, `hub_run_lock`.
 - `desk/cli.py`: `enroll|unenroll --host` (through `enroll_host`, never the
   phase 1 op), `clear-stopped`, `link-authorize [--self-test]`,
-  `link-revoke`, `link-fence` (Pi), with the run lock rule on `HubAbsent`
+  `link-revoke`, `link-fence` (Pi), with the run lock rule on `HubAbsent`;
+  `_serve` takes the run lock before `Hub(config)`
   and no offline form for `clear-stopped`; `relay`, `relay-install
   [--unload]` (Mac); `flags --lines` (both).
 - `desk/static/app.js`, `index.html`, `app.css`: host badges, link lines,
@@ -2891,7 +2916,7 @@ of honest misconfiguration and accidents.
 | Disconnect | a link lost at each row of the request table, with the request state, the lock and the clear outcome asserted; channel disconnect -> `unregistered` -> unknown -> presence `gone` clears; `link_drop`; the pump's EOF on either side, a partial line never forwarded |
 | Hosts and enrollment | `test_registration_host_must_match_enrollment` (a Mac `register` for a `pi` id, a Pi channel for a Mac id); `test_enrollment_published_atomically` (no reader sees one file's change alone); `test_id_in_both_files_enrolled_nowhere`; `test_id_under_two_remote_hosts_unroutable` (both nested records well formed: the id is in `conflicts`, no ticket or handoff for it, the target shows `enrolled on two hosts`); `test_enroll_refused_when_either_file_unreadable` (online and offline, for `pi` and for a Mac host, each file in turn); `test_enroll_checks_owners_registrations_and_locks` (online and offline; offline, a FIFO at `locks.json` refuses at once); `test_unenroll_needs_only_its_file`; `test_ticket_bound_to_host`; two Mac registrations for one id are ambiguous; unenroll enqueues `drop` and stops routing before it returns; the page's `desk_logic` tests: history and speech filter by host and session id; reassignment never shows the old host's reply |
 | Enroll now | `test_enroll_running_mac_candidate_reachable_without_relaunch`; `test_enroll_now_wording_page_and_cli`; candidates' cap, expiry, field cuts and the recently-unenrolled table |
-| Revocation and rollback | `test_signer_removal_retires_established_link_without_link_drop` (the hub never receives `link_drop`; the link retires at the next housekeeping pass, whose signer check comes first); `test_signer_removal_after_publication_reread` (a publication paused after its reread under the links lock; `link-revoke` removes the line meanwhile: the link is published after step 1 returns, step 3's `link_drop` waits for the links lock, retires it and answers `signer: null, link: null`; with `link_drop` unanswered, the next housekeeping pass retires it and the command exits 1, cutoff not confirmed); `test_link_drop_answer_reflects_reread` (the answer's `signer` is the fingerprint the hub read in the same hold as its retirement); `test_authorize_and_revoke_same_host_interleaved` (with a hub and with none, the second command started at each gap of the first: before it takes the file locks, paused between its two edits (the second waits for both locks, then sees both edits), between releasing the locks and its confirmation, and between the answer and its report; whenever neither holds the locks, the signer line and the marked `authorized_keys` line name one key or are both absent; a revoke overtaken by the authorization exits 1 naming the new key, an authorization overtaken by the revoke exits 1 saying its key is not listed, and the command that ran last reports done); `test_link_fence_offline_refuses_while_gated_handler_paused` (the test holds the run lock as `desk serve` does; a Mac send paused inside the handoff gate; `hub.close()`, so the operator socket is gone and the CLI gets `HubAbsent`, while the handler thread still runs: the fence refuses with the starting-or-stopping message and reads nothing to decide; the send resumes and persists its Mac lock; once the test releases the run lock, as the process's exit would, the fence refuses naming that lock); `test_no_hub_outcomes_need_run_lock` (`link-revoke` step 3, `link-authorize` step 4 and the offline fence, with the operator socket absent and `hub.lock` held by another process: each exits 1 with the run lock's refusal and nothing changed; with it free, each decides from the files); `test_serve_takes_run_lock_before_any_socket` (a `desk serve` child with `hub.lock` held elsewhere creates no socket and exits 3 after 5 s; a running one holds it until its process exits); `test_clear_stopped_has_no_offline_form`; `test_link_fence_lock_file_not_regular_refuses_promptly` (a FIFO with no writer and a symlink at `locks.json`, online and offline: the fence refuses within its bounds, and the hub's live store keeps its list and its error as they were); `test_link_fence_consistent_with_concurrent_pi_lock_write` (a Pi send's `LockStore.add` paused after its rename, under the state's lock, while the fence runs: the fence's read waits for that lock and sees the new file and list together; the fence passes, the Pi lock persists, and the fence changes nothing in the live store); `test_link_fence_after_replace_then_dir_fsync_failure` (a Mac `hand_off` whose `os.replace` lands and whose directory fsync fails: no event, the request expired; the fence refuses online on the store's error, and offline on the Mac lock in the file); `test_rotation_retires_old_key_link`; `test_unreadable_signers_retires_all_links`; `test_revoke_interrupted_between_files_rerun_completes` (the process killed after the signer write: no link, the key line still present, a second run removes it and reports `already so` for the first step); `test_authorize_interrupted_between_files`; `test_revoke_during_active_send`; `test_revoke_during_delayed_hello` (an admission past its proof at the revoke fails at publication); `test_link_authorize_drops_old_link`; `test_link_fence_requires_no_signer_no_link_no_mac_lock` (each condition failing in turn); `test_link_fence_refuses_handoff_between_recheck_and_lock_write` (a Mac send paused after its dispatch recheck and inside the handoff gate, before `LockStore.add` fsyncs; meanwhile its link retires and the signer line goes: the fence refuses, naming the handoff; the send resumes and persists its Mac lock; the fence then refuses, naming that lock); `test_handoff_gate_refuses_retiring_registration` (a send paused after its dispatch recheck and before the gate while its link retires and its registrations are not yet dropped: 409, the request expired, no lock written, and the fence passes); `test_link_fence_refuses_unreadable_or_corrupt_lock_store` (online with an empty in-memory list and offline: unreadable, oversize and malformed `locks.json`); `test_link_fence_refuses_unreadable_signers`; `test_link_fence_offline`; `test_rollback_order_leaves_no_remote_lock`; `link-authorize` keeps every other line, refuses `pi`, a bad name, a reused key blob and a fifth host; `test_authorize_non_ed25519_refused_before_any_write` (RSA and ECDSA keys: the Ed25519 message, exit 1, both files byte for byte unchanged); `test_refused_authorization_keeps_existing_signers` (with two hosts listed, each refusal (a non-Ed25519 key, a reused blob, a fifth host) leaves both lines and both links in place through the next housekeeping pass); `test_concurrent_authorizations_respect_host_cap` (three hosts listed, two new hosts at once: one listed, the other refused as a fifth); `test_written_signers_pass_the_hub_reader`; `link-authorize --self-test` changes nothing; `link-revoke` removes only its marker and signer line; `host-authorize` leaves the desk line; `relay-install --unload` boots out only its label, deletes its plist and reports done only once `relay.lock` is free (a relay that keeps the lock: exit 1 after 5 s); a phase 1 `LockStore` (KNOWN_HOSTS = {pi}) reading a Mac lock fails closed |
+| Revocation and rollback | `test_signer_removal_retires_established_link_without_link_drop` (the hub never receives `link_drop`; the link retires at the next housekeeping pass, whose signer check comes first); `test_signer_removal_after_publication_reread` (a publication paused after its reread under the links lock; `link-revoke` removes the line meanwhile: the link is published after step 1 returns, step 3's `link_drop` waits for the links lock, retires it and answers `signer: null, link: null`; with `link_drop` unanswered, the next housekeeping pass retires it and the command exits 1, cutoff not confirmed); `test_link_drop_answer_reflects_reread` (the answer's `signer` is the fingerprint the hub read in the same hold as its retirement); `test_authorize_and_revoke_same_host_interleaved` (with a hub and with none, the second command started at each gap of the first: before it takes the file locks, paused between its two edits (the second waits for both locks, then sees both edits), between releasing the locks and its confirmation, and between the answer and its report; whenever neither holds the locks, the signer line and the marked `authorized_keys` line name one key or are both absent; a revoke overtaken by the authorization exits 1 naming the new key, an authorization overtaken by the revoke exits 1 saying its key is not listed, and the command that ran last reports done; a competing edit started after a command's confirming answer and before it prints leaves that command's success, which holds as of the answer, and the next command run reports the edit; a run-lock refusal at the confirmation step changes nothing, and the command's credential edits already made stand); `test_link_fence_offline_refuses_while_gated_handler_paused` (the test holds the run lock as `desk serve` does; a Mac send paused inside the handoff gate; `hub.close()`, so the operator socket is gone and the CLI gets `HubAbsent`, while the handler thread still runs: the fence refuses with the starting-or-stopping message and reads nothing to decide; the send resumes and persists its Mac lock; once the test releases the run lock, as the process's exit would, the fence refuses naming that lock); `test_no_hub_outcomes_need_run_lock` (`link-revoke` step 3, `link-authorize` step 4 and the offline fence, with the operator socket absent and `hub.lock` held by another process: each exits 1 with the run lock's refusal and nothing changed; with it free, each decides from the files); `test_serve_takes_run_lock_before_constructing_hub` (a `desk serve` child started through the real CLI while the test holds `hub.lock`, with a FIFO without a writer at `locks.json`: it exits 3 after 5 s, never having opened the FIFO, so it read no hub state, and created no socket; a hub that read its state before the lock would hang in `LockStore.load`; a running one holds the lock until its process exits); `test_incoming_serve_loads_locks_left_by_outgoing_hub` (the test holds `hub.lock` as an outgoing hub would, with an empty `locks.json`; a `desk serve` child starts through the real CLI and waits; meanwhile the test adds a lock through a `LockStore`, as the outgoing hub's handoff would, and releases `hub.lock`; the incoming hub reports that target busy with that lock, refuses a send to it, and after a send to another target persists a second lock, `locks.json` holds both); `test_clear_stopped_has_no_offline_form`; `test_link_fence_lock_file_not_regular_refuses_promptly` (a FIFO with no writer and a symlink at `locks.json`, online and offline: the fence refuses within its bounds, and the hub's live store keeps its list and its error as they were); `test_link_fence_consistent_with_concurrent_pi_lock_write` (a Pi send's `LockStore.add` paused after its rename, under the state's lock, while the fence runs: the fence's read waits for that lock and sees the new file and list together; the fence passes, the Pi lock persists, and the fence changes nothing in the live store); `test_link_fence_after_replace_then_dir_fsync_failure` (a Mac `hand_off` whose `os.replace` lands and whose directory fsync fails: no event, the request expired; the fence refuses online on the store's error, and offline on the Mac lock in the file); `test_rotation_retires_old_key_link`; `test_unreadable_signers_retires_all_links`; `test_revoke_interrupted_between_files_rerun_completes` (the process killed after the signer write: no link, the key line still present, a second run removes it and reports `already so` for the first step); `test_authorize_interrupted_between_files`; `test_revoke_during_active_send`; `test_revoke_during_delayed_hello` (an admission past its proof at the revoke fails at publication); `test_link_authorize_drops_old_link`; `test_link_fence_requires_no_signer_no_link_no_mac_lock` (each condition failing in turn); `test_link_fence_refuses_handoff_between_recheck_and_lock_write` (a Mac send paused after its dispatch recheck and inside the handoff gate, before `LockStore.add` fsyncs; meanwhile its link retires and the signer line goes: the fence refuses, naming the handoff; the send resumes and persists its Mac lock; the fence then refuses, naming that lock); `test_handoff_gate_refuses_retiring_registration` (a send paused after its dispatch recheck and before the gate while its link retires and its registrations are not yet dropped: 409, the request expired, no lock written, and the fence passes); `test_link_fence_refuses_unreadable_or_corrupt_lock_store` (online with an empty in-memory list and offline: unreadable, oversize and malformed `locks.json`); `test_link_fence_refuses_unreadable_signers`; `test_link_fence_offline`; `test_rollback_order_leaves_no_remote_lock`; `link-authorize` keeps every other line, refuses `pi`, a bad name, a reused key blob and a fifth host; `test_authorize_non_ed25519_refused_before_any_write` (RSA and ECDSA keys: the Ed25519 message, exit 1, both files byte for byte unchanged); `test_refused_authorization_keeps_existing_signers` (with two hosts listed, each refusal (a non-Ed25519 key, a reused blob, a fifth host) leaves both lines and both links in place through the next housekeeping pass); `test_concurrent_authorizations_respect_host_cap` (three hosts listed, two new hosts at once: one listed, the other refused as a fifth); `test_written_signers_pass_the_hub_reader`; `link-authorize --self-test` changes nothing; `link-revoke` removes only its marker and signer line; `host-authorize` leaves the desk line; `relay-install --unload` boots out only its label, deletes its plist and reports done only once `relay.lock` is free (a relay that keeps the lock: exit 1 after 5 s); a phase 1 `LockStore` (KNOWN_HOSTS = {pi}) reading a Mac lock fails closed |
 | Bounds | `test_pending_admissions_capped`; `test_accept_rate_capped`; `test_worst_case_status_fits_operator_line`; `test_unenrolled_channels_throttled_without_dropping_link` (16 channels retrying; established registrations and their requests untouched); `test_relay_launch_log_capped_across_crash_loop` (`bin/desk-relay` run repeatedly with a failing import); `test_launch_log_closed_after_logging_starts` (a relay that has started raises in a thread and writes to fd 2: the traceback lands in the rotating log, the launch log's size is unchanged); frame limits at the hub, relay and pump; a line exactly at the cap passes; bad field shapes refused; memory stays within the caps under a flood |
 | Privacy | `test_marker_absent_from_desk_logs_and_files` (a marker phrase in a prompt and its reply through a whole exchange: absent from the hub's, relay's and pump's captured logs, the relay launch log, `locks.json`, `enrolled-hosts.json`, `link-signers` and the v1 hosts directory); `test_desk_adds_no_v1_frame_fields` (a v1 exchange's frames for a session have the same fields before and after a desk exchange); `test_desk_first_prompt_title_follows_v1_rule` (a transcript whose first user record is the record Claude Code wrote for a real desk event, captured from a desk session and scrubbed, committed as a fixture: the v1 row's title equals what `transcripts.prompt_text` and v1's title rule yield for that transcript, whatever that is, and the row carries no other prompt or reply text) |
 
@@ -3000,8 +3025,8 @@ the reviewed installation:
   finishes); a separate check for admissions between proof and publication
   (removed: publication rereads the signer file under the links lock, so it
   can't succeed once the fence has seen no line under that lock).
-- **"No hub" is the run lock, held by `desk serve` for its process's
-  life; every offline decision that rests on there being no hub takes it
+- **"No hub" is the run lock, taken by `desk serve` before it constructs
+  the hub and held for its process's life; every offline decision that rests on there being no hub takes it
   non-blocking and holds it while it reads and decides.** `HubAbsent` only
   shows that nothing listens on the operator socket, which is also true of
   a hub starting or stopping while a request thread still runs. Rejected:
@@ -3013,8 +3038,13 @@ the reviewed installation:
   before a downgrade); putting the offline enroll, unenroll and `sends`
   edits under it too, which would add a refusal to phase 1's offline edits
   without closing anything, since they rest on the file locks every
-  handoff holds. It is the pattern `relay.lock` already gives
-  `relay-install --unload`.
+  handoff holds; taking the lock in `Hub.serve`, after `Hub(config)` has
+  built `HubState`, which loads the lock table (an incoming hub would load
+  the table while the outgoing one could still add a lock, then overwrite
+  that lock with its next whole-file write); deferring only the lock
+  table's load to `Hub.start`, which leaves the rule resting on every
+  constructor staying free of reads. It is the pattern `relay.lock` already
+  gives `relay-install --unload`.
 - **`link-revoke` holds both file locks, in the installer's order, across
   both edits, and `link_drop`'s answer carries the signer fingerprint the
   hub read with its retirement.** So the two files always show one serial
