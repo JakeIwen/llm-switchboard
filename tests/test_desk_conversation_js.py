@@ -3,14 +3,21 @@ static/conversation.js): runs the Node tests in tests/js/ and checks that the
 values the page mirrors from the hub have not drifted."""
 
 import json
+import secrets
 import shutil
 import subprocess
 import unittest
 from pathlib import Path
 
+from desk_fixtures import SESSION_A, Clock, FakeIdentity, desk_config, make_home, token_for
+
 from llm_switchboard.desk import grants
 from llm_switchboard.desk.http_server import POST_ROUTES, STATE_PATH
-from llm_switchboard.desk.model import MAX_VOICE_TEXT_BYTES, ConfirmMode, RegistrationState, RequestState
+from llm_switchboard.desk.hub_state import HubState
+from llm_switchboard.desk.locks import LockStore
+from llm_switchboard.desk.model import (
+    MAX_VOICE_TEXT_BYTES, ConfirmMode, DeskError, RegistrationState, RequestState,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 STATIC = ROOT / "llm_switchboard" / "desk" / "static"
@@ -78,6 +85,28 @@ class ConversationMirrorTests(unittest.TestCase):
         # These mean the grant is gone: the page ends silently, with no closing cue.
         for reason in (grants.GRANT_NOT_CURRENT, grants.GRANT_WRONG_TARGET, grants.TARGET_CHANGED):
             self.assertIn(reason, self.js["grantGone"])
+
+    def test_the_page_knows_the_hub_s_refusals_for_a_changed_epoch_or_registration(self):
+        # The hub names no constant for these, so they are taken from its
+        # own state machine: a stale epoch or generation at the ticket, and
+        # the handoff after the registration changed. Each means the grant
+        # is gone, so the page speaks nothing after it.
+        clock = Clock()
+        state = HubState(LockStore(desk_config(make_home(self)).lock_file), now=clock, elapsed=clock,
+                         token_bytes=secrets.token_bytes)
+        state.set_enrolled([SESSION_A])
+        state.set_sends_enabled(True)
+        generation = state.register(1, SESSION_A, FakeIdentity(100, "1", 101, "2", SESSION_A))
+        ticket = state.issue_ticket(SESSION_A, generation, state.epoch)["ticket"]
+        request = state.begin_send(ticket, "hi", token_for(state))
+        state.register(1, SESSION_A, FakeIdentity(200, "1", 201, "2", SESSION_A))
+        for call, *args in ((state.issue_ticket, SESSION_A, generation, "0" * 32),
+                            (state.issue_ticket, SESSION_A, generation + 10, state.epoch),
+                            (state.hand_off, request.request_id)):
+            with self.subTest(call=call.__name__, args=args), self.assertRaises(DeskError) as caught:
+                call(*args)
+            self.assertEqual(caught.exception.status, 409)
+            self.assertIn(caught.exception.reason, self.js["grantGone"])
 
     def test_voice_send_refusals_are_definitive_on_the_page(self):
         # A send refused for these reasons was never handed off, so the page

@@ -492,6 +492,52 @@ test("a hub answer that proves the grant gone ends it silently on every call pat
   assert.deepEqual(texts(b), [CUE.ENDED + ": " + L.withDetail(REASON.NOT_SENT, "busy") + "."]);
 });
 
+test("losing the sound slot is decided apart from the reason shown, and nothing is spoken after it", async () => {
+  // The hub's own handoff refusal for a changed registration.
+  const r = await listening(harness());
+  await r.hear("x");
+  await r.hear("send it");
+  await r.answer(PATH.TICKET, 200, { ticket: "t" });
+  await r.answer(PATH.SEND, 409, { error: "target changed; not sent" });
+  assert.equal(r.view().reason, L.withDetail(REASON.NOT_SENT, "target changed; not sent"));
+  assert.equal(r.view().lost, true);
+  assert.equal(r.said.length, 0);
+  assert.deepEqual(releases(r), ["g1"]);
+
+  for (const [name, s, reason] of [
+    ["the target gone altogether", () => snap({ targets: [] }), REASON.TARGET],
+    ["a new generation with voice confirm off", () => snap({ voice_confirm_enabled: false, targets: [target({ generation: 4 })] }),
+      REASON.VOICE_OFF],
+    ["a new epoch with sends off", () => snap({ epoch: "e2", sends_enabled: false }), REASON.EPOCH],
+  ]) {
+    const h = await listening(harness());
+    await h.hear("half a thought");
+    h.ctl.snapshot(s());
+    await flush();
+    assert.equal(h.view().reason, reason, name);
+    assert.equal(h.view().lost, true, name);
+    assert.equal(h.said.length, 0, name);
+    assert.deepEqual(releases(h), ["g1"], name);
+
+    // The same snapshot during the closing cue cuts it: uncertain, and let go.
+    const g = await listening(harness());
+    await g.hear("stop listening");
+    assert.equal(g.said.length, 1, name);
+    g.ctl.snapshot(s());
+    await flush();
+    assert.equal(g.synth.cancels, 1, name);
+    assert.deepEqual(releases(g), ["g1"], name);
+    assert.equal(g.ctl.canStart(), false, name);
+    assert.equal(g.said.length, 1, name);
+  }
+  // A switch turned off with the registration intact keeps the cue.
+  const v = await listening(harness());
+  v.ctl.snapshot(snap({ voice_confirm_enabled: false }));
+  await flush();
+  assert.equal(v.view().lost, false);
+  assert.deepEqual(texts(v), [CUE.ENDED + ": " + REASON.VOICE_OFF + "."]);
+});
+
 test("an utterance that never ends is cancelled, ends it, and holds Start for the quiet period", async () => {
   const h = await listening(harness());
   await h.hear("one two three four five");

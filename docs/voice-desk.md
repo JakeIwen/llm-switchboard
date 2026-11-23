@@ -751,6 +751,14 @@ visible and not being closed or frozen, has a voice, still holds a fresh grant a
 the way. Otherwise the page speaks nothing (a successor may be listening),
 releases any grant it holds at once, and shows the reason only.
 
+The page has lost the sound slot, whatever end reason it shows, when a hub
+answer says the grant is gone (conversation grant not current or not for
+this target, stale epoch, stale generation, target changed; not sent) or a
+snapshot shows another hub epoch or the target missing or at another
+generation, even alongside sends or voice confirm turned off. From then on
+nothing is spoken, and a closing cue already playing is cut (sound
+uncertain) and the grant let go.
+
 **Uncertain sound.** An utterance stopped before its own `end`, by anything
 (End, hiding, a timeout, an error, the end of the conversation, the page's
 own Play cancelled), marks sound uncertain: no cue is spoken to probe for

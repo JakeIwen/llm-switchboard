@@ -162,14 +162,14 @@
   function withDetail(reason, detail) { return detail ? reason + ": " + detail : reason; }
 
   // Hub refusals that prove this page's grant is gone (grants.py), plus the
-  // ticket and send refusals for a changed epoch or generation, which the
-  // grant is bound to. tests/test_desk_conversation_js.py checks the hub's.
+  // refusals for a changed epoch or registration, which the grant is bound
+  // to: the ticket's and send's stale epoch and generation, and the
+  // handoff's own "target changed; not sent". tests/test_desk_conversation_js.py
+  // drives the hub into each and checks its words are here.
   var GRANT_GONE = Object.freeze([
     "conversation grant not current", "conversation grant not for this target", "target changed",
-    "stale epoch", "stale generation"
+    "stale epoch", "stale generation", "target changed; not sent"
   ]);
-
-  function grantGone(error) { return GRANT_GONE.indexOf(error) !== -1; }
 
   var OUTSTANDING = {};
   OUTSTANDING[REQUEST_STATE.PENDING] = true;
@@ -255,24 +255,33 @@
 
   function problem(reason, lost) { return { reason: reason, lost: !!lost }; }
 
-  // Whether a snapshot proves the grant for `dest` is gone: it died with the
-  // epoch, and the hub drops it once the target's registration changes.
-  function grantGoneIn(snap, dest) {
+  // Whether this page no longer owns the sound slot for `dest`: its grant
+  // is gone, or bound to a registration that is. `proof` is a hub refusal,
+  // {error}, or a snapshot, {snapshot}: another epoch (the grant died with
+  // that hub process), or the target absent or at another generation (the
+  // hub drops a grant when its registration goes). Decided apart from the
+  // reason shown: a snapshot with voice confirm off and a new generation
+  // loses ownership whatever it says first. A page that lost it never
+  // speaks again: a successor may be listening.
+  function ownershipLost(dest, proof) {
+    if (typeof proof.error === "string") return GRANT_GONE.indexOf(proof.error) !== -1;
+    var snap = proof.snapshot;
+    if (!snap) return false;
     if (snap.epoch !== dest.epoch) return true;
     var t = findTarget(snap, dest.session_id);
-    return !!t && t.generation !== dest.generation;
+    return !t || t.generation !== dest.generation;
   }
 
   // Ends that hold in every phase: the target, the epoch and the switches.
+  // The reason shown is the first that holds; `lost` is ownershipLost's.
   function targetProblem(c, snap) {
-    if (snap.epoch !== c.dest.epoch) return problem(REASON.EPOCH, true);
-    if (snap.sends_enabled !== true) return problem(REASON.SENDS_OFF);
-    if (snap.voice_confirm_enabled !== true) return problem(REASON.VOICE_OFF);
-    if (snap.lock_store_error) return problem(REASON.LOCK_STORE);
+    var lost = ownershipLost(c.dest, { snapshot: snap });
+    if (snap.epoch !== c.dest.epoch) return problem(REASON.EPOCH, lost);
+    if (snap.sends_enabled !== true) return problem(REASON.SENDS_OFF, lost);
+    if (snap.voice_confirm_enabled !== true) return problem(REASON.VOICE_OFF, lost);
+    if (snap.lock_store_error) return problem(REASON.LOCK_STORE, lost);
     var t = findTarget(snap, c.dest.session_id);
-    if (!t || t.enrolled !== true || t.generation !== c.dest.generation || !USABLE[t.registration]) {
-      return problem(REASON.TARGET, grantGoneIn(snap, c.dest));
-    }
+    if (lost || t.enrolled !== true || !USABLE[t.registration]) return problem(REASON.TARGET, lost);
     return null;
   }
 
@@ -648,14 +657,19 @@
     c.evidence = { requests: {}, locks: {} };
     fx.push({ fx: FX.SEND, ticket: ev.ticket, text: c.frozenText });
   };
-  // A refusal that proves the grant gone ends it as lost: no closing cue.
+  // A refusal before handoff; one that proves the grant gone ends it as
+  // lost: no closing cue.
+  function refused(c, fx, reason) {
+    finish(c, fx, withDetail(REASON.NOT_SENT, reason), ownershipLost(c.dest, { error: reason }));
+  }
+
   HANDLERS[EV.TICKET_FAIL] = function (c, fx, ev) {
-    if (c.phase === PHASE.SENDING) finish(c, fx, withDetail(REASON.NOT_SENT, ev.reason), grantGone(ev.reason));
+    if (c.phase === PHASE.SENDING) refused(c, fx, ev.reason);
   };
   HANDLERS[EV.SEND_OK] = onSendOk;
   // A refusal before handoff ends the conversation; nothing is retried.
   HANDLERS[EV.SEND_REFUSED] = function (c, fx, ev) {
-    if (c.phase === PHASE.SENDING) finish(c, fx, withDetail(REASON.NOT_SENT, ev.reason), grantGone(ev.reason));
+    if (c.phase === PHASE.SENDING) refused(c, fx, ev.reason);
   };
   HANDLERS[EV.SEND_UNKNOWN] = function (c, fx) {
     if (c.phase === PHASE.SENDING) finish(c, fx, REASON.UNKNOWN);
@@ -696,7 +710,7 @@
     PHASE: PHASE, CONFIRM: CONFIRM, REQUEST_STATE: REQUEST_STATE, REGISTRATION: REGISTRATION,
     LIMITS: LIMITS, TIMER: TIMER, SAY: SAY, FX: FX, EV: EV, COMMAND: COMMAND, CUE: CUE, REASON: REASON,
     BLOCKER: BLOCKER, SPEECH_DEADLINE_FACTOR: SPEECH_DEADLINE_FACTOR, GRANT_GONE: GRANT_GONE,
-    grantGone: grantGone, grantGoneIn: grantGoneIn,
+    ownershipLost: ownershipLost,
     initial: initial, reduce: reduce, active: active, fresh: fresh, renew: renew, withDetail: withDetail,
     startBlocker: startBlocker, currentReply: currentReply,
     command: command, appendDraft: appendDraft, draftProblem: draftProblem, estimateMs: estimateMs

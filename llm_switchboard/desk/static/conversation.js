@@ -666,8 +666,10 @@
       if (!state) return;
       if (straggler && state.epoch !== straggler.epoch) forgetStraggler(straggler.id);
       if (active()) return dispatch({ type: EV.SNAPSHOT, snapshot: state });
-      // A newer poll that proves the grant gone stops the closing cue.
-      if (closing && L.grantGoneIn(state, c.dest) && (state.epoch !== c.snap.epoch || state.version >= c.snap.version)) {
+      // A newer poll that shows the page no longer owns the sound slot cuts
+      // the closing cue (sound uncertain) and lets the grant go.
+      if (closing && L.ownershipLost(c.dest, { snapshot: state }) &&
+          (!c.snap || state.epoch !== c.snap.epoch || state.version >= c.snap.version)) {
         stopClosing();
       }
     }

@@ -552,6 +552,17 @@ async function voiceSend(h, words) {
   assert.equal(h.pending(PATH.SEND).length, 1);
 }
 
+test("the hub's handoff refusal for a changed target ends the conversation silently", async () => {
+  const h = await paired();
+  await converse(h);
+  await voiceSend(h, "check the logs");
+  const said = h.said.length;
+  await h.answer(PATH.SEND, 409, { error: "target changed; not sent" });
+  assert.equal(h.state(), ended(L.withDetail(REASON.NOT_SENT, "target changed; not sent")));
+  assert.equal(h.said.length, said, "a page that lost the sound slot spoke");
+  assert.deepEqual(releases(h), ["g1"]);
+});
+
 test("a stopped conversation's late reply is never voiced by the tap flow, and Play still works", async () => {
   const h = await paired();
   await converse(h);
