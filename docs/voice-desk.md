@@ -655,7 +655,10 @@ the full-screen **End conversation** control and the limits below.
 
 The overlay covers the page for the whole conversation and shows the
 session's label, the state in words, the draft and the words being heard,
-and, once the current request's reply has come, the reply's full text.
+and, once the current request's reply has come, the reply's full text. It
+is modal: focus moves to its End control, and the page behind it is inert
+(not reachable by keyboard) until Close, which returns focus to Start, or
+to the session's heading while Start is disabled.
 
 | State | Overlay | What happens |
 | --- | --- | --- |

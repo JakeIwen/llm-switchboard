@@ -27,6 +27,8 @@
     function $(id) { return doc.getElementById(id); }
     var last = null;      // the last render's arguments, for the Close tap
     var closed = null;    // the frozen dest of an ended conversation whose overlay was closed
+    var open = false;     // whether the overlay is up
+    var returnTo = null;  // what had focus when it came up
 
     $("conv-start").addEventListener("click", function () { taps.start(); });
     $("conv-end").addEventListener("click", function () {
@@ -47,6 +49,7 @@
 
       var shown = v.phase !== PHASE.OFF && v.dest !== closed;
       $("conv-overlay").hidden = !shown;
+      modal(shown);
       if (!shown) return;
       var ended = v.phase === PHASE.ENDED;
       $("conv-dest").textContent = v.dest.label;
@@ -61,6 +64,26 @@
       $("conv-reply-area").hidden = !v.reply;
       $("conv-reply").textContent = v.reply ? v.reply.text : "";
       $("conv-end").textContent = ended ? END_LABEL.ended : END_LABEL.active;
+    }
+
+    // The overlay is modal in fact: while it is up the page behind it is
+    // inert, so the keyboard can't reach the controls it hides, and focus is
+    // on End. On Close focus goes back where it was, or, when that control
+    // can't take it (Start is often disabled for the quiet period), to the
+    // session's heading.
+    function modal(shown) {
+      if (shown === open) return;
+      open = shown;
+      $("page").inert = shown;
+      if (shown) {
+        returnTo = doc.activeElement;
+        $("conv-end").focus();
+        return;
+      }
+      var back = returnTo;
+      returnTo = null;
+      if (back && typeof back.focus === "function") back.focus();
+      if (!back || doc.activeElement !== back) $("detail-title").focus();
     }
 
     return { render: render };

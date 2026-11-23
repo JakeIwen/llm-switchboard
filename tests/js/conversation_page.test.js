@@ -25,7 +25,7 @@ const settle = async () => { for (let i = 0; i < 6; i++) await new Promise((r) =
 class El {
   constructor(tag) {
     this.tagName = tag.toUpperCase(); this.children = []; this.attrs = {}; this.listeners = {};
-    this.hidden = false; this.disabled = false; this.value = ""; this.className = ""; this.own = "";
+    this.hidden = false; this.disabled = false; this.inert = false; this.value = ""; this.className = ""; this.own = "";
   }
   get firstChild() { return this.children[0] || null; }
   appendChild(kid) { this.children.push(kid); return kid; }
@@ -51,12 +51,14 @@ function page(opts) {
   }
   const docListeners = {};
   const document = {
-    visibilityState: "visible",
+    visibilityState: "visible", activeElement: null,
     getElementById: (id) => byId[id] || null,
     createElement: (tag) => new El(tag),
     querySelector: () => ({ getAttribute: () => "build-1" }),
     addEventListener: (name, fn) => { (docListeners[name] = docListeners[name] || []).push(fn); }
   };
+  // Like a browser, a disabled control can't take focus.
+  for (const el of Object.values(byId)) el.focus = () => { if (!el.disabled) document.activeElement = el; };
   class Utterance {
     constructor(text) { this.text = text; this.listeners = {}; }
     addEventListener(name, fn) { (this.listeners[name] = this.listeners[name] || []).push(fn); }
@@ -590,4 +592,38 @@ test("the overlay shows the reply's text, also when it has no spoken summary", a
   assert.equal(h.$("conv-reply-area").hidden, false);
   assert.equal(h.$("conv-reply").textContent, "<b>Build</b> is green.");
   assert.equal(h.$("conv-reply").children.length, 0, "the reply went in as markup");
+});
+
+test("the overlay is modal: focus moves in, the page behind is inert, and both come back on Close", async () => {
+  const h = await paired();
+  assert.equal(h.$("page").inert, false);
+  h.$("conv-start").focus();
+  await converse(h);
+  assert.equal(h.$("page").inert, true);
+  assert.equal(h.document.activeElement, h.$("conv-end"));
+  h.$("conv-end").click();
+  await settle();
+  h.utt().fire("end");
+  await settle();
+  await h.advance(L.LIMITS.GUARD_MS);
+  assert.equal(h.$("page").inert, true, "the ended overlay is still up");
+  h.$("conv-end").click();
+  assert.equal(h.$("conv-overlay").hidden, true);
+  assert.equal(h.$("page").inert, false);
+  assert.equal(h.document.activeElement, h.$("conv-start"));
+});
+
+test("closing the overlay while Start is disabled returns focus to the session's heading", async () => {
+  const h = await paired();
+  h.$("conv-start").focus();
+  await converse(h);
+  h.rec().hear("open the hatch");
+  h.rec().hear("read it back");
+  await settle();
+  h.$("conv-end").click();
+  await settle();
+  h.$("conv-end").click();
+  assert.equal(h.$("conv-start").disabled, true);
+  assert.equal(h.$("page").inert, false);
+  assert.equal(h.document.activeElement, h.$("detail-title"));
 });

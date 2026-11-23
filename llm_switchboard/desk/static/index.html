@@ -9,6 +9,8 @@
 <link rel="stylesheet" href="/desk/app.css">
 </head>
 <body>
+<!-- Everything but the conversation overlay: made inert while the overlay is up. -->
+<div id="page">
 <header class="bar">
   <h1>Voice desk</h1>
   <span id="conn" class="conn" data-testid="conn" data-state="offline" role="status">Not connected</span>
@@ -52,7 +54,7 @@
 
   <section id="detail" class="detail" hidden>
     <div class="detail-head">
-      <h2 id="detail-title"></h2>
+      <h2 id="detail-title" tabindex="-1"></h2>
       <span id="detail-badge" class="badge" data-testid="detail-badge"></span>
     </div>
     <p id="detail-folder" class="note"></p>
@@ -103,6 +105,7 @@
   </section>
   <p id="pick-note" class="note pick">Pick a target.</p>
 </main>
+</div>
 
 <section id="conv-overlay" class="conv-overlay" data-testid="conv-overlay" role="dialog" aria-modal="true" aria-labelledby="conv-dest" hidden>
   <p class="note">Conversation with</p>
