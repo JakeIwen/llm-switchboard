@@ -699,6 +699,25 @@ test("a Play that outlives its deadline is cancelled, and its real end still hol
   assert.equal(h.phase(), PHASE.LISTENING);
 });
 
+test("a superseded page utterance's watchdog is disarmed, and a cancel goes through the tracker", async () => {
+  const h = harness();
+  const first = new h.Utterance("Short.");
+  h.ctl.track(first);
+  await h.advance(L.estimateMs("Short.") * L.SPEECH_DEADLINE_FACTOR - 50);
+  // Submitted without a cancel in between: the newer one supersedes it.
+  const second = new h.Utterance("A much longer utterance that is still playing.");
+  h.ctl.track(second);
+  await h.advance(100);
+  assert.equal(h.synth.cancels, 0, "the superseded watchdog cancelled the newer speech");
+  // The page's own cancel marks what it stopped and disarms its watchdog.
+  h.ctl.stopPageSpeech();
+  assert.equal(h.synth.cancels, 1);
+  assert.equal(h.ctl.canStart(), false);
+  await h.advance(L.estimateMs(second.text) * L.SPEECH_DEADLINE_FACTOR);
+  assert.equal(h.synth.cancels, 1);
+  assert.equal(h.ctl.canStart(), true);
+});
+
 test("the voice list emptying during the start's guard keeps the mic closed", async () => {
   const h = harness();
   const u = new h.Utterance("Play this.");

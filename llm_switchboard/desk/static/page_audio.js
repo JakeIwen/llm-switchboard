@@ -26,15 +26,17 @@
       return typeof win.webkitSpeechRecognition === "function" || typeof win.SpeechRecognition === "function";
     }
 
-    // A conversation's own speech is the controller's to stop: it marks a cut-off utterance first.
+    // Every cancel goes through the controller's tracker, which marks the
+    // cut-off utterance and disarms its watchdog; a conversation's own
+    // speech is the controller's to stop.
     function stopSpeaking() {
-      if ("speechSynthesis" in win && !conv.holds()) win.speechSynthesis.cancel();
+      if ("speechSynthesis" in win) conv.stopPageSpeech();
     }
 
     // Tracked, so the page's own speech counts toward Start's quiet rule.
     function speak(text) {
       if (!voiceAvailable() || !text || conv.holds()) return;
-      win.speechSynthesis.cancel();
+      conv.stopPageSpeech();
       var u = new win.SpeechSynthesisUtterance(text);
       u.lang = "en-US";
       conv.track(u);

@@ -44,10 +44,15 @@
 //   track(utterance)  Before the page speaks any utterance of its own (Play,
 //                     the legacy reply speech), so its end, error or cancel
 //                     counts toward the guard and Start's quiet rule. One not
-//                     ended within twice its estimate is cancelled (the
-//                     controller calls speechSynthesis.cancel()) and makes
-//                     sound uncertain; its real end or error, whenever it
-//                     comes, still restarts the guard.
+//                     ended within twice its estimate, while it is still the
+//                     one playing, is cancelled (the controller calls
+//                     speechSynthesis.cancel()) and makes sound uncertain;
+//                     its real end or error, whenever it comes, still
+//                     restarts the guard.
+//   stopPageSpeech()  Every cancel of the page's own speech (before Play or
+//                     the legacy reply speech speaks again, on hiding, on a
+//                     retarget): the stopped utterances count as cut off.
+//                     Does nothing while holds().
 //   soundClear()      For the page's one-shot Dictate, before it starts its
 //                     own recognizer: true only when no utterance of this
 //                     page is queued or playing, LIMITS.GUARD_MS has passed
@@ -532,7 +537,7 @@
         if (!mine()) return notify();
         utt = null;
         clearTimer(TIMER.SPEECH);
-        sound.cancelSynth();
+        sound.cancel();
         said(kind, false);
       };
       setTimer(TIMER.SPEECH, estimate * L.SPEECH_DEADLINE_FACTOR);
@@ -667,6 +672,14 @@
 
     function holds() { return active() || !!utt; }
 
+    // The page stopping its own speech (Play, the legacy reply speech)
+    // before it speaks again or when it is hidden: through the tracker, so
+    // the stopped utterances are marked uncertain and their watchdogs
+    // disarmed at once. A conversation's own speech is the controller's.
+    function stopPageSpeech() {
+      if (!holds()) sound.cancel();
+    }
+
     // For the page's own one-shot Dictate: no utterance of this page queued
     // or playing, the guard after the last real end, error or cancel passed,
     // and no uncertain-sound period running.
@@ -693,7 +706,7 @@
 
     return {
       start: start, canStart: canStart, blocker: blocker, snapshot: snapshot, track: track, view: view, holds: holds,
-      soundClear: soundClear,
+      soundClear: soundClear, stopPageSpeech: stopPageSpeech,
       endTap: function () { endIfActive(REASON.END_TAPPED); },
       hidden: function () { endIfActive(REASON.HIDDEN); },
       unpaired: function () { endIfActive(REASON.UNPAIRED, true); },

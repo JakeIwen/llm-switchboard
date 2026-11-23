@@ -21,6 +21,9 @@
   function create(opts) {
     var env = opts.env;
     var sounding = [];       // submitted utterances with no terminal event yet
+    // The latest submission: the one the engine plays, since every page
+    // path cancels through cancel() before it speaks.
+    var latest = null;
     var quietAt = -Infinity; // the latest end, error or cancel of this page's speech
     var uncertainUntil = 0;  // Start stays refused until then
     var cuts = 0;            // utterances stopped before their end, ever
@@ -43,15 +46,27 @@
       if (wait > 0) quietHandle = env.setTimeout(function () { quietHandle = null; changed(); }, wait);
     }
 
-    function cancelSynth() {
-      try { env.synth.cancel(); } catch (e) { /* nothing queued */ }
+    function disarm(entry) {
+      if (entry.watchdog === null) return;
+      env.clearTimeout(entry.watchdog);
+      entry.watchdog = null;
+    }
+
+    // A newer submission supersedes the latest one: its watchdog is
+    // disarmed at once, so it can never cancel the newer speech.
+    function enter(estimate) {
+      if (latest) disarm(latest);
+      latest = { estimate: estimate, watchdog: null };
+      sounding.push(latest);
+      return latest;
     }
 
     // Registers a submitted utterance; the returned `heard(error)` is its
     // own terminal event, early or late.
-    function submit(estimate) {
-      var entry = { estimate: estimate };
-      sounding.push(entry);
+    function submit(estimate) { return heardBy(enter(estimate)); }
+
+    function heardBy(entry) {
+      var estimate = entry.estimate;
       return function heard(error) {
         quietAt = env.now();
         var i = sounding.indexOf(entry);
@@ -63,27 +78,39 @@
       };
     }
 
-    // A cancel this page issues ends every submitted utterance still
-    // sounding: sound is marked uncertain first, then `between()` runs (the
-    // controller clears its utterance's id there), then the voice is cancelled.
+    // Every cancel the page issues comes through here, so no utterance is
+    // stopped without its bookkeeping. It ends every submitted utterance
+    // still sounding: sound is marked uncertain first and their watchdogs
+    // disarmed, then `between()` runs (the controller clears its
+    // utterance's id there), then the voice is cancelled. With nothing of
+    // the page's sounding, the cancel is cleanup and stops nothing it knows of.
     function cancel(between) {
-      sounding.forEach(function (entry) { markUncertain(entry.estimate); });
+      var stopped = sounding;
       sounding = [];
+      stopped.forEach(function (entry) {
+        markUncertain(entry.estimate);
+        disarm(entry);
+      });
       if (between) between();
-      quietAt = env.now();
-      cancelSynth();
+      if (stopped.length) quietAt = env.now();
+      try { env.synth.cancel(); } catch (e) { /* nothing queued */ }
       soundChanged();
     }
 
     // A page utterance that hasn't ended within twice its estimate is
-    // overdue: `overdue()` cancels it as cleanup. Its real end or error,
-    // whenever it comes, still moves the guard.
+    // overdue: `overdue()` cancels it as cleanup. The watchdog acts only
+    // while that very utterance is the one the engine plays; a superseded
+    // or cancelled one has no authority over newer speech. Its real end or
+    // error, whenever it comes, still moves the guard.
     function track(u, overdue) {
-      var estimate = L.estimateMs(u.text || "");
-      var heard = submit(estimate);
-      var handle = env.setTimeout(overdue, estimate * L.SPEECH_DEADLINE_FACTOR);
+      var entry = enter(L.estimateMs(u.text || ""));
+      var heard = heardBy(entry);
+      entry.watchdog = env.setTimeout(function () {
+        entry.watchdog = null;
+        if (entry === latest && sounding.indexOf(entry) !== -1) overdue();
+      }, entry.estimate * L.SPEECH_DEADLINE_FACTOR);
       function done(error) {
-        env.clearTimeout(handle);
+        disarm(entry);
         heard(error);
         changed();
       }
@@ -96,7 +123,7 @@
     function busy(now) { return sounding.length > 0 || now < uncertainUntil; }
 
     return {
-      submit: submit, cancel: cancel, cancelSynth: cancelSynth, track: track, busy: busy,
+      submit: submit, cancel: cancel, track: track, busy: busy,
       sounding: function () { return sounding.length; },
       quietAt: function () { return quietAt; },
       cuts: function () { return cuts; }

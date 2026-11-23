@@ -476,6 +476,43 @@ test("Dictate waits for Play's end and the guard after it", async () => {
   assert.equal(h.$("dictate-why").hidden, true);
 });
 
+// The Play control of request `id`.
+const playFor = (h, id) => h.$("replies").all((k) => k.getAttribute("data-request") === id)[0]
+  .all((k) => k.getAttribute("data-testid") === "play")[0];
+
+// Like Chrome under load: cancel() empties the queue, but the cancelled
+// utterances' errors come later, when the test fires them.
+function slowCancel(h) {
+  h.synth.cancel = function () { this.cancels++; this.speaking = false; };
+}
+
+test("a Play replaced just before its deadline: the old watchdog never cuts the new one", async () => {
+  const long = "A much longer reply that keeps going for quite a while after it starts.";
+  const h = await paired(snap({ requests: [rq("a", "answered", "Short."), rq("b", "answered", long)] }));
+  slowCancel(h);
+  playFor(h, "a").click();
+  await settle();
+  const first = h.utt();
+  await h.advance(L.estimateMs("Short.") * L.SPEECH_DEADLINE_FACTOR - 50);
+  playFor(h, "b").click();
+  await settle();
+  const second = h.utt();
+  assert.equal(second.text, long);
+  const cancels = h.synth.cancels;
+  // Past the first Play's deadline, its cancel's error not yet in.
+  await h.advance(100);
+  assert.equal(h.synth.cancels, cancels, "the old Play's watchdog cancelled the new one");
+  first.fire("error", { error: "interrupted" });
+  await settle();
+  assert.equal(h.synth.cancels, cancels, "a late error cancelled newer speech");
+  assert.equal(second.over, undefined);
+  // The new Play keeps its own deadline.
+  await h.advance(L.estimateMs(long) * L.SPEECH_DEADLINE_FACTOR - 101);
+  assert.equal(h.synth.cancels, cancels);
+  await h.advance(1);
+  assert.equal(h.synth.cancels, cancels + 1);
+});
+
 // Through "send it" to the voice send's POST, left pending.
 async function voiceSend(h, words) {
   h.rec().hear(words);
