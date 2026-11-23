@@ -47,14 +47,19 @@ class HubConnection:
         self.sock.sendall(protocol.encode(kind, **fields))
 
     def receive(self, timeout=TIMEOUT):
+        """The next message other than the channel's own heartbeat ping, which
+        a slow run can interleave before the message a test waits for."""
         self.sock.settimeout(timeout)
-        while b"\n" not in self.buffer:
-            chunk = self.sock.recv(65536)
-            if not chunk:
-                raise EOFError
-            self.buffer += chunk
-        line, _, self.buffer = self.buffer.partition(b"\n")
-        return protocol.decode(line)
+        while True:
+            while b"\n" not in self.buffer:
+                chunk = self.sock.recv(65536)
+                if not chunk:
+                    raise EOFError
+                self.buffer += chunk
+            line, _, self.buffer = self.buffer.partition(b"\n")
+            kind, message = protocol.decode(line)
+            if kind is not MessageType.PING:
+                return kind, message
 
     def close(self):
         self.sock.close()
