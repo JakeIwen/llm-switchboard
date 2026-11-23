@@ -9,6 +9,7 @@ import unittest
 from pathlib import Path
 
 from llm_switchboard.desk import grants
+from llm_switchboard.desk.http_server import POST_ROUTES, STATE_PATH
 from llm_switchboard.desk.model import MAX_VOICE_TEXT_BYTES, ConfirmMode, RegistrationState, RequestState
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -17,7 +18,9 @@ JS_TESTS = sorted((ROOT / "tests" / "js").glob("conversation*.test.js"))
 EXPORTS = """
 const L = require(process.argv[1]);
 const D = require(process.argv[2]);
+const C = require(process.argv[3]);
 process.stdout.write(JSON.stringify({
+  paths: C.PATH,
   confirm: L.CONFIRM, request: L.REQUEST_STATE, registration: L.REGISTRATION, limits: L.LIMITS,
   tooLong: L.draftProblem("a".repeat(L.LIMITS.MAX_DRAFT_BYTES + 1)), refusals: D.REFUSALS,
 }));
@@ -43,7 +46,7 @@ class ConversationMirrorTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         proc = subprocess.run([node(), "-e", EXPORTS, str(STATIC / "conversation_logic.js"),
-                               str(STATIC / "desk_logic.js")],
+                               str(STATIC / "desk_logic.js"), str(STATIC / "conversation.js")],
                               capture_output=True, text=True, timeout=60, check=False)
         if proc.returncode != 0:
             raise AssertionError(proc.stderr)
@@ -63,6 +66,12 @@ class ConversationMirrorTests(unittest.TestCase):
         self.assertLess(limits["FRESH_MS"], grants.GRANT_TTL_SECONDS * 1000)
         self.assertLess(limits["BEAT_ABORT_MS"], limits["BEAT_MS"])
         self.assertLess(limits["BEAT_MS"], limits["FRESH_MS"])
+
+    def test_the_controller_calls_routes_the_hub_serves(self):
+        paths = dict(self.js["paths"])
+        self.assertEqual(paths.pop("STATE"), STATE_PATH)
+        for name, path in paths.items():
+            self.assertIn(path, POST_ROUTES, name)
 
     def test_voice_send_refusals_are_definitive_on_the_page(self):
         # A send refused for these reasons was never handed off, so the page

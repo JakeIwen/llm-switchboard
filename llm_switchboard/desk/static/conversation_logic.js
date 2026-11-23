@@ -48,6 +48,9 @@
     FRESH_MS: 10000,
     // How often the controller checks freshness between other events.
     TICK_MS: 1000,
+    // A start step (the snapshot, the wake lock, the grant) or a ticket that
+    // hasn't answered in this time fails; the send POST has the tap flow's deadline.
+    STEP_MS: 10000,
     SEND_DEADLINE_MS: 20000,
     // Mirrors model.MAX_VOICE_TEXT_BYTES.
     MAX_DRAFT_BYTES: 1024
@@ -61,7 +64,7 @@
   // so one name can't mean two timers.
   var TIMER = Object.freeze({
     GUARD: "guard", WATCHDOG: "watchdog", IDLE: "idle", TURN: "turn", ACK: "ack", REPLY: "reply",
-    BEAT: "beat", BEAT_ABORT: "beat_abort", TICK: "tick", SPEECH: "speech", SEND_ABORT: "send_abort"
+    BEAT: "beat", BEAT_ABORT: "beat_abort", TICK: "tick", SPEECH: "speech", STEP: "step", SEND_ABORT: "send_abort"
   });
 
   // What an utterance is for; the end of the conversation's own last cue is
