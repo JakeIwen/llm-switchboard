@@ -249,12 +249,31 @@ test("hiding the page ends the conversation without a cue", async () => {
   assert.equal(h.rec().aborts, 1);
 });
 
-test("the page being frozen or unloaded ends the conversation", async () => {
+test("the page being frozen or unloaded ends the conversation silently, while still visible", async () => {
   for (const event of ["freeze", "window:pagehide"]) {
     const h = await paired();
     await converse(h);
+    assert.equal(h.document.visibilityState, "visible");
+    const said = h.said.length;
     await h.fire(event);
-    assert.equal(h.state(), ended(REASON.HIDDEN), event);
+    assert.equal(h.state(), ended(REASON.EXITED), event);
+    assert.equal(h.said.length, said, event + " spoke a closing cue");
+    assert.deepEqual(releases(h), ["g1"], event);
+  }
+});
+
+test("the page being frozen or unloaded cuts a closing cue short and lets the grant go", async () => {
+  for (const event of ["freeze", "window:pagehide"]) {
+    const h = await paired();
+    await converse(h);
+    h.$("conv-end").click();
+    await settle();
+    assert.equal(h.utt().text, ended(REASON.END_TAPPED));
+    assert.deepEqual(releases(h), []);
+    const cancels = h.synth.cancels;
+    await h.fire(event);
+    assert.ok(h.synth.cancels > cancels, event + " left the closing cue playing");
+    assert.deepEqual(releases(h), ["g1"], event);
   }
 });
 

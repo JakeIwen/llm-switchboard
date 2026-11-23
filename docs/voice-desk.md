@@ -730,7 +730,7 @@ voice itself fails there is no sound: the mic is closed and the screen says
 why.
 
 The end is spoken, and the grant released after it, only when the page is
-visible, has a voice, still holds a fresh grant and cut no utterance off on
+visible and not being closed or frozen, has a voice, still holds a fresh grant and cut no utterance off on
 the way. Otherwise the page speaks nothing (a successor may be listening),
 releases any grant it holds at once, and shows the reason only.
 
@@ -742,7 +742,8 @@ The next conversation takes a tap made when it is audibly quiet; an empty
 synthesis queue is not evidence of quiet.
 
 End reasons, as the overlay and the cue word them: you said stop listening;
-End was tapped; the page was hidden (also frozen or unloading); another
+End was tapped; the page was hidden; the page was closed or frozen (on
+`pagehide` or `freeze`, whatever the visibility, and always silent); another
 session was selected; this tablet is no longer paired; the screen wake lock
 was released; the screen can't be kept awake; this tablet has no voice;
 nothing was heard for three minutes; the turn took over five minutes; the

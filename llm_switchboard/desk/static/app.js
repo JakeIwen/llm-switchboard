@@ -761,7 +761,9 @@
     if ("speechSynthesis" in window) {
       window.speechSynthesis.addEventListener("voiceschanged", function () { if (state) render(); });
     }
-    function leave() { conv.hidden(); audio.stopSpeaking(); }
+    // Leaving is a silent end whatever visibilityState still says: a page
+    // being unloaded or frozen can't be relied on to finish a cue.
+    function leave() { batch(function () { conv.pageExit(); audio.stopSpeaking(); }); }
     document.addEventListener("freeze", leave);
     window.addEventListener("pagehide", leave);
   }
