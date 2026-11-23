@@ -463,6 +463,49 @@ test("a send with no answer is unknown and never retried", async () => {
   assert.equal(r.view().reason, "not sent: conversation grant not current");
 });
 
+test("an end that abandons an unanswered send POST also says delivery is unknown", async () => {
+  const unknown = (reason) => reason + "; " + REASON.UNKNOWN;
+  // The hub goes quiet with the POST out: the freshness deadline ends it first.
+  const h = await listening(harness());
+  await h.hear("check the logs");
+  await h.hear("send it");
+  await h.answer(PATH.TICKET, 200, { ticket: "t" });
+  assert.equal(h.pending(PATH.SEND).length, 1);
+  await h.advance(LIMITS.FRESH_MS + LIMITS.TICK_MS);
+  assert.equal(h.view().reason, unknown(REASON.HUB_LOST));
+  assert.equal(h.view().lost, true);
+  assert.equal(h.said.length, 0);
+  assert.equal(h.all(PATH.SEND).length, 1);
+  assert.equal(h.all(PATH.TICKET).length, 1);
+
+  // The same with the ticket still out: no POST was issued, only the cause.
+  const t = await listening(harness());
+  await t.hear("check the logs");
+  await t.advance(2000);
+  await t.hear("send it");
+  await t.advance(LIMITS.FRESH_MS - 2000 + LIMITS.TICK_MS);
+  assert.equal(t.pending(PATH.TICKET).length, 0);
+  assert.equal(t.view().reason, REASON.HUB_LOST);
+  assert.equal(t.all(PATH.SEND).length, 0);
+
+  // End tapped with the POST out: the closing cue says it too.
+  const e = await listening(harness());
+  await e.hear("check the logs");
+  await e.hear("send it");
+  await e.answer(PATH.TICKET, 200, { ticket: "t" });
+  e.ctl.endTap();
+  assert.equal(e.view().reason, unknown(REASON.END_TAPPED));
+  assert.deepEqual(texts(e), [CUE.ENDED + ": " + unknown(REASON.END_TAPPED) + "."]);
+
+  // An answered refusal is definite: not sent, nothing more.
+  const r = await listening(harness());
+  await r.hear("x");
+  await r.hear("send it");
+  await r.answer(PATH.TICKET, 200, { ticket: "t" });
+  await r.answer(PATH.SEND, 409, { error: "busy" });
+  assert.equal(r.view().reason, L.withDetail(REASON.NOT_SENT, "busy"));
+});
+
 test("a hub answer that proves the grant gone ends it silently on every call path", async () => {
   for (const [path, status, error] of [
     [PATH.SEND, 409, "conversation grant not current"],

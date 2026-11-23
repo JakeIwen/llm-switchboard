@@ -797,7 +797,13 @@ the session changed or went away; sends are off; voice confirm is off; the
 hub's lock store failed; the session is busy; another request reached the
 session; not sent: <reason>; delivery is unknown; check the session; the
 request ended without a reply; no reply came in ten minutes. A conversation
-that ended never resumes when the link returns.
+that ended never resumes when the link returns. Whatever ends a
+conversation while its send POST is out with no answer, the reason is
+followed by "; delivery is unknown; check the session" (for example
+"Conversation ended: the hub stopped answering; delivery is unknown; check
+the session."), since the prompt may have been delivered; nothing is
+retried, and nothing is spoken when the grant was lost. An end before any
+POST shows its cause alone.
 
 ### Hub side
 

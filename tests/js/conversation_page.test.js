@@ -590,6 +590,17 @@ test("the hub's handoff refusal for a changed target ends the conversation silen
   assert.deepEqual(releases(h), ["g1"]);
 });
 
+test("losing the hub with a voice send unanswered shows the cause and that delivery is unknown", async () => {
+  const h = await paired();
+  await converse(h);
+  await voiceSend(h, "check the logs");
+  const said = h.said.length;
+  await h.advance(L.LIMITS.FRESH_MS + L.LIMITS.TICK_MS);
+  assert.equal(h.state(), ended(REASON.HUB_LOST + "; " + REASON.UNKNOWN));
+  assert.equal(h.said.length, said);
+  assert.equal(h.all(PATH.SEND).length, 1);
+});
+
 test("a stopped conversation's late reply is never voiced by the tap flow, and Play still works", async () => {
   const h = await paired();
   await converse(h);

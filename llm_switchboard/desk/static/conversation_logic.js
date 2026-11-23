@@ -161,6 +161,12 @@
 
   function withDetail(reason, detail) { return detail ? reason + ": " + detail : reason; }
 
+  // An end that abandons a send POST issued and never answered says so
+  // after its cause: the prompt may have been delivered.
+  function withUnknownDelivery(reason) {
+    return reason === REASON.UNKNOWN ? reason : reason + "; " + REASON.UNKNOWN;
+  }
+
   // Hub refusals that prove this page's grant is gone (grants.py), plus the
   // refusals for a changed epoch or registration, which the grant is bound
   // to: the ticket's and send's stale epoch and generation, and the
@@ -352,6 +358,8 @@
   // `lost`: the grant is gone; `silent`: the page is leaving. Either way the
   // controller speaks no closing cue.
   function finish(c, fx, reason, lost, silent) {
+    if (c.phase === PHASE.SENDING && c.posted) reason = withUnknownDelivery(reason);
+    c.posted = false;
     c.phase = PHASE.ENDED;
     c.reason = reason;
     c.lost = !!lost;
@@ -677,6 +685,7 @@
   // A refusal before handoff; one that proves the grant gone ends it as
   // lost: no closing cue.
   function refused(c, fx, reason) {
+    c.posted = false; // answered: nothing was handed off
     finish(c, fx, withDetail(REASON.NOT_SENT, reason), ownershipLost(c.dest, { error: reason }));
   }
 
@@ -719,8 +728,13 @@
     // Freshness is an absolute deadline: once it has passed, no event acts
     // or renews, whether or not the 1 s tick has run yet. Only the page's
     // own end keeps its reason.
-    if (ev.type !== EV.END && c.freshUntil > 0 && !fresh(c, ev.now)) finish(c, fx, REASON.HUB_LOST, true);
-    else handler(c, fx, ev);
+    if (ev.type !== EV.END && c.freshUntil > 0 && !fresh(c, ev.now)) {
+      // A refusal that comes too late still proves nothing was handed off.
+      if (ev.type === EV.SEND_REFUSED) c.posted = false;
+      finish(c, fx, REASON.HUB_LOST, true);
+    } else {
+      handler(c, fx, ev);
+    }
     return { c: c, fx: fx };
   }
 

@@ -394,8 +394,16 @@ test("past the freshness deadline no event acts or renews, before the tick has r
   s.ev(EV.TICKET_OK, { ticket: "t1" });
   late(s);
   s.ev(EV.SEND_OK, { request_id: "r1", state: "handed_off" });
-  ended(s, REASON.HUB_LOST);
+  // Handed off, but the conversation won't follow it: the session says what happened.
+  ended(s, REASON.HUB_LOST + "; " + REASON.UNKNOWN);
   assert.ok(!has(s.fx, FX.SAY));
+  const n = listening();
+  say(n, "x");
+  say(n, "send it");
+  n.ev(EV.TICKET_OK, { ticket: "t1" });
+  late(n);
+  n.ev(EV.SEND_REFUSED, { reason: "busy" });
+  ended(n, REASON.HUB_LOST);
   // A grant whose own request started more than FRESH_MS ago never opens the mic.
   const g = machine();
   g.ev(EV.START, { dest: DEST });
