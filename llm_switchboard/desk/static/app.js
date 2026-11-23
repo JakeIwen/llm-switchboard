@@ -645,7 +645,8 @@
 
   function startBlocker() {
     return window.DeskConversationLogic.startBlocker(state, selectedId, { recognizer: audio.speechInputAvailable(),
-      voice: audio.voiceAvailable(), tapSending: tapSends > 0, canStart: conv.canStart() });
+      voice: audio.voiceAvailable(), tapSending: tapSends > 0, canStart: conv.canStart(),
+      blocker: conv.blocker() });
   }
 
   // A started conversation owns the target: the tap flow's review, ticket and dictation go.

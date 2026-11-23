@@ -542,3 +542,35 @@ test("Start stays refused while a tapped send is in flight, whatever target is s
   await h.answer(PATH.SEND, 200, { request_id: "r1", state: "handed_off" });
   assert.equal(h.$("conv-start").disabled, false);
 });
+
+const why = (reason) => "Start conversation is unavailable: " + reason + ".";
+
+test("Start's reason names a conversation in progress, and an abandoned grant request being let go", async () => {
+  const h = await paired();
+  await converse(h);
+  assert.equal(h.$("conv-why").textContent, why(BLOCKER.IN_PROGRESS));
+  h.$("conv-end").click();
+  await settle();
+  h.utt().fire("end");
+  await settle();
+  h.$("conv-end").click();
+  await h.advance(L.LIMITS.GUARD_MS);
+  assert.equal(h.$("conv-start").disabled, false);
+
+  h.$("conv-start").click();
+  await settle();
+  await h.answer(PATH.STATE, 200, snap());
+  assert.equal(h.pending(PATH.GRANT).length, 1);
+  await h.advance(L.LIMITS.STEP_MS);
+  assert.equal(h.state(), ended(REASON.HUB_UNREACHABLE));
+  h.$("conv-end").click();
+  assert.equal(h.$("conv-start").disabled, true);
+  assert.equal(h.$("conv-why").textContent, why(BLOCKER.LETTING_GO));
+  await h.answer(PATH.GRANT, 200, { grant: "g2", expires_in: 15 });
+  assert.deepEqual(releases(h), ["g1", "g2"]);
+  // Start waits for that release to settle too.
+  assert.equal(h.$("conv-why").textContent, why(BLOCKER.LETTING_GO));
+  h.pending(PATH.RELEASE).find((c) => c.body.grant === "g2").answer(200, { ended: true });
+  await settle();
+  assert.equal(h.$("conv-start").disabled, false);
+});

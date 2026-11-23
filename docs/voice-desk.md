@@ -685,14 +685,18 @@ its Stop.
 **Start conversation** is enabled only when the snapshot has sends and voice
 confirm on and no lock-store error, the selected session is available with
 no lock and no outstanding request, the tablet has speech recognition and a
-voice, no tapped send is in flight, no utterance of this page is queued or
-playing, and sound isn't uncertain (below). Otherwise it is disabled and
-the reason is written under it: "Start conversation is unavailable:
-<reason>." with one of: the hub has not answered yet; sends are off; voice
-confirm is off; the hub's lock store failed; the session is not available
-for sends; the session is busy; this tablet has no speech recognition; this
-tablet has no voice; a tapped send is still in progress; the desk may still
-be speaking; wait until it is quiet.
+voice, no tapped send is in flight (on any target), no conversation is in
+progress, no grant request a past conversation gave up on is still
+unanswered (nor the release of a grant it brought), no utterance of this
+page is queued or playing, and sound isn't uncertain (below). Otherwise it
+is disabled and the reason is written under it: "Start conversation is
+unavailable: <reason>." with one of: the hub has not answered yet; sends
+are off; voice confirm is off; the hub's lock store failed; the session is
+not available for sends; the session is busy; this tablet has no speech
+recognition; this tablet has no voice; a tapped send is still in progress;
+a conversation is in progress; the hub has not answered the last
+conversation's grant request; reload the page if it never does; the desk
+may still be speaking; wait until it is quiet.
 
 ### Limits
 
