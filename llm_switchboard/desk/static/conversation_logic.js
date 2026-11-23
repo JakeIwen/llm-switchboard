@@ -710,8 +710,9 @@
   HANDLERS[EV.SEND_REFUSED] = function (c, fx, ev) {
     if (c.phase === PHASE.SENDING) refused(c, fx, ev);
   };
-  // An answer that leaves delivery open; one carrying a refusal is judged
-  // like any other.
+  // An answer that leaves delivery open is judged by its refusal like any
+  // other (one the page can't use carries ""); with no answer at all there
+  // is no refusal, and freshness decides.
   HANDLERS[EV.SEND_UNKNOWN] = function (c, fx, ev) {
     if (c.phase === PHASE.SENDING) finish(c, fx, REASON.UNKNOWN, ownershipLost(c.dest, { refusal: ev.refusal }));
   };

@@ -774,7 +774,10 @@ grant:
 - too many outstanding requests: `begin_send` only, after its busy check.
 
 Every other refusal, one with no words or words the page has never seen
-included, ends the conversation as lost: nothing is spoken. That covers the
+included, ends the conversation as lost: nothing is spoken. An answer the
+page cannot use (a 200 with no ticket, or a send's 200 that is neither
+handed off nor answered) is treated like a refusal it doesn't know, so it
+ends silently too. That covers the
 refusals the hub can give before those checks, such as sends off, voice
 confirm off, the text rule's reasons and too long for a voice send. Every
 `Refusal` member states its class, so a new one can't be added without

@@ -101,8 +101,9 @@
     return r && r.data && typeof r.data.error === "string" ? r.data.error : "HTTP " + (r ? r.status : "?");
   }
 
-  // The hub's refusal in an answer that is not a 200: its words, or "" when
-  // it gave none, which the reducer judges as a refusal it doesn't know.
+  // The hub's refusal in an answer that is not a success: its words, or ""
+  // when it gave none (a 200 the page can't use among them), which the
+  // reducer judges as a refusal it doesn't know.
   function refusalOf(r) {
     return r && r.data && typeof r.data.error === "string" ? r.data.error : "";
   }
@@ -112,7 +113,7 @@
     var k = D.classifySend(r);
     var ev = { type: SEND_EVENT[k.outcome] || EV.SEND_UNKNOWN, request_id: k.request_id,
       state: r.data && r.data.state, reason: detail(r) };
-    if (r.status !== 200) ev.refusal = refusalOf(r);
+    if (ev.type !== EV.SEND_OK) ev.refusal = refusalOf(r);
     return ev;
   }
 
@@ -443,9 +444,7 @@
         if (r.status === 200 && r.data && typeof r.data.ticket === "string") {
           dispatch({ type: EV.TICKET_OK, ticket: r.data.ticket });
         } else {
-          var fail = { type: EV.TICKET_FAIL, reason: detail(r) };
-          if (r.status !== 200) fail.refusal = refusalOf(r);
-          dispatch(fail);
+          dispatch({ type: EV.TICKET_FAIL, reason: detail(r), refusal: refusalOf(r) });
         }
       }, function () {
         if (!settle(FETCH.TICKET, id)) return;
