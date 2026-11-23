@@ -8,6 +8,7 @@ fits the readers' size caps overflows the parser on every Python version
 import json
 from pathlib import Path
 import shutil
+import sys
 import tempfile
 import threading
 import unittest
@@ -47,6 +48,12 @@ def in_small_stack(fn):
     return out["value"]
 
 
+# CPython 3.13 neither counts the parser's C recursion against the
+# recursion limit (3.11 does) nor measures the C stack (3.14 does), so on it
+# the small-stack thread overflows into a SIGBUS that kills the whole test
+# run instead of raising RecursionError.
+@unittest.skipIf(sys.version_info[:2] == (3, 13),
+                 "CPython 3.13 crashes the process on a thread stack overflow instead of raising RecursionError")
 class DeepNestingTest(unittest.TestCase):
     def setUp(self):
         self.dir = Path(tempfile.mkdtemp())
