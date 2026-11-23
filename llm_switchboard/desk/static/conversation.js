@@ -68,6 +68,7 @@
 
   var L = root.DeskConversationLogic || require("./conversation_logic.js");
   var D = root.DeskLogic || require("./desk_logic.js");
+  var T = root.DeskSoundTracker || require("./sound_tracker.js");
   var PHASE = L.PHASE, FX = L.FX, EV = L.EV, TIMER = L.TIMER, SAY = L.SAY;
   var REASON = L.REASON, CUE = L.CUE, LIMITS = L.LIMITS;
 
@@ -109,11 +110,8 @@
     // it brought. Start waits for it, so it can't reach the hub after a
     // newer acquisition and replace that grant (the hub keeps the latest).
     var straggler = null;
-    var quietAt = -Infinity; // the latest end, error or cancel of this page's speech
-    var uncertainUntil = 0;  // Start stays refused until then
-    var cutOff = false;      // this conversation stopped an utterance before its end
-    var quietHandle = null;  // tells the page when the quiet rules have passed
-    var sounding = [];       // submitted utterances with no terminal event yet
+    var sound = T.create({ env: env, onChange: notify });
+    var cutsAtStart = 0;     // sound.cuts() at the Start tap: more means this conversation cut one off
     var interim = "";
 
     function nextId() { return ++seq; }
@@ -130,7 +128,7 @@
         while (queue.length) {
           var next = queue.shift();
           next.now = env.now();
-          next.quietAt = quietAt;
+          next.quietAt = sound.quietAt();
           next.voice = !!deps.voiceAvailable();
           var r = L.reduce(c, next);
           c = r.c;
@@ -439,7 +437,7 @@
       // Started only from listening, and never inside the guard: the
       // reducer promises both; a broken promise fails closed.
       if (c.phase !== PHASE.LISTENING) return;
-      if (env.now() - quietAt < LIMITS.GUARD_MS) {
+      if (env.now() - sound.quietAt() < LIMITS.GUARD_MS) {
         return dispatch({ type: EV.END, reason: L.withDetail(REASON.REC_FAILED, "guard") });
       }
       stopRecognizer();
@@ -488,64 +486,20 @@
 
     // ---- speech -----------------------------------------------------------
     //
-    // Two kinds of bookkeeping. `utt` is the conversation utterance's role in
-    // the state machine, and ends at its end, error, timeout or cut. `sounding`
-    // is acoustic: every utterance this page submitted (the conversation's and
-    // the tracked ones) until a terminal event, its own `end` or `error` or a
-    // cancel this page issued. Listeners stay attached after either ends, so a
-    // real `end` or `error` that comes later still moves `quietAt`, which the
-    // guard before every mic opening measures from: sound may have played
-    // until then.
+    // `utt` is the conversation utterance's role in the state machine, and
+    // ends at its end, error, timeout or cut; the acoustic bookkeeping of
+    // every utterance this page submits is the sound tracker's (sound_tracker.js).
 
-    function markUncertain(estimate) {
-      cutOff = true;
-      var until = env.now() + estimate * L.SPEECH_DEADLINE_FACTOR;
-      if (until > uncertainUntil) uncertainUntil = until;
-    }
-
-    // Start's quiet period and the guard pass with time, not with an event:
-    // one timer tells the page when they have.
-    function soundChanged() {
-      if (quietHandle !== null) env.clearTimeout(quietHandle);
-      quietHandle = null;
-      var wait = Math.max(uncertainUntil, quietAt + LIMITS.GUARD_MS) - env.now();
-      if (wait > 0) quietHandle = env.setTimeout(function () { quietHandle = null; notify(); }, wait);
-    }
-
-    function cancelSynth() {
-      try { env.synth.cancel(); } catch (e) { /* nothing queued */ }
-    }
-
-    // Registers a submitted utterance; the returned `heard(error)` is its
-    // own terminal event, early or late.
-    function submitted(estimate) {
-      var entry = { estimate: estimate };
-      sounding.push(entry);
-      return function heard(error) {
-        quietAt = env.now();
-        var i = sounding.indexOf(entry);
-        if (i >= 0) {
-          sounding.splice(i, 1);
-          if (error) markUncertain(estimate);
-        }
-        soundChanged();
-      };
-    }
-
-    // A cancel this page issues ends every submitted utterance still
-    // sounding: sound is marked uncertain first, then the conversation
-    // utterance's id is cleared, then the voice is cancelled. Returns the
-    // conversation utterance that was cut, if any.
+    // A cancel this page issues: sound is marked uncertain first, then the
+    // conversation utterance's id is cleared, then the voice is cancelled.
+    // Returns the conversation utterance that was cut, if any.
     function cancelSpeech() {
       var cut = utt;
-      if (!cut && !sounding.length) return null;
-      sounding.forEach(function (entry) { markUncertain(entry.estimate); });
-      sounding = [];
-      utt = null;
-      clearTimer(TIMER.SPEECH);
-      quietAt = env.now();
-      cancelSynth();
-      soundChanged();
+      if (!cut && !sound.sounding()) return null;
+      sound.cancel(function () {
+        utt = null;
+        clearTimer(TIMER.SPEECH);
+      });
       return cut;
     }
 
@@ -562,7 +516,7 @@
       u.lang = "en-US";
       var id = nextId();
       var estimate = L.estimateMs(text);
-      var heard = submitted(estimate);
+      var heard = sound.submit(estimate);
       utt = { id: id, u: u, kind: kind, estimate: estimate };
       function mine() { return !!utt && utt.id === id; }
       u.onend = function () {
@@ -578,7 +532,7 @@
         if (!mine()) return notify();
         utt = null;
         clearTimer(TIMER.SPEECH);
-        cancelSynth();
+        sound.cancelSynth();
         said(kind, false);
       };
       setTimer(TIMER.SPEECH, estimate * L.SPEECH_DEADLINE_FACTOR);
@@ -610,7 +564,7 @@
     function teardown(reason, lost, silent) {
       // Every cut ends the conversation, so any cut since the start was on the way here.
       cutSpeech();
-      var cut = cutOff;
+      var cut = sound.cuts() !== cutsAtStart;
       stopRecognizer();
       var held = grant;
       // A page that lost its grant, is leaving, cut a sound off, can't be
@@ -664,15 +618,14 @@
     function active() { return L.active(c); }
 
     function canStart() {
-      if (active() || straggler || utt || sounding.length) return false;
-      if (env.now() < uncertainUntil) return false;
+      if (active() || straggler || utt || sound.busy(env.now())) return false;
       // Not proof of quiet when false, but proof of sound when true.
       return !(env.synth && (env.synth.speaking || env.synth.pending));
     }
 
     function start(dest) {
       if (!dest || !canStart()) return false;
-      cutOff = false;
+      cutsAtStart = sound.cuts();
       dispatch({ type: EV.START, dest: Object.freeze({
         host: dest.host, session_id: dest.session_id, generation: dest.generation,
         label: dest.label, epoch: dest.epoch
@@ -703,20 +656,11 @@
     // cancelled as cleanup and counts as cut off; its real end or error,
     // whenever it comes, still moves the guard.
     function track(u) {
-      var estimate = L.estimateMs(u.text || "");
-      var heard = submitted(estimate);
-      var handle = env.setTimeout(function () {
+      sound.track(u, function () {
         var cut = cancelSpeech();
         if (cut) said(cut.kind, false);
         notify();
-      }, estimate * L.SPEECH_DEADLINE_FACTOR);
-      function done(error) {
-        env.clearTimeout(handle);
-        heard(error);
-        notify();
-      }
-      u.addEventListener("end", function () { done(false); });
-      u.addEventListener("error", function () { done(true); });
+      });
       // Start's enabled state changed.
       notify();
     }
@@ -727,9 +671,8 @@
     // or playing, the guard after the last real end, error or cancel passed,
     // and no uncertain-sound period running.
     function soundClear() {
-      if (utt || sounding.length) return false;
       var now = env.now();
-      if (now < uncertainUntil || now - quietAt < LIMITS.GUARD_MS) return false;
+      if (utt || sound.busy(now) || now - sound.quietAt() < LIMITS.GUARD_MS) return false;
       return !(env.synth && (env.synth.speaking || env.synth.pending));
     }
 
