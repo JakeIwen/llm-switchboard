@@ -88,6 +88,11 @@
     return typeof pollSeq === "number" && typeof ackSeq === "number" && pollSeq > ackSeq;
   }
 
+  // The identity a send is frozen to: the target as shown, in the hub's current epoch.
+  function destinationOf(t, epoch) {
+    return { host: t.host, session_id: t.session_id, generation: t.generation, label: t.label || t.session_id, epoch: epoch };
+  }
+
   // Keeps only ids still present in the current request history.
   function pruneIds(idSet, requests) {
     var live = {};
@@ -97,7 +102,8 @@
 
   var api = {
     REFUSALS: REFUSALS, classifySend: classifySend, describeRequestState: describeRequestState,
-    freezeClear: freezeClear, waitingOver: waitingOver, clearStillValid: clearStillValid, pruneIds: pruneIds
+    freezeClear: freezeClear, waitingOver: waitingOver, clearStillValid: clearStillValid, pruneIds: pruneIds,
+    destinationOf: destinationOf
   };
   root.DeskLogic = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;

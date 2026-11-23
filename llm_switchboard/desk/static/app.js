@@ -422,7 +422,7 @@
     if (compose.dest) return true;
     var t = selectedId === null ? null : findTarget(selectedId);
     if (!canCompose(t) || !state) return false;
-    var dest = { host: t.host, session_id: t.session_id, generation: t.generation, label: t.label || t.session_id, epoch: state.epoch };
+    var dest = Logic.destinationOf(t, state.epoch);
     compose.dest = dest;
     compose.ticketPending = true;
     var seq = compose.seq;
