@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from enum import Enum
 import re
 
+from .refusals import Refusal
+
 # Phase 1 has one host; the Mac relay adds another in phase 2.
 HOST = "pi"
 KNOWN_HOSTS = frozenset({HOST})
@@ -85,7 +87,7 @@ STARTUP_TMUX_TIMEOUT_SECONDS = 3
 # timeouts fail. It stays under the operator socket's 10 s, so `desk revoke`
 # gets its answer. A revoke whose wait ran out says so (REVOKE_IN_PROGRESS).
 STARTUP_REVOKE_WAIT_SECONDS = 2 * STARTUP_TMUX_TIMEOUT_SECONDS + 2
-REVOKE_IN_PROGRESS = "revoked for new requests; an acknowledgement is still in progress"
+REVOKE_IN_PROGRESS = Refusal.REVOKE_IN_PROGRESS  # its former name, kept for callers
 # Views that already got (or may have got) their Enter, remembered for this
 # hub run: pruned once their claude process is proven gone, never evicted;
 # a full table refuses new acknowledgements (the memory bound).

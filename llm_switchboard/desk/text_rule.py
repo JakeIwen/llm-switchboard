@@ -3,6 +3,8 @@
 text: it refuses anything check_text rejects, so the text Jacob reviewed is
 exactly the text Claude gets."""
 
+from .refusals import Refusal
+
 MAX_TEXT_BYTES = 4096
 # A leading command character would read as a slash command, a + command or a
 # shell escape to a human; the model acts on such text with full authority.
@@ -19,20 +21,20 @@ def _bad_char(ch: str) -> bool:
     return code < 0x20 or 0x7F <= code <= 0x9F or ch in _BIDI or ch in _SEPARATORS
 
 
-def check_text(text: str) -> str | None:
+def check_text(text: str) -> Refusal | None:
     """None when the hub accepts text as is, else the reason it refuses."""
     if not isinstance(text, str) or not text:
-        return "empty"
+        return Refusal.EMPTY
     if len(text.encode("utf-8", "surrogatepass")) > MAX_TEXT_BYTES:
-        return "too long"
+        return Refusal.TOO_LONG
     if any(0xD800 <= ord(ch) <= 0xDFFF for ch in text):
-        return "invalid character"
+        return Refusal.INVALID_CHARACTER
     if text != text.strip():
-        return "leading or trailing whitespace"
+        return Refusal.OUTER_WHITESPACE
     if any(_bad_char(ch) for ch in text):
-        return "control character"
+        return Refusal.CONTROL_CHARACTER
     if text.startswith(FORBIDDEN_FIRST):
-        return "starts with a command character"
+        return Refusal.COMMAND_CHARACTER
     return None
 
 

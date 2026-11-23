@@ -53,6 +53,7 @@ from .model import (
 from .grants import ConversationGrants
 from .model import ConfirmMode
 from .protocol import MAX_REPLY_TEXT_BYTES, MAX_SPOKEN_BYTES, event_content
+from .refusals import Refusal
 from .text_rule import check_text
 from ..session_id import is_session_id
 
@@ -60,8 +61,9 @@ _HEX64 = re.compile(r"[0-9a-f]{64}")
 _MAX_TOKEN_LENGTH = 128
 _PAIR_RATE_WINDOW_SECONDS = 60
 _CODE_FIXES = str.maketrans({"O": "0", "I": "1", "L": "1"})
-CHANNEL_STILL_RUNNING = "the session's channel is still running; stop the session, then clear"
-CHANNEL_UNVERIFIABLE = "the session's channel can't be checked; stop the session, then clear"
+# Their former names, kept for callers.
+CHANNEL_STILL_RUNNING = Refusal.CHANNEL_STILL_RUNNING
+CHANNEL_UNVERIFIABLE = Refusal.CHANNEL_UNVERIFIABLE
 
 
 def sha256_hex(value: str) -> str:
@@ -130,9 +132,9 @@ class HubState(ConversationGrants):
     def _routable(self, session_id: str) -> Registration:
         found = self._registrations_for(session_id)
         if not found:
-            raise DeskError(409, "not registered")
+            raise DeskError(409, Refusal.NOT_REGISTERED)
         if len(found) > 1:
-            raise DeskError(409, "ambiguous")
+            raise DeskError(409, Refusal.AMBIGUOUS)
         return found[0]
 
     def _locks_for(self, session_id: str) -> list[Lock]:
@@ -146,7 +148,7 @@ class HubState(ConversationGrants):
     def _store_error(self) -> str | None:
         if self._lock_error:
             return self._lock_error
-        return "lock file full" if len(self._locks) >= MAX_LOCKS else None
+        return Refusal.LOCK_FILE_FULL if len(self._locks) >= MAX_LOCKS else None
 
     def _earlier_run(self, lock: Lock) -> bool:
         return not lock.request_id.startswith(self.epoch + ".")
@@ -163,11 +165,11 @@ class HubState(ConversationGrants):
         """The rules every step of a send rechecks: sends on, a usable lock
         store, the target still enrolled."""
         if sending and not self._sends_enabled:
-            raise DeskError(403, "sends off")
+            raise DeskError(403, Refusal.SENDS_OFF)
         if self._store_error():
             raise DeskError(503, self._store_error())
         if session_id not in self._enrolled:
-            raise DeskError(409, "not enrolled")
+            raise DeskError(409, Refusal.NOT_ENROLLED)
 
     def _prune_history(self, now: float) -> bool:
         old = [request_id for request_id, r in self._requests.items()
@@ -198,7 +200,7 @@ class HubState(ConversationGrants):
         """Record a verified channel connection; returns its generation."""
         with self._mutex:
             if len(self._registrations) >= MAX_REGISTRATIONS:
-                raise DeskError(429, "too many registrations")
+                raise DeskError(429, Refusal.TOO_MANY_REGISTRATIONS)
             self._generation += 1
             self._registrations[conn_id] = Registration(conn_id, session_id, self._generation, identity)
             self._bump()
@@ -234,22 +236,22 @@ class HubState(ConversationGrants):
 
     def issue_ticket(self, session_id, generation, epoch) -> dict:
         if not isinstance(session_id, str) or not is_session_id(session_id):
-            raise DeskError(400, "bad session_id")
+            raise DeskError(400, Refusal.BAD_SESSION_ID)
         if not _is_int(generation) or not isinstance(epoch, str):
-            raise DeskError(400, "bad generation or epoch")
+            raise DeskError(400, Refusal.BAD_GENERATION_OR_EPOCH)
         with self._mutex:
             if epoch != self.epoch:
-                raise DeskError(409, "stale epoch")
+                raise DeskError(409, Refusal.STALE_EPOCH)
             self._check_routing(session_id, sending=False)
             registration = self._routable(session_id)
             if registration.generation != generation:
-                raise DeskError(409, "stale generation")
+                raise DeskError(409, Refusal.STALE_GENERATION)
             if self._busy(session_id):
-                raise DeskError(409, "busy")
+                raise DeskError(409, Refusal.BUSY)
             now = self._now()
             self._prune_tickets(now)
             if len(self._tickets) >= MAX_TICKETS:
-                raise DeskError(429, "ticket table full")
+                raise DeskError(429, Refusal.TICKET_TABLE_FULL)
             ticket = f"{self.epoch}.{_b64url(self._token_bytes(TICKET_RANDOM_BYTES))}"
             record = Ticket(sha256_hex(ticket), session_id, generation, now + TICKET_TTL_SECONDS)
             self._tickets[record.ticket_hash] = record
@@ -263,9 +265,9 @@ class HubState(ConversationGrants):
         token_hash = self.token_hash(token)
         with self._mutex:
             if not self._token_valid(token_hash):
-                raise DeskError(401, "unauthorized")
+                raise DeskError(401, Refusal.UNAUTHORIZED)
             if not self._sends_enabled:
-                raise DeskError(403, "sends off")
+                raise DeskError(403, Refusal.SENDS_OFF)
             if self._store_error():
                 raise DeskError(503, self._store_error())
             reason = check_text(text)
@@ -276,9 +278,9 @@ class HubState(ConversationGrants):
             self._check_routing(record.session_id, sending=True)
             registration = self._routable(record.session_id)
             if registration.generation != record.generation:
-                raise DeskError(409, "stale generation")
+                raise DeskError(409, Refusal.STALE_GENERATION)
             if self._busy(record.session_id):
-                raise DeskError(409, "busy")
+                raise DeskError(409, Refusal.BUSY)
             self._make_room_for_request()
             record.consumed = True
             request = Request(
@@ -292,19 +294,19 @@ class HubState(ConversationGrants):
 
     def _ticket_for_send(self, ticket) -> Ticket:
         if not isinstance(ticket, str) or len(ticket) > 256:
-            raise DeskError(400, "bad ticket")
+            raise DeskError(400, Refusal.BAD_TICKET)
         epoch, dot, _ = ticket.partition(".")
         if not dot:
-            raise DeskError(400, "bad ticket")
+            raise DeskError(400, Refusal.BAD_TICKET)
         if epoch != self.epoch:
-            raise DeskError(409, "stale epoch")
+            raise DeskError(409, Refusal.STALE_EPOCH)
         record = self._tickets.get(sha256_hex(ticket))
         if record is None:
-            raise DeskError(409, "unknown ticket")
+            raise DeskError(409, Refusal.UNKNOWN_TICKET)
         if self._now() >= record.expires_at:
-            raise DeskError(409, "ticket expired")
+            raise DeskError(409, Refusal.TICKET_EXPIRED)
         if record.consumed:
-            raise DeskError(409, "ticket already used")
+            raise DeskError(409, Refusal.TICKET_ALREADY_USED)
         return record
 
     def _make_room_for_request(self) -> None:
@@ -315,7 +317,7 @@ class HubState(ConversationGrants):
                 del self._requests[request_id]
                 self._replies.pop(request_id, None)
                 return
-        raise DeskError(429, "too many outstanding requests")
+        raise DeskError(429, Refusal.TOO_MANY_OUTSTANDING)
 
     def request_state(self, request_id: str) -> str | None:
         with self._mutex:
@@ -339,7 +341,7 @@ class HubState(ConversationGrants):
         with self._mutex:
             request = self._requests.get(request_id)
             if request is None or request.state is not RequestState.PENDING:
-                raise DeskError(409, "request not pending")
+                raise DeskError(409, Refusal.REQUEST_NOT_PENDING)
             try:
                 self._check_handoff(request)
             except DeskError:
@@ -371,16 +373,16 @@ class HubState(ConversationGrants):
 
     def _check_handoff(self, request: Request) -> None:
         if not self._token_valid(request.token_hash):
-            raise DeskError(401, "unauthorized")
+            raise DeskError(401, Refusal.UNAUTHORIZED)
         self._check_routing(request.session_id, sending=True)
         current = self._registrations.get(request.conn_id)
         others = self._registrations_for(request.session_id)
         if current is None or current.generation != request.generation or len(others) != 1:
-            raise DeskError(409, "target changed; not sent")
+            raise DeskError(409, Refusal.TARGET_CHANGED_NOT_SENT)
         # The lock must name the writer, or it could never be cleared safely.
         identity = current.identity
         if not valid_channel_identity(getattr(identity, "channel_pid", None), getattr(identity, "channel_start", None)):
-            raise DeskError(409, "channel identity unusable; not sent")
+            raise DeskError(409, Refusal.CHANNEL_IDENTITY_UNUSABLE)
         self._check_voice_handoff(request)
 
     def finish_write(self, request_id: str, written: bool, *, attempted: bool = True) -> None:
@@ -485,23 +487,23 @@ class HubState(ConversationGrants):
         when it can't be checked or no checker is given. The check is a short
         /proc read, done under the state's lock."""
         if not isinstance(session_id, str) or not isinstance(lock_id, str):
-            raise DeskError(400, "bad session_id or lock_id")
+            raise DeskError(400, Refusal.BAD_LOCK_REF)
         with self._mutex:
             locks = self._locks_for(session_id)
             if not locks:
-                raise DeskError(409, "no lock")
+                raise DeskError(409, Refusal.NO_LOCK)
             lock = next((lock for lock in locks if lock.lock_id == lock_id), None)
             if lock is None:
-                raise DeskError(409, "lock id does not match")
+                raise DeskError(409, Refusal.LOCK_ID_MISMATCH)
             if lock.request_id in self._in_delivery:
-                raise DeskError(409, "delivery in progress")
+                raise DeskError(409, Refusal.DELIVERY_IN_PROGRESS)
             if lock.request_id not in self._writer_done:
                 seen = (channel_process(lock.channel_pid, lock.channel_start) if channel_process
                         else ChannelProcess.UNVERIFIABLE)
                 if seen is ChannelProcess.RUNNING:
-                    raise DeskError(409, CHANNEL_STILL_RUNNING)
+                    raise DeskError(409, Refusal.CHANNEL_STILL_RUNNING)
                 if seen is not ChannelProcess.GONE:
-                    raise DeskError(503, CHANNEL_UNVERIFIABLE)
+                    raise DeskError(503, Refusal.CHANNEL_UNVERIFIABLE)
             try:
                 self._lock_store.remove(lock.lock_id)
             except LockStoreError as exc:
@@ -547,17 +549,17 @@ class HubState(ConversationGrants):
 
     def pair_start(self, secret_hash) -> dict:
         if not isinstance(secret_hash, str) or not _HEX64.fullmatch(secret_hash):
-            raise DeskError(400, "bad secret_hash")
+            raise DeskError(400, Refusal.BAD_SECRET_HASH)
         with self._mutex:
             now = self._now()
             while self._pair_starts and now - self._pair_starts[0] >= _PAIR_RATE_WINDOW_SECONDS:
                 self._pair_starts.popleft()
             if len(self._pair_starts) >= MAX_PAIR_STARTS_PER_MINUTE:
-                raise DeskError(429, "too many pairing attempts")
+                raise DeskError(429, Refusal.TOO_MANY_PAIRING_ATTEMPTS)
             self._pair_starts.append(now)
             self._prune_pairings(now)
             if len(self._pairings) >= MAX_PENDING_PAIRINGS:
-                raise DeskError(429, "too many pending pairings")
+                raise DeskError(429, Refusal.TOO_MANY_PENDING_PAIRINGS)
             code = self._new_code()
             pairing = Pairing(self._token_bytes(PAIR_ID_BYTES).hex(), code, secret_hash,
                               now + PAIR_TTL_SECONDS)
@@ -575,34 +577,34 @@ class HubState(ConversationGrants):
     def pair_confirm(self, code) -> None:
         """The operator typed the code the tablet shows."""
         if not isinstance(code, str):
-            raise DeskError(400, "bad code")
+            raise DeskError(400, Refusal.BAD_CODE)
         wanted = code.upper().replace("-", "").replace(" ", "").translate(_CODE_FIXES)
         if not wanted.isascii():
-            raise DeskError(404, "no such pairing")
+            raise DeskError(404, Refusal.NO_SUCH_PAIRING)
         with self._mutex:
             self._prune_pairings(self._now())
             for pairing in self._pairings.values():
                 if hmac.compare_digest(pairing.code, wanted):
                     pairing.confirmed = True
                     return
-            raise DeskError(404, "no such pairing")
+            raise DeskError(404, Refusal.NO_SUCH_PAIRING)
 
     def pair_claim(self, pair_id, secret) -> dict:
         if not isinstance(pair_id, str) or not isinstance(secret, str) or not _HEX64.fullmatch(secret):
-            raise DeskError(400, "bad pair_id or secret")
+            raise DeskError(400, Refusal.BAD_PAIR_CLAIM)
         with self._mutex:
             now = self._now()
             self._prune_pairings(now)
             pairing = self._pairings.get(pair_id)
             if pairing is None:
-                raise DeskError(404, "no such pairing")
+                raise DeskError(404, Refusal.NO_SUCH_PAIRING)
             if not hmac.compare_digest(sha256_hex(secret), pairing.secret_hash):
                 pairing.failures += 1
                 if pairing.failures >= MAX_PAIR_SECRET_FAILURES:
                     del self._pairings[pair_id]
-                raise DeskError(403, "wrong secret")
+                raise DeskError(403, Refusal.WRONG_SECRET)
             if not pairing.confirmed:
-                raise DeskError(409, "not confirmed")
+                raise DeskError(409, Refusal.NOT_CONFIRMED)
             # No second page may hold a token while a conversation runs.
             self._refuse_claim_during_grant()
             del self._pairings[pair_id]
@@ -639,7 +641,7 @@ class HubState(ConversationGrants):
         token_hash = self.token_hash(token)
         with self._mutex:
             if not self._token_valid(token_hash):
-                raise DeskError(401, "unauthorized")
+                raise DeskError(401, Refusal.UNAUTHORIZED)
             yield
 
     @contextlib.contextmanager
@@ -649,7 +651,7 @@ class HubState(ConversationGrants):
         token_hash = self.token_hash(token)
         with self._mutex:
             if not self._token_valid(token_hash):
-                raise DeskError(401, "unauthorized")
+                raise DeskError(401, Refusal.UNAUTHORIZED)
             self._tokens_in_use[token_hash] = self._tokens_in_use.get(token_hash, 0) + 1
         try:
             yield

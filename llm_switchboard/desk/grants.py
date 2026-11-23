@@ -27,6 +27,7 @@ import hmac
 import re
 
 from .model import MAX_VOICE_TEXT_BYTES, ConfirmMode, DeskError, RequestState
+from .refusals import Refusal
 from ..session_id import is_session_id
 
 GRANT_TTL_SECONDS = 15
@@ -35,14 +36,15 @@ GRANT_ID_BYTES = 16
 # constant-time comparison, which raises on non-ASCII text.
 _GRANT_ID = re.compile(f"[0-9a-f]{{{GRANT_ID_BYTES * 2}}}")
 
-GRANT_NOT_CURRENT = "conversation grant not current"
-GRANT_WRONG_TARGET = "conversation grant not for this target"
-ANOTHER_PAGE = "another page is paired; revoke its token first"
-VOICE_OFF = "voice confirm off"
-CONVERSATION_LIVE = "a conversation is in progress"
-VOICE_TEXT_TOO_LONG = "too long for a voice send"
-TARGET_CHANGED = "target changed"
-BAD_CONFIRM = "bad confirm"
+# Their former names, kept for callers.
+GRANT_NOT_CURRENT = Refusal.GRANT_NOT_CURRENT
+GRANT_WRONG_TARGET = Refusal.GRANT_WRONG_TARGET
+ANOTHER_PAGE = Refusal.ANOTHER_PAGE
+VOICE_OFF = Refusal.VOICE_OFF
+CONVERSATION_LIVE = Refusal.CONVERSATION_LIVE
+VOICE_TEXT_TOO_LONG = Refusal.VOICE_TEXT_TOO_LONG
+TARGET_CHANGED = Refusal.TARGET_CHANGED
+BAD_CONFIRM = Refusal.BAD_CONFIRM
 
 
 @dataclass
@@ -65,7 +67,7 @@ def confirm_mode(value) -> ConfirmMode:
             return ConfirmMode(value)
         except ValueError:
             pass
-    raise DeskError(400, BAD_CONFIRM)
+    raise DeskError(400, Refusal.BAD_CONFIRM)
 
 
 class ConversationGrants:
@@ -86,34 +88,34 @@ class ConversationGrants:
         grant = self._live_grant()
         if (grant is None or not isinstance(grant_id, str) or not _GRANT_ID.fullmatch(grant_id)
                 or grant.token_hash != token_hash or not hmac.compare_digest(grant.grant_id, grant_id)):
-            raise DeskError(409, GRANT_NOT_CURRENT)
+            raise DeskError(409, Refusal.GRANT_NOT_CURRENT)
         return grant
 
     def _authorized_hash(self, token) -> str:
         token_hash = self.token_hash(token)
         if not self._token_valid(token_hash):
-            raise DeskError(401, "unauthorized")
+            raise DeskError(401, Refusal.UNAUTHORIZED)
         return token_hash
 
     def grant_conversation(self, token, session_id, generation, epoch) -> dict:
         if not isinstance(session_id, str) or not is_session_id(session_id):
-            raise DeskError(400, "bad session_id")
+            raise DeskError(400, Refusal.BAD_SESSION_ID)
         if not isinstance(generation, int) or isinstance(generation, bool) or not isinstance(epoch, str):
-            raise DeskError(400, "bad generation or epoch")
+            raise DeskError(400, Refusal.BAD_GENERATION_OR_EPOCH)
         with self._mutex:
             token_hash = self._authorized_hash(token)
             if epoch != self.epoch:
-                raise DeskError(409, "stale epoch")
+                raise DeskError(409, Refusal.STALE_EPOCH)
             now = self._now()
             if sum(1 for t in self._tokens.values() if now < t.expires_at) != 1:
-                raise DeskError(409, ANOTHER_PAGE)
+                raise DeskError(409, Refusal.ANOTHER_PAGE)
             if not self._voice_enabled:
-                raise DeskError(403, VOICE_OFF)
+                raise DeskError(403, Refusal.VOICE_OFF)
             self._check_routing(session_id, sending=True)
             if self._routable(session_id).generation != generation:
-                raise DeskError(409, "stale generation")
+                raise DeskError(409, Refusal.STALE_GENERATION)
             if self._busy(session_id):
-                raise DeskError(409, "busy")
+                raise DeskError(409, Refusal.BUSY)
             # Replaces any earlier grant. Grants aren't in the snapshot, so no version bump.
             self._grant = Grant(self._token_bytes(GRANT_ID_BYTES).hex(), token_hash, session_id, generation,
                                 self._elapsed())
@@ -127,7 +129,7 @@ class ConversationGrants:
             found = self._registrations_for(grant.session_id)
             if len(found) != 1 or found[0].generation != grant.generation:
                 self._grant = None
-                raise DeskError(409, TARGET_CHANGED)
+                raise DeskError(409, Refusal.TARGET_CHANGED)
             grant.renewed = self._elapsed()
             return {"grant": grant.grant_id, "expires_in": GRANT_TTL_SECONDS}
 
@@ -144,12 +146,12 @@ class ConversationGrants:
         if mode is ConfirmMode.TAP:
             return mode, None
         if not self._voice_enabled:
-            raise DeskError(403, VOICE_OFF)
+            raise DeskError(403, Refusal.VOICE_OFF)
         grant = self._current_grant(grant_id, token_hash)
         if grant.session_id != ticket.session_id or grant.generation != ticket.generation:
-            raise DeskError(409, GRANT_WRONG_TARGET)
+            raise DeskError(409, Refusal.GRANT_WRONG_TARGET)
         if len(text.encode()) > MAX_VOICE_TEXT_BYTES:
-            raise DeskError(400, VOICE_TEXT_TOO_LONG)
+            raise DeskError(400, Refusal.VOICE_TEXT_TOO_LONG)
         return mode, grant.grant_id
 
     def _check_voice_handoff(self, request) -> None:
@@ -157,10 +159,10 @@ class ConversationGrants:
         if request.confirm is not ConfirmMode.VOICE:
             return
         if not self._voice_enabled:
-            raise DeskError(403, VOICE_OFF)
+            raise DeskError(403, Refusal.VOICE_OFF)
         grant = self._current_grant(request.grant_id, request.token_hash)
         if grant.session_id != request.session_id or grant.generation != request.generation:
-            raise DeskError(409, GRANT_WRONG_TARGET)
+            raise DeskError(409, Refusal.GRANT_WRONG_TARGET)
 
     def _recheck_voice_after_lock(self, request, lock) -> None:
         """At `hand_off`, after the durable lock write and before handed_off
@@ -185,7 +187,7 @@ class ConversationGrants:
 
     def _refuse_claim_during_grant(self) -> None:
         if self._live_grant() is not None:
-            raise DeskError(409, CONVERSATION_LIVE)
+            raise DeskError(409, Refusal.CONVERSATION_LIVE)
 
     def set_voice_enabled(self, enabled: bool) -> None:
         with self._mutex:

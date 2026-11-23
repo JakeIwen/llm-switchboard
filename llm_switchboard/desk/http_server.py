@@ -29,6 +29,7 @@ from .model import (
     HTTP_REQUEST_TIMEOUT_SECONDS, LONG_POLL_SECONDS, MAX_BODY_BYTES, MAX_HTTP_CONNECTIONS, DeskError,
 )
 from .page_build import PageFiles
+from .refusals import Refusal
 
 log = logging.getLogger("llm_switchboard.desk")
 
@@ -210,7 +211,7 @@ class _DeskHandler(BaseHTTPRequestHandler):
     def _dispatch(self, route) -> None:
         self._body_read = False
         try:
-            self._check_single("Host", self.desk.config.host_header, "wrong host")
+            self._check_single("Host", self.desk.config.host_header, Refusal.WRONG_HOST)
             route(self.path.partition("?")[0])
         except DeskError as exc:
             self._drain_unread_body()
@@ -218,27 +219,27 @@ class _DeskHandler(BaseHTTPRequestHandler):
                        [("WWW-Authenticate", "Bearer")] if exc.status == 401 else [])
         except Exception:
             log.exception("desk http: %s %s failed", self.command, self.path.partition("?")[0][:64])
-            self._json(500, {"error": "internal error"})
+            self._json(500, {"error": Refusal.INTERNAL_ERROR})
 
-    def _check_single(self, name: str, expected: str, reason: str) -> None:
+    def _check_single(self, name: str, expected: str, refusal: Refusal) -> None:
         values = self.headers.get_all(name) or []
         if len(values) != 1 or values[0] != expected:
-            raise DeskError(403, reason)
+            raise DeskError(403, refusal)
 
     def _token(self) -> str:
         values = self.headers.get_all("Authorization") or []
         if len(values) != 1 or not values[0].startswith("Bearer "):
-            raise DeskError(401, "unauthorized")
+            raise DeskError(401, Refusal.UNAUTHORIZED)
         token = values[0][len("Bearer "):]
         if not self.desk.api.authenticate(token):
-            raise DeskError(401, "unauthorized")
+            raise DeskError(401, Refusal.UNAUTHORIZED)
         return token
 
     def _get(self, path: str) -> None:
         if path in STATIC_ROUTES:
             served = self.desk.page.get(path)
             if served is None:
-                raise DeskError(404, "not found")
+                raise DeskError(404, Refusal.NOT_FOUND)
             self._respond(200, *served)
         elif path == STATE_PATH:
             self._state()
@@ -246,7 +247,7 @@ class _DeskHandler(BaseHTTPRequestHandler):
             token = self._token()
             self._json(200, self.desk.api.startup_view(token))
         else:
-            raise DeskError(404, "not found")
+            raise DeskError(404, Refusal.NOT_FOUND)
 
     def _state(self) -> None:
         token = self._token()
@@ -254,38 +255,38 @@ class _DeskHandler(BaseHTTPRequestHandler):
         after = query.get("after")
         if after is not None:
             if len(after) != 1 or not after[0].isdigit() or len(after[0]) > 18:
-                raise DeskError(400, "bad after")
+                raise DeskError(400, Refusal.BAD_AFTER)
             if not self.desk.api.wait_for_change(int(after[0]), token, self.desk.long_poll_seconds):
-                raise DeskError(401, "unauthorized")
+                raise DeskError(401, Refusal.UNAUTHORIZED)
         self._json(200, self.desk.api.state_view())
 
     def _post(self, path: str) -> None:
         if path not in POST_ROUTES:
-            raise DeskError(404, "not found")
+            raise DeskError(404, Refusal.NOT_FOUND)
         method, protected = POST_ROUTES[path]
-        self._check_single("Origin", self.desk.config.origin, "wrong origin")
+        self._check_single("Origin", self.desk.config.origin, Refusal.WRONG_ORIGIN)
         if len(self.headers.get_all("Content-Type") or []) != 1 or \
                 self.headers.get_content_type() != "application/json":
-            raise DeskError(400, "content type must be application/json")
+            raise DeskError(400, Refusal.NOT_JSON)
         if self.headers.get("Transfer-Encoding") is not None:
-            raise DeskError(400, "length required")
+            raise DeskError(400, Refusal.LENGTH_REQUIRED)
         lengths = self.headers.get_all("Content-Length") or []
         if len(lengths) != 1 or not lengths[0].isdigit():
-            raise DeskError(400, "length required")
+            raise DeskError(400, Refusal.LENGTH_REQUIRED)
         length = int(lengths[0])
         if length > MAX_BODY_BYTES:
-            raise DeskError(413, "body too large")
+            raise DeskError(413, Refusal.BODY_TOO_LARGE)
         token = self._token() if protected else None
         raw = self.rfile.read(length)
         self._body_read = True
         if len(raw) != length:
-            raise DeskError(400, "truncated body")
+            raise DeskError(400, Refusal.TRUNCATED_BODY)
         try:
             body = json.loads(raw)
         except (ValueError, RecursionError):
-            raise DeskError(400, "bad json") from None
+            raise DeskError(400, Refusal.BAD_JSON) from None
         if not isinstance(body, dict):
-            raise DeskError(400, "bad json")
+            raise DeskError(400, Refusal.BAD_JSON)
         handler = getattr(self.desk.api, method)
         self._json(200, handler(body, token) if protected else handler(body))
 
@@ -305,8 +306,8 @@ class _DeskHandler(BaseHTTPRequestHandler):
         """Parse errors (bad request line, oversize headers, unknown method)
         get the same JSON shape and headers as everything else."""
         self.close_connection = True
-        reason = {501: "method not allowed"}.get(code, "bad request")
-        self._json(code if code in (400, 404, 413, 414, 431, 501, 505) else 400, {"error": reason})
+        self._json(code if code in (400, 404, 413, 414, 431, 501, 505) else 400,
+                   {"error": Refusal.METHOD_NOT_ALLOWED if code == 501 else Refusal.BAD_REQUEST})
 
     def _json(self, status: int, body: dict, extra=()) -> None:
         data = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode()

@@ -16,9 +16,11 @@ most, held in memory only.
 import hashlib
 from pathlib import Path
 
+from .refusals import Refusal
+
 BUILD_PLACEHOLDER = b"@DESK_BUILD@"
 BUILD_HEX_DIGITS = 16
-PAGE_OUT_OF_DATE = "page out of date; reload it"
+PAGE_OUT_OF_DATE = Refusal.PAGE_OUT_OF_DATE  # its former name, kept for callers
 _HTML_ROUTE = "/desk"
 
 

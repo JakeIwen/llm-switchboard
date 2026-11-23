@@ -25,6 +25,7 @@ conversation mode has not been qualified for driving.
 | `desk/protocol.py` | model | Channel socket framing and messages; the delivery suffix and channel instructions |
 | `desk/text_rule.py` | rules | The prompt text rule (`check_text`, `normalize_text`); mirrored by `static/text_rule.js` over `text_rule_cases.json` |
 | `desk/model.py` | model | `RequestState`, `Registration`, request/ticket/token/pairing records, limits |
+| `desk/refusals.py` | model | `Refusal`: every reason the hub's HTTPS API and operator socket refuse with (hub, state, grants, HTTP layer) and the text rule's reasons, declared once; `tests/test_desk_refusals.py` fails on a refusal raised in those modules without it. The startup acknowledgement keeps its own `StartupRefusal` |
 | `desk/hub_state.py` | rules | The hub's in-memory state machine; clock and randomness injected, no I/O |
 | `desk/locks.py` | adapter | The target lock file (fsync before handoff; refuses on unreadable, oversize, malformed or full) |
 | `desk/enrollment.py` | adapter | `enrolled.json` and `desk-settings.json` (`sends_enabled`, `voice_confirm_enabled`): read through `bounded_read`, written and locked through `JsonFile` |

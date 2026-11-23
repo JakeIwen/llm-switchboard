@@ -44,15 +44,15 @@ from .config import DeskConfig
 from .enrollment import DeskSettings, Enrollment, ensure_private_dir
 from .hub_state import HubState
 from .http_server import DeskHttpServer, make_tls_context
-from .page_build import PAGE_OUT_OF_DATE
 from .labels import SessionLabels, encodable
 from .locks import LockStore
 from .model import (
     HELLO_TIMEOUT_SECONDS, MAX_PENDING_CHANNEL_CONNECTIONS, RECHECK_SECONDS,
-    REVOKE_IN_PROGRESS, STARTUP_TMUX_TIMEOUT_SECONDS, ChannelProcess, ConfirmMode, DeskError, is_request_id,
+    STARTUP_TMUX_TIMEOUT_SECONDS, ChannelProcess, ConfirmMode, DeskError, is_request_id,
 )
 from .operator import OperatorOp, OperatorServer, bind_private_socket
 from .peer import process_presence
+from .refusals import Refusal
 from .protocol import (
     HEARTBEAT_SECONDS, IDLE_TIMEOUT_SECONDS, FrameError, MessageType, decode, encode, read_line,
 )
@@ -444,7 +444,7 @@ class Hub:
     def pair_claim(self, body: dict) -> dict:
         # A tab loaded before an install can't pair: its build isn't ours.
         if body.get("build") != self.http.page_build:
-            raise DeskError(403, PAGE_OUT_OF_DATE)
+            raise DeskError(403, Refusal.PAGE_OUT_OF_DATE)
         return self.state.pair_claim(body.get("pair_id"), body.get("secret"))
 
     def ticket(self, body: dict, token: str) -> dict:
@@ -482,7 +482,7 @@ class Hub:
         if reason:
             self.state.expire_request(request.request_id)
             self._drop_connection(request.conn_id, f"dispatch recheck: {reason}")
-            raise DeskError(409, "target changed; not sent")
+            raise DeskError(409, Refusal.TARGET_CHANGED_NOT_SENT)
         # A CLI unenroll or sends change since the last 5 s pass counts too.
         # The file locks stay held until the target lock is persisted, so an
         # offline edit either lands before this reread or waits for the handoff.
@@ -565,7 +565,7 @@ class Hub:
         try:
             op = OperatorOp(message.get("op"))
         except ValueError:
-            return {"ok": False, "error": "unknown op"}
+            return {"ok": False, "error": Refusal.UNKNOWN_OP}
         try:
             return {"ok": True, **self._operator_ops[op](message)}
         except DeskError as exc:
@@ -578,10 +578,10 @@ class Hub:
     def _op_revoke(self, message: dict) -> dict:
         token_id = message.get("token_id")
         if token_id is not None and not isinstance(token_id, str):
-            raise DeskError(400, "bad token_id")
+            raise DeskError(400, Refusal.BAD_TOKEN_ID)
         revoked = self.state.revoke(token_id)
         if not revoked.settled:
-            raise DeskError(503, REVOKE_IN_PROGRESS, {"revoked": revoked.count, "in_progress": True})
+            raise DeskError(503, Refusal.REVOKE_IN_PROGRESS, {"revoked": revoked.count, "in_progress": True})
         return {"revoked": revoked.count}
 
     def _op_status(self, message: dict) -> dict:
@@ -611,7 +611,7 @@ class Hub:
     def _op_sends(self, message: dict) -> dict:
         enabled = message.get("enabled")
         if not isinstance(enabled, bool):
-            raise DeskError(400, "enabled must be true or false")
+            raise DeskError(400, Refusal.BAD_ENABLED)
         with self._policy_files(), self._policy_lock:
             self.settings.set_sends_enabled(enabled)
             self.state.set_sends_enabled(enabled)
@@ -620,7 +620,7 @@ class Hub:
     def _op_voice(self, message: dict) -> dict:
         enabled = message.get("enabled")
         if not isinstance(enabled, bool):
-            raise DeskError(400, "enabled must be true or false")
+            raise DeskError(400, Refusal.BAD_ENABLED)
         with self._policy_files(), self._policy_lock:
             self.settings.set_voice_confirm_enabled(enabled)
             self.state.set_voice_enabled(self.settings.voice_confirm_enabled())
