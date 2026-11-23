@@ -225,6 +225,58 @@ test("a grant arriving after End during starting is released at once", async () 
   assert.equal(h.said.length, 0);
 });
 
+test("a new Start never races an abandoned grant acquisition", async () => {
+  const h = harness();
+  const page = () => ({ recognizer: true, voice: true, tapSending: false, canStart: h.ctl.canStart(), blocker: h.ctl.blocker() });
+  h.ctl.start(DEST);
+  await flush();
+  await h.answer(PATH.STATE, 200, snap());
+  const first = h.pending(PATH.GRANT)[0];
+  h.ctl.endTap();
+  assert.equal(h.ctl.canStart(), false);
+  assert.equal(L.startBlocker(snap(), "s1", page()), L.BLOCKER.LETTING_GO);
+  assert.equal(h.ctl.start(DEST), false);
+  // The old acquisition reaches the hub and answers; its grant is released.
+  first.answer(200, { grant: "old" });
+  await flush();
+  assert.deepEqual(releases(h), ["old"]);
+  assert.equal(h.ctl.canStart(), false);
+  await h.answer(PATH.RELEASE, 409, { error: "conversation grant not current" });
+  assert.equal(h.ctl.canStart(), true);
+  assert.equal(L.startBlocker(snap(), "s1", page()), null);
+  // Only now does the next acquisition go out.
+  const grantArrives = await startUntilGrant(h, "new");
+  assert.equal(h.all(PATH.GRANT).length, 2);
+  await grantArrives();
+  await h.advance(LIMITS.GUARD_MS);
+  assert.equal(h.phase(), PHASE.LISTENING);
+  assert.deepEqual(releases(h), ["old"]);
+});
+
+test("an abandoned grant request with no response holds Start until the hub's epoch changes", async () => {
+  for (const ending of ["never answers", "fails without a response"]) {
+    const h = harness();
+    h.ctl.start(DEST);
+    await flush();
+    await h.answer(PATH.STATE, 200, snap());
+    const stuck = h.pending(PATH.GRANT)[0];
+    h.ctl.endTap();
+    if (ending === "fails without a response") { stuck.fail(); await flush(); }
+    // No page-side timer lets it go: the hub may still read and run it.
+    await h.advance(LIMITS.STEP_MS * 10);
+    assert.equal(h.ctl.canStart(), false, ending);
+    assert.equal(h.ctl.blocker(), L.BLOCKER.LETTING_GO, ending);
+    assert.equal(stuck.aborted, undefined, ending);
+    // A poll from the same hub process changes nothing.
+    h.ctl.snapshot(snap());
+    assert.equal(h.ctl.canStart(), false, ending);
+    // A new epoch: the request named the old one and died with that process.
+    h.ctl.snapshot(snap({ epoch: "e2" }));
+    assert.equal(h.ctl.canStart(), true, ending);
+    assert.equal(h.ctl.blocker(), null, ending);
+  }
+});
+
 test("a retarget during starting ends it, at the tap or when the grant arrives", async () => {
   const h = harness();
   h.honorAbort = false;

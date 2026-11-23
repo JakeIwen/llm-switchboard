@@ -24,8 +24,12 @@
 //                     label, epoch} frozen from the tapped control. False
 //                     (and nothing happens) unless canStart().
 //   canStart()        No conversation, no utterance of this page queued or
-//                     playing, and no uncertain sound: the Start control's
-//                     enabled state.
+//                     playing, no uncertain sound, and no abandoned grant
+//                     request the hub may still act on (see abandonGrant):
+//                     the Start control's enabled state.
+//   blocker()         Why canStart() is false, as a BLOCKER (IN_PROGRESS,
+//                     LETTING_GO, NOT_QUIET), or null; pass it to
+//                     startBlocker as `page.blocker` for the view's reason.
 //   snapshot(state)   Every state the page's poll receives (ignored when no
 //                     conversation is active).
 //   endTap()          The full-screen End conversation control; also stops
@@ -86,6 +90,10 @@
     // {freshUntil} while the closing cue plays: the grant is still held, and
     // beaten and checked like a conversation's, until the cue ends or fails.
     var closing = null;
+    // {id, epoch}: an abandoned grant request, or the release of the grant
+    // it brought. Start waits for it, so it can't reach the hub after a
+    // newer acquisition and replace that grant (the hub keeps the latest).
+    var straggler = null;
     var quietAt = -Infinity; // the latest end, error or cancel of this page's speech
     var uncertainUntil = 0;  // Start stays refused until then
     var cutOff = false;      // this conversation stopped an utterance before its end
@@ -208,7 +216,7 @@
     // A start step that never answers fails like one that refused; the grant
     // request is left open so a grant that still arrives is released.
     function stepTimedOut() {
-      if (abandon(FETCH.SNAPSHOT, true) || abandon(FETCH.GRANT, false)) {
+      if (abandon(FETCH.SNAPSHOT, true) || abandonGrant()) {
         dispatch({ type: EV.FAIL, reason: REASON.HUB_UNREACHABLE });
       } else if (abandon(FETCH.WAKE, false)) {
         dispatch({ type: EV.FAIL, reason: REASON.NO_WAKE });
@@ -293,11 +301,7 @@
       setTimer(TIMER.STEP, LIMITS.STEP_MS);
       api("POST", PATH.GRANT, { session_id: d.session_id, generation: d.generation, epoch: d.epoch }, {}).then(function (r) {
         var got = r.status === 200 && r.data && typeof r.data.grant === "string" ? r.data.grant : null;
-        if (!settle(FETCH.GRANT, id)) {
-          // A grant that arrives after the end is released at once.
-          if (got) release(got);
-          return;
-        }
+        if (!settle(FETCH.GRANT, id)) return straggled(id, got);
         clearTimer(TIMER.STEP);
         if (unauthorized(r)) return;
         if (!got) return dispatch({ type: EV.FAIL, reason: L.withDetail(REASON.REFUSED, detail(r)) });
@@ -306,10 +310,41 @@
         dispatch({ type: EV.GRANT_OK, startedAt: startedAt,
           ctx: { selectedId: deps.selectedId(), visible: deps.visible() } });
       }, function () {
+        // No response: an abandoned request stays a straggler.
         if (!settle(FETCH.GRANT, id)) return;
         clearTimer(TIMER.STEP);
         dispatch({ type: EV.FAIL, reason: REASON.HUB_UNREACHABLE });
       });
+    }
+
+    // The grant request is left open when the conversation gives up on it,
+    // and never aborted: once the hub has read a request it runs it to
+    // completion, behind the state lock if need be, and grants whatever free
+    // target it names. Neither an abort nor a page-side timer proves it won't
+    // still do so, so Start waits until one of two things does: its response
+    // arrives (and a grant in it is released), or a poll shows a new hub
+    // epoch (the request named the old one, and its connection died with
+    // that hub process). A request that fails with no response leaves Start
+    // refused until either happens, or the page is reloaded.
+    function abandonGrant() {
+      var f = fetches[FETCH.GRANT];
+      if (!f) return false;
+      delete fetches[FETCH.GRANT];
+      straggler = { id: f.id, epoch: c.dest.epoch };
+      return true;
+    }
+
+    // An abandoned grant request answered: a grant it brought is released
+    // at once, and Start waits for that release to settle.
+    function straggled(id, got) {
+      if (!got) return forgetStraggler(id);
+      release(got).then(function () { forgetStraggler(id); });
+    }
+
+    function forgetStraggler(id) {
+      if (!straggler || straggler.id !== id) return;
+      straggler = null;
+      notify();
     }
 
     // One beat in flight, every BEAT_MS, abandoned after BEAT_ABORT_MS; only
@@ -338,9 +373,9 @@
       if (!closing.freshUntil) stopClosing();
     }
 
+    // Settles either way: a stale grant answers 409, and an unreleased one expires on its own.
     function release(id) {
-      api("POST", PATH.RELEASE, { grant: id }, {}).then(function () { /* a stale grant answers 409 */ },
-        function () { /* it expires on its own */ });
+      return api("POST", PATH.RELEASE, { grant: id }, {}).then(function () {}, function () {});
     }
 
     function requestTicket() {
@@ -570,7 +605,8 @@
       // The grant request stays open so a late grant is released; a late
       // ticket or send answer is dropped; the beat goes on under the cue.
       Object.keys(fetches).forEach(function (kind) {
-        if (!(cue && kind === FETCH.BEAT)) abandon(kind, kind !== FETCH.GRANT && kind !== FETCH.SEND);
+        if (kind === FETCH.GRANT) abandonGrant();
+        else if (!(cue && kind === FETCH.BEAT)) abandon(kind, kind !== FETCH.SEND);
       });
       releaseWake();
       interim = "";
@@ -613,7 +649,7 @@
     function active() { return L.active(c); }
 
     function canStart() {
-      if (active() || utt || sounding.length) return false;
+      if (active() || straggler || utt || sounding.length) return false;
       if (env.now() < uncertainUntil) return false;
       // Not proof of quiet when false, but proof of sound when true.
       return !(env.synth && (env.synth.speaking || env.synth.pending));
@@ -636,6 +672,7 @@
 
     function snapshot(state) {
       if (!state) return;
+      if (straggler && state.epoch !== straggler.epoch) forgetStraggler(straggler.id);
       if (active()) return dispatch({ type: EV.SNAPSHOT, snapshot: state });
       // A newer poll that proves the grant gone stops the closing cue.
       if (closing && L.grantGoneIn(state, c.dest) && (state.epoch !== c.snap.epoch || state.version >= c.snap.version)) {
@@ -671,6 +708,13 @@
 
     function holds() { return active() || !!utt; }
 
+    // Why canStart() is false, for the view: a BLOCKER, or null when it is true.
+    function blocker() {
+      if (active()) return L.BLOCKER.IN_PROGRESS;
+      if (straggler) return L.BLOCKER.LETTING_GO;
+      return canStart() ? null : L.BLOCKER.NOT_QUIET;
+    }
+
     function view() {
       return {
         phase: c.phase, active: active(), dest: c.dest, draft: c.draft, interim: interim,
@@ -679,7 +723,7 @@
     }
 
     return {
-      start: start, canStart: canStart, snapshot: snapshot, track: track, view: view, holds: holds,
+      start: start, canStart: canStart, blocker: blocker, snapshot: snapshot, track: track, view: view, holds: holds,
       endTap: function () { endIfActive(REASON.END_TAPPED); },
       hidden: function () { endIfActive(REASON.HIDDEN); },
       unpaired: function () { endIfActive(REASON.UNPAIRED, true); },

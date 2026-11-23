@@ -152,7 +152,9 @@
     NO_RECOGNIZER: "this tablet has no speech recognition",
     NO_VOICE: REASON.NO_VOICE,
     TAP_SEND: "a tapped send is still in progress",
-    NOT_QUIET: "the desk may still be speaking; wait until it is quiet"
+    NOT_QUIET: "the desk may still be speaking; wait until it is quiet",
+    IN_PROGRESS: "a conversation is in progress",
+    LETTING_GO: "the hub has not answered the last conversation's grant request; reload the page if it never does"
   });
 
   function withDetail(reason, detail) { return detail ? reason + ": " + detail : reason; }
@@ -314,7 +316,8 @@
 
   // The first BLOCKER that holds for `targetId` in snapshot `snap`, or null
   // when Start may be offered. `page` = {recognizer, voice, tapSending,
-  // canStart}: the tablet's own facts and the controller's canStart().
+  // canStart, blocker}: the tablet's own facts, the controller's canStart()
+  // and, optionally, its blocker() for the reason Start is refused.
   function startBlocker(snap, targetId, page) {
     if (!snap) return BLOCKER.NO_STATE;
     if (snap.sends_enabled !== true) return BLOCKER.SENDS_OFF;
@@ -326,7 +329,7 @@
     if (!page.recognizer) return BLOCKER.NO_RECOGNIZER;
     if (!page.voice) return BLOCKER.NO_VOICE;
     if (page.tapSending) return BLOCKER.TAP_SEND;
-    if (!page.canStart) return BLOCKER.NOT_QUIET;
+    if (!page.canStart) return page.blocker || BLOCKER.NOT_QUIET;
     return null;
   }
 
