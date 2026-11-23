@@ -184,7 +184,7 @@
 
   function initial() {
     return {
-      phase: PHASE.OFF, dest: null, draft: "", frozenText: null,
+      phase: PHASE.OFF, dest: null, label: "", draft: "", frozenText: null,
       // Request ids the start's snapshot held for the target (history), and
       // the ids this conversation's sends returned.
       history: {}, historyTaken: false, own: {},
@@ -432,6 +432,23 @@
     if (!c.current || !c.snap) return null;
     var rq = requestsFor(c.snap, c.dest.session_id).filter(function (x) { return x.request_id === c.current; })[0];
     return rq && rq.reply ? rq.reply : null;
+  }
+
+  // The token is gone: what the conversation kept from the hub (the
+  // snapshot, and with it the reply; the request ids; the draft; the
+  // session's label) goes with it. The phase and the end reason stay.
+  function forget(c) {
+    var next = copy(c);
+    next.snap = null;
+    next.current = null;
+    next.pendingReply = null;
+    next.draft = "";
+    next.frozenText = null;
+    next.history = {};
+    next.own = {};
+    next.evidence = null;
+    next.label = "";
+    return next;
   }
 
   function newer(c, snap) {
@@ -692,6 +709,7 @@
       var c0 = initial();
       c0.phase = PHASE.STARTING;
       c0.dest = ev.dest;
+      c0.label = ev.dest.label;
       return { c: c0, fx: [{ fx: FX.SNAPSHOT }] };
     }
     var handler = HANDLERS[ev.type];
@@ -712,7 +730,7 @@
     BLOCKER: BLOCKER, SPEECH_DEADLINE_FACTOR: SPEECH_DEADLINE_FACTOR, GRANT_GONE: GRANT_GONE,
     ownershipLost: ownershipLost,
     initial: initial, reduce: reduce, active: active, fresh: fresh, renew: renew, withDetail: withDetail,
-    startBlocker: startBlocker, currentReply: currentReply,
+    startBlocker: startBlocker, currentReply: currentReply, forget: forget,
     command: command, appendDraft: appendDraft, draftProblem: draftProblem, estimateMs: estimateMs
   };
   root.DeskConversationLogic = api;

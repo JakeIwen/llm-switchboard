@@ -113,6 +113,10 @@
       startup.stop();
       $("banner-sends").hidden = true;
       $("banner-lock-store").hidden = true;
+      // Nothing the hub sent stays in the page, hidden or not.
+      ["detail-title", "detail-folder", "detail-badge", "clear-text", "review-dest", "review-text", "replies",
+        "banner-lock-store"]
+        .forEach(function (id) { $(id).textContent = ""; });
     });
     setConn("offline", "Not paired");
     startPairing(reason);

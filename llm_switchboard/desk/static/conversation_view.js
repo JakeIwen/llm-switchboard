@@ -52,7 +52,7 @@
       modal(shown);
       if (!shown) return;
       var ended = v.phase === PHASE.ENDED;
-      $("conv-dest").textContent = v.dest.label;
+      $("conv-dest").textContent = v.label;
       var state = $("conv-state");
       state.textContent = ended ? L.CUE.ENDED + ": " + v.reason + "." : STATE_TEXT[v.phase];
       state.setAttribute("data-phase", v.phase);

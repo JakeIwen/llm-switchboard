@@ -291,6 +291,33 @@ test("a dropped token ends the conversation and speaks nothing", async () => {
   assert.deepEqual(releases(h), ["g1"]);
 });
 
+test("a dropped token leaves no reply, draft or label on screen, only the end reason", async () => {
+  for (const ending of ["during the conversation", "after it ended"]) {
+    const h = await paired();
+    await converse(h);
+    await voiceSend(h, "check the logs");
+    await h.answer(PATH.SEND, 200, { request_id: "r1", state: "handed_off" });
+    h.utt().fire("end");
+    await settle();
+    await h.answer(POLL, 200, snap({ requests: [voiceRq("r1", "answered", "All good.")] }));
+    assert.equal(h.$("conv-reply").textContent, "full", ending);
+    let reason = REASON.UNPAIRED;
+    if (ending === "after it ended") {
+      h.$("conv-end").click();
+      await settle();
+      reason = REASON.END_TAPPED;
+    }
+    await h.answer(POLL, 401, { error: "unauthorized" });
+    assert.equal(h.$("pairing").hidden, false, ending);
+    assert.equal(h.$("conv-overlay").hidden, false, ending);
+    assert.equal(h.state(), ended(reason), ending);
+    for (const id of ["conv-reply", "conv-draft", "conv-interim", "conv-dest", "replies", "detail-title", "draft"]) {
+      assert.equal(h.$(id).textContent + (h.$(id).value || ""), "", ending + ": " + id);
+    }
+    assert.equal(h.$("conv-reply-area").hidden, true, ending);
+  }
+});
+
 test("the tap flow's controls are disabled while a conversation holds the voice, and return after", async () => {
   const s = () => snap({ requests: [rq("old", "answered", "Earlier reply.")] });
   const h = await paired(s());

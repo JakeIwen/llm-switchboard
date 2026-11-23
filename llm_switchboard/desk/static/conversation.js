@@ -43,7 +43,9 @@
 //                     visibilityState says: ends any conversation or closing
 //                     cue silently and still releases the grant.
 //   targetSelected(id) The selection changed; another target ends it.
-//   unpaired()        The token was dropped (401, revoke, expiry).
+//   unpaired()        The token was dropped (401, revoke, expiry): ends any
+//                     conversation as lost, and drops the snapshot, reply,
+//                     draft and label it kept; only the end reason stays.
 //   track(utterance)  Before the page speaks any utterance of its own (Play,
 //                     the legacy reply speech), so its end, error or cancel
 //                     counts toward the guard and Start's quiet rule. One not
@@ -64,7 +66,7 @@
 //                     deps.onChange fires when it turns true (the guard and
 //                     the quiet period end on a timer). It says nothing about
 //                     a conversation: Dictate also needs !holds().
-//   view()            {phase, active, dest, draft, interim, reason, lost,
+//   view()            {phase, active, dest, label, draft, interim, reason, lost,
 //                     speaking, canStart, soundClear, reply}: everything the
 //                     view shows; `reply` is {text, spoken} of the current
 //                     request once a snapshot holds it, else null.
@@ -724,7 +726,7 @@
 
     function view() {
       return {
-        phase: c.phase, active: active(), dest: c.dest, draft: c.draft, interim: interim,
+        phase: c.phase, active: active(), dest: c.dest, label: c.label, draft: c.draft, interim: interim,
         reason: c.reason, lost: c.lost, speaking: !!utt, canStart: canStart(), soundClear: soundClear(),
         reply: L.currentReply(c)
       };
@@ -735,7 +737,12 @@
       soundClear: soundClear, stopPageSpeech: stopPageSpeech,
       endTap: function () { endIfActive(REASON.END_TAPPED); },
       hidden: function () { endIfActive(REASON.HIDDEN); },
-      unpaired: function () { endIfActive(REASON.UNPAIRED, true); },
+      unpaired: function () {
+        endIfActive(REASON.UNPAIRED, true);
+        c = L.forget(c);
+        interim = "";
+        notify();
+      },
       pageExit: function () { endIfActive(REASON.EXITED, false, true); },
       targetSelected: targetSelected
     };

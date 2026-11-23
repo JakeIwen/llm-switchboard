@@ -660,7 +660,10 @@ session's label, the state in words, the draft and the words being heard,
 and, once the current request's reply has come, the reply's full text. It
 is modal: focus moves to its End control, and the page behind it is inert
 (not reachable by keyboard) until Close, which returns focus to Start, or
-to the session's heading while Start is disabled.
+to the session's heading while Start is disabled. When the token goes (a
+401, a revoke, expiry), the overlay keeps only the end reason: the reply,
+the draft and the session's label are dropped with the snapshot they came
+from, and the page behind keeps nothing the hub sent.
 
 | State | Overlay | What happens |
 | --- | --- | --- |
