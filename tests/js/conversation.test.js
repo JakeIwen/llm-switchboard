@@ -718,6 +718,72 @@ test("a hung start step fails, and its late grant is still released", async () =
   assert.deepEqual(releases(h), ["slow"]);
 });
 
+test("leaving the page ends it silently whatever visibilityState says, and still releases the grant", async () => {
+  const h = await listening(harness());
+  await h.hear("half a thought");
+  // pagehide with the page still reporting visible.
+  h.ctl.pageExit();
+  assert.equal(h.view().reason, REASON.EXITED);
+  assert.equal(h.said.length, 0);
+  assert.deepEqual(releases(h), ["g1"]);
+  assert.equal(h.ctl.holds(), false);
+
+  // Leaving during the closing cue cuts it and lets the grant go.
+  const g = await listening(harness());
+  await g.hear("stop listening");
+  assert.deepEqual(texts(g), [CUE.ENDED + ": " + REASON.STOPPED + "."]);
+  assert.deepEqual(releases(g), []);
+  g.ctl.pageExit();
+  assert.equal(g.synth.cancels, 1);
+  assert.deepEqual(releases(g), ["g1"]);
+  assert.equal(g.ctl.holds(), false);
+  assert.equal(g.ctl.canStart(), false);
+});
+
+test("the closing cue is beaten while it plays and never outlives the grant", async () => {
+  // The hub answers: the cue plays past the old deadline to its end.
+  const h = await listening(harness());
+  await h.alive(4000);
+  await h.hear("stop listening");
+  const beatsBefore = h.all(PATH.BEAT).length;
+  // Past the deadline the last beat before the end set (11 s), not past the cue's own.
+  await h.alive(6500);
+  assert.ok(h.all(PATH.BEAT).length > beatsBefore);
+  assert.equal(h.synth.cancels, 0);
+  assert.deepEqual(releases(h), []);
+  await h.finish();
+  assert.deepEqual(releases(h), ["g1"]);
+  const after = h.all(PATH.BEAT).length;
+  await h.advance(LIMITS.BEAT_MS * 2);
+  assert.equal(h.all(PATH.BEAT).length, after);
+
+  // The hub goes quiet: the cue is cut when the grant's deadline passes.
+  const q = await listening(harness());
+  await q.advance(6000);
+  await q.hear("stop listening");
+  assert.equal(q.said.length, 1);
+  await q.advance(LIMITS.FRESH_MS - 6000 + LIMITS.TICK_MS);
+  assert.equal(q.synth.cancels, 1);
+  assert.deepEqual(releases(q), ["g1"]);
+  assert.equal(q.ctl.holds(), false);
+  assert.equal(q.ctl.canStart(), false);
+
+  // The hub refuses the beat: the cue is cut at once.
+  const r = await listening(harness());
+  await r.hear("stop listening");
+  await r.advance(LIMITS.BEAT_MS);
+  await r.answer(PATH.BEAT, 409, { error: "conversation grant not current" });
+  assert.equal(r.synth.cancels, 1);
+  assert.deepEqual(releases(r), ["g1"]);
+
+  // A poll showing the hub restarted: the cue is cut at once.
+  const e = await listening(harness());
+  await e.hear("stop listening");
+  e.ctl.snapshot(snap({ epoch: "e2" }));
+  assert.equal(e.synth.cancels, 1);
+  assert.deepEqual(releases(e), ["g1"]);
+});
+
 test("unpairing ends it as a lost grant, with no closing cue", async () => {
   const h = await listening(harness());
   h.ctl.unpaired();

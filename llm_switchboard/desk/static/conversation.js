@@ -30,7 +30,10 @@
 //                     conversation is active).
 //   endTap()          The full-screen End conversation control; also stops
 //                     the closing cue.
-//   hidden()          The page was hidden, frozen or is unloading.
+//   hidden()          The page was hidden (visibilitychange to hidden).
+//   pageExit()        The page received `pagehide` or `freeze`, whatever
+//                     visibilityState says: ends any conversation or closing
+//                     cue silently and still releases the grant.
 //   targetSelected(id) The selection changed; another target ends it.
 //   unpaired()        The token was dropped (401, revoke, expiry).
 //   track(utterance)  Before the page speaks any utterance of its own (Play,
@@ -80,7 +83,9 @@
     var fetches = {};        // FETCH kind -> {id, ctl}
     var wake = null;         // {id, sentinel}
     var grant = null;        // the grant id this conversation holds
-    var closingGrant = null; // held until the closing cue ends or fails
+    // {freshUntil} while the closing cue plays: the grant is still held, and
+    // beaten and checked like a conversation's, until the cue ends or fails.
+    var closing = null;
     var quietAt = -Infinity; // the latest end, error or cancel of this page's speech
     var uncertainUntil = 0;  // Start stays refused until then
     var cutOff = false;      // this conversation stopped an utterance before its end
@@ -127,7 +132,7 @@
     RUN[FX.GRANT] = requestGrant;
     RUN[FX.TICKET] = requestTicket;
     RUN[FX.SEND] = function (fx) { postSend(fx.ticket, fx.text); };
-    RUN[FX.END] = function (fx) { teardown(fx.reason, fx.lost); };
+    RUN[FX.END] = function (fx) { teardown(fx.reason, fx.lost, fx.silent); };
 
     function run(fx) { RUN[fx.fx](fx); }
 
@@ -152,7 +157,11 @@
     }
 
     var ON_TIMER = {};
-    ON_TIMER[TIMER.TICK] = function () { dispatch({ type: EV.TICK }); };
+    ON_TIMER[TIMER.TICK] = function () {
+      if (!closing) return dispatch({ type: EV.TICK });
+      if (!L.fresh(closing, env.now())) return stopClosing();
+      setTimer(TIMER.TICK, LIMITS.TICK_MS);
+    };
     ON_TIMER[TIMER.BEAT] = beat;
     ON_TIMER[TIMER.BEAT_ABORT] = function () { abandon(FETCH.BEAT, true); };
     ON_TIMER[TIMER.STEP] = stepTimedOut;
@@ -207,10 +216,17 @@
       }
     }
 
+    // An answer that proves the grant gone: the conversation ends as lost,
+    // or the closing cue stops.
+    function grantLost(reason) {
+      if (closing) return stopClosing();
+      dispatch({ type: EV.END, reason: reason, lost: true });
+    }
+
     // A 401 means the token is gone, whatever the call: the grant went with it.
     function unauthorized(r) {
       if (!r || r.status !== 401) return false;
-      dispatch({ type: EV.END, reason: REASON.UNPAIRED, lost: true });
+      grantLost(REASON.UNPAIRED);
       return true;
     }
 
@@ -308,11 +324,17 @@
         if (!settle(FETCH.BEAT, id)) return;
         clearTimer(TIMER.BEAT_ABORT);
         if (unauthorized(r)) return;
-        if (r.status === 200) dispatch({ type: EV.BEAT_OK, startedAt: startedAt });
-        else if (r.status >= 400 && r.status < 500) dispatch({ type: EV.END, reason: REASON.GRANT_LOST, lost: true });
+        if (r.status === 200) beatOk(startedAt);
+        else if (r.status >= 400 && r.status < 500) grantLost(REASON.GRANT_LOST);
       }, function () {
         if (settle(FETCH.BEAT, id)) clearTimer(TIMER.BEAT_ABORT);
       });
+    }
+
+    function beatOk(startedAt) {
+      if (!closing) return dispatch({ type: EV.BEAT_OK, startedAt: startedAt });
+      closing.freshUntil = L.renew(closing.freshUntil, startedAt, env.now());
+      if (!closing.freshUntil) stopClosing();
     }
 
     function release(id) {
@@ -529,39 +551,58 @@
 
     // ---- the end ----------------------------------------------------------
 
-    function teardown(reason, lost) {
+    // What keeps the grant beaten while the closing cue plays.
+    var CLOSING_TIMERS = {};
+    CLOSING_TIMERS[TIMER.BEAT] = true;
+    CLOSING_TIMERS[TIMER.BEAT_ABORT] = true;
+
+    function teardown(reason, lost, silent) {
       // Every cut ends the conversation, so any cut since the start was on the way here.
       cutSpeech();
       var cut = cutOff;
       stopRecognizer();
-      Object.keys(timers).forEach(clearTimer);
+      var held = grant;
+      // A page that lost its grant, is leaving, cut a sound off, can't be
+      // heard or has no voice speaks nothing: a successor may be listening.
+      var cue = !!held && !lost && !silent && !cut && L.fresh(c, env.now()) && deps.visible() && deps.voiceAvailable();
+      Object.keys(timers).forEach(function (name) { if (!(cue && CLOSING_TIMERS[name])) clearTimer(name); });
       // The grant request stays open so a late grant is released; a late
-      // ticket or send answer is dropped.
-      Object.keys(fetches).forEach(function (kind) { abandon(kind, kind !== FETCH.GRANT && kind !== FETCH.SEND); });
+      // ticket or send answer is dropped; the beat goes on under the cue.
+      Object.keys(fetches).forEach(function (kind) {
+        if (!(cue && kind === FETCH.BEAT)) abandon(kind, kind !== FETCH.GRANT && kind !== FETCH.SEND);
+      });
       releaseWake();
       interim = "";
-      var held = grant;
-      grant = null;
       if (!held) return;
-      // A page that lost its grant, cut a sound off, can't be heard or has
-      // no voice speaks nothing: a successor may be listening.
-      if (!lost && !cut && L.fresh(c, env.now()) && deps.visible() && deps.voiceAvailable()) {
-        closingGrant = held;
-        speak(CUE.ENDED + ": " + reason + ".", SAY.END);
-      } else {
-        release(held);
+      if (!cue) {
+        grant = null;
+        return release(held);
       }
+      // The cue must not outlive the grant: freshness is still checked every
+      // tick, and a lapse or a refused beat cuts the cue short.
+      closing = { freshUntil: c.freshUntil };
+      setTimer(TIMER.TICK, LIMITS.TICK_MS);
+      speak(CUE.ENDED + ": " + reason + ".", SAY.END);
     }
 
+    // The closing cue ended or failed, or was cut: the grant is let go.
     function closingDone() {
-      if (closingGrant) release(closingGrant);
-      closingGrant = null;
+      if (!closing) return;
+      closing = null;
+      clearTimer(TIMER.BEAT);
+      clearTimer(TIMER.BEAT_ABORT);
+      clearTimer(TIMER.TICK);
+      abandon(FETCH.BEAT, true);
+      var held = grant;
+      grant = null;
+      if (held) release(held);
       notify();
     }
 
-    // The closing cue cut short by End, hiding or unpairing.
+    // The closing cue cut short by End, hiding, leaving, unpairing or the
+    // grant's loss.
     function stopClosing() {
-      if (!utt || utt.kind !== SAY.END) return;
+      if (!closing) return;
       cutSpeech();
       closingDone();
     }
@@ -587,13 +628,18 @@
       return true;
     }
 
-    function endIfActive(reason, lost) {
-      if (active()) dispatch({ type: EV.END, reason: reason, lost: !!lost });
+    function endIfActive(reason, lost, silent) {
+      if (active()) dispatch({ type: EV.END, reason: reason, lost: !!lost, silent: !!silent });
       else stopClosing();
     }
 
     function snapshot(state) {
-      if (active() && state) dispatch({ type: EV.SNAPSHOT, snapshot: state });
+      if (!state) return;
+      if (active()) return dispatch({ type: EV.SNAPSHOT, snapshot: state });
+      // A newer poll that proves the grant gone stops the closing cue.
+      if (closing && L.grantGoneIn(state, c.dest) && (state.epoch !== c.snap.epoch || state.version >= c.snap.version)) {
+        stopClosing();
+      }
     }
 
     function targetSelected(id) {
@@ -636,6 +682,7 @@
       endTap: function () { endIfActive(REASON.END_TAPPED); },
       hidden: function () { endIfActive(REASON.HIDDEN); },
       unpaired: function () { endIfActive(REASON.UNPAIRED, true); },
+      pageExit: function () { endIfActive(REASON.EXITED, false, true); },
       targetSelected: targetSelected
     };
   }

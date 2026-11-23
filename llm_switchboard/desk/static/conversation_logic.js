@@ -111,6 +111,7 @@
     STOPPED: "you said stop listening",
     END_TAPPED: "End was tapped",
     HIDDEN: "the page was hidden",
+    EXITED: "the page was closed or frozen",
     RETARGET: "another session was selected",
     UNPAIRED: "this tablet is no longer paired",
     WAKE: "the screen wake lock was released",
@@ -318,7 +319,9 @@
 
   // The controller's END effect tears down every effect; the reducer only
   // forgets what the conversation held.
-  function finish(c, fx, reason, lost) {
+  // `lost`: the grant is gone; `silent`: the page is leaving. Either way the
+  // controller speaks no closing cue.
+  function finish(c, fx, reason, lost, silent) {
     c.phase = PHASE.ENDED;
     c.reason = reason;
     c.lost = !!lost;
@@ -326,7 +329,7 @@
     c.frozenText = null;
     c.pendingReply = null;
     c.guardFor = null;
-    fx.push({ fx: FX.END, reason: reason, lost: !!lost });
+    fx.push({ fx: FX.END, reason: reason, lost: !!lost, silent: !!silent });
   }
 
   // Every mic opening: only while the grant is fresh, and never sooner than
@@ -586,7 +589,7 @@
   }
 
   var HANDLERS = {};
-  HANDLERS[EV.END] = function (c, fx, ev) { finish(c, fx, ev.reason, ev.lost); };
+  HANDLERS[EV.END] = function (c, fx, ev) { finish(c, fx, ev.reason, ev.lost, ev.silent); };
   HANDLERS[EV.FAIL] = function (c, fx, ev) { if (c.phase === PHASE.STARTING) finish(c, fx, ev.reason, ev.lost); };
   HANDLERS[EV.SNAPSHOT_FETCHED] = onStartSnapshot;
   HANDLERS[EV.WAKE_OK] = onWake;
