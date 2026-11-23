@@ -12,6 +12,7 @@
 //
 // Public surface, all the page needs (app.js and the view):
 //   DeskConversation.create({api, env, deps}) -> controller
+//   DeskConversation.browserEnv(window) -> env from the page's own objects.
 //     api(method, path, body, {signal}) -> Promise<{status, data}>, rejecting
 //       when no response came (app.js's `api`, which also drops the token on a 401).
 //     env: {Recognition, synth, Utterance, setTimeout, clearTimeout, now,
@@ -36,9 +37,10 @@
 //                     the legacy reply speech), so its end, error or cancel
 //                     counts toward the guard and Start's quiet rule.
 //   view()            {phase, active, dest, draft, interim, reason, lost,
-//                     speaking, canStart}: everything the view shows. While
-//                     `active`, the page disables Dictate, Review, Send, Test,
-//                     Play and its own reply speech.
+//                     speaking, canStart}: everything the view shows.
+//   holds()           A conversation is active or its closing cue plays: the
+//                     page disables Dictate, Review, Send, Test, Play and its
+//                     own reply speech, and leaves speech to the controller.
 (function (root) {
   "use strict";
 
@@ -569,7 +571,11 @@
       tracked.push(entry);
       u.addEventListener("end", function () { done(false); });
       u.addEventListener("error", function () { done(true); });
+      // Start's enabled state changed.
+      notify();
     }
+
+    function holds() { return active() || !!utt; }
 
     function view() {
       return {
@@ -579,7 +585,7 @@
     }
 
     return {
-      start: start, canStart: canStart, snapshot: snapshot, track: track, view: view,
+      start: start, canStart: canStart, snapshot: snapshot, track: track, view: view, holds: holds,
       endTap: function () { endIfActive(REASON.END_TAPPED); },
       hidden: function () { endIfActive(REASON.HIDDEN); },
       unpaired: function () { endIfActive(REASON.UNPAIRED, true); },
@@ -587,7 +593,20 @@
     };
   }
 
-  var exported = { create: create, PATH: PATH };
+  // Timer functions are wrapped: called as env.setTimeout, the browser's own
+  // would throw "Illegal invocation".
+  function browserEnv(win) {
+    return {
+      Recognition: win.SpeechRecognition || win.webkitSpeechRecognition, synth: win.speechSynthesis,
+      Utterance: win.SpeechSynthesisUtterance, AbortController: win.AbortController,
+      now: function () { return win.performance.now(); },
+      setTimeout: function (fn, ms) { return win.setTimeout(fn, ms); },
+      clearTimeout: function (handle) { win.clearTimeout(handle); },
+      wakeLock: (win.navigator && win.navigator.wakeLock) || null
+    };
+  }
+
+  var exported = { create: create, browserEnv: browserEnv, PATH: PATH };
   root.DeskConversation = exported;
   if (typeof module !== "undefined" && module.exports) module.exports = exported;
 })(typeof window !== "undefined" ? window : globalThis);

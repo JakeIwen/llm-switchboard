@@ -5,6 +5,7 @@ import dataclasses
 import hashlib
 import http.client
 import os
+import re
 import secrets
 import socket
 import ssl
@@ -128,6 +129,14 @@ class GuardTest(HttpCase):
         for path in ("/desk/", "/desk/hub.py", "/desk/static/app.js", "/desk/../desk/app.js", "/desk/index.html"):
             with self.subTest(path=path):
                 self.assertEqual(self.call("GET", path)[0], 404)
+
+    def test_every_file_the_page_loads_is_a_static_route(self):
+        index = STATIC_ROUTES["/desk"][0].read_text()
+        loaded = re.findall(r'<(?:script|link)\b[^>]*\b(?:src|href)="([^"]+)"', index)
+        self.assertIn("/desk/conversation_view.js", loaded)
+        for path in loaded:
+            with self.subTest(path=path):
+                self.assertIn(path, STATIC_ROUTES)
 
     def test_plain_http_gets_no_answer(self):
         with socket.create_connection(("127.0.0.1", self.port), timeout=5) as raw:

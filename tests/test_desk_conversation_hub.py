@@ -401,6 +401,24 @@ class PageBuildTest(HubCase):
         self.assertIsNone(first.get("/desk/gone.js"))
         self.assertEqual(first.get("/desk")[0], f'<meta name="desk-build" content="{first.build}">'.encode())
 
+    def test_every_served_file_feeds_the_build(self):
+        from llm_switchboard.desk.http_server import STATIC_ROUTES
+        from llm_switchboard.desk.page_build import PageFiles
+        root = make_home(self)
+        routes = {}
+        for route, (file, content_type) in STATIC_ROUTES.items():
+            copy = root / route.strip("/").replace("/", "_")
+            copy.write_bytes(file.read_bytes())
+            routes[route] = (copy, content_type)
+        base = PageFiles(routes).build
+        self.assertIn("/desk/conversation.js", routes)
+        for route, (copy, _) in routes.items():
+            with self.subTest(route=route):
+                original = copy.read_bytes()
+                copy.write_bytes(original + b"\n")
+                self.assertNotEqual(PageFiles(routes).build, base)
+                copy.write_bytes(original)
+
 
 if __name__ == "__main__":
     unittest.main()

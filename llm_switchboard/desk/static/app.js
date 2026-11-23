@@ -26,6 +26,7 @@
   var sentAckVersion = null; // version of the fresh snapshot fetched after the send ack
   var compose = freshCompose();
   var startup = null; // startup.js's blocked-session view, created in wire()
+  var conv = null, convView = null; // conversation.js's controller and conversation_view.js, created in wire()
 
   function $(id) { return document.getElementById(id); }
 
@@ -93,6 +94,7 @@
     token = null;
     state = null;
     session++;
+    conv.unpaired();
     voidCompose(null);
     stopSpeaking();
     // A new pairing starts clean: no old draft, target, result or settings.
@@ -240,6 +242,7 @@
     if (epochChanged) voidCompose("The hub restarted: the review was discarded.");
     else validateCompose();
     speakNewReplies(next);
+    conv.snapshot(next);
     Logic.pruneIds(spoken, next.requests);
     expireWaitingResult(next, startSeq);
     if (clearFrozen && !Logic.clearStillValid(clearFrozen, findTarget(clearFrozen.session_id))) clearFrozen = null;
@@ -293,6 +296,7 @@
     renderTargets();
     renderDetail();
     renderSettings();
+    convView.render(conv.view(), startBlocker());
   }
 
   function renderTargets() {
@@ -315,6 +319,7 @@
 
   function selectTarget(id) {
     if (id === selectedId) return;
+    conv.targetSelected(id);
     stopRecognition();
     stopSpeaking();
     voidCompose(null);
@@ -352,7 +357,7 @@
 
     var composable = canCompose(t);
     var editing = compose.phase === "edit";
-    var busy = compose.phase === "sending";
+    var busy = compose.phase === "sending" || conv.holds();
     $("draft").disabled = !composable || busy;
     $("dictate").disabled = !composable || busy;
     $("test-btn").disabled = !composable || busy;
@@ -474,7 +479,7 @@
     var sending = compose.phase === "sending";
     var ready = !problem && !!compose.ticket && !compose.ticketPending && !!state && state.sends_enabled === true &&
       !state.lock_store_error;
-    $("send-btn").disabled = !ready || sending;
+    $("send-btn").disabled = !ready || sending || conv.holds();
     $("send-btn").textContent = compose.ticketPending ? "Getting ticket..." : (sending ? "Sending..." : "Send");
     $("edit-btn").disabled = sending;
     $("discard-btn").disabled = sending;
@@ -606,19 +611,22 @@
     return "speechSynthesis" in window && window.speechSynthesis.getVoices().length > 0;
   }
 
+  // A conversation's own speech is the controller's to stop: it marks a cut-off utterance first.
   function stopSpeaking() {
-    if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+    if ("speechSynthesis" in window && !conv.holds()) window.speechSynthesis.cancel();
   }
 
+  // Tracked, so the page's own speech counts toward Start's quiet rule.
   function speak(text) {
-    if (!voiceAvailable() || !text) return;
+    if (!voiceAvailable() || !text || conv.holds()) return;
     window.speechSynthesis.cancel();
     var u = new SpeechSynthesisUtterance(text);
     u.lang = "en-US";
+    conv.track(u);
     window.speechSynthesis.speak(u);
   }
 
-  // Speaks a reply only when it newly arrives for the target on screen.
+  // Speaks a reply only when it newly arrives for the target on screen; while conv.holds() it is only marked spoken.
   function speakNewReplies(next) {
     next.requests.forEach(function (rq) {
       if (!rq.reply || spoken.has(rq.request_id)) return;
@@ -647,6 +655,7 @@
       if (rq.reply) {
         li.appendChild(el("div", { "class": "reply-text", "data-testid": "reply-text", text: rq.reply.text }));
         var play = el("button", { type: "button", "class": "btn quiet", "data-testid": "play", text: "Play" });
+        play.disabled = conv.holds();
         play.addEventListener("click", function () { speak(rq.reply.spoken); });
         var row = el("div", { "class": "row" }, [play]);
         if (!voiceAvailable()) row.appendChild(el("span", { "class": "note", text: "No speech voice on this device" }));
@@ -658,6 +667,19 @@
 
   function describeState(rq) {
     return Logic.describeRequestState(rq.state) + " - " + formatTime(rq.created);
+  }
+
+  // ---- Conversation -------------------------------------------------------
+
+  function startBlocker() {
+    return window.DeskConversationLogic.startBlocker(state, selectedId, { recognizer: speechInputAvailable(),
+      voice: voiceAvailable(), tapSending: compose.phase === "sending", canStart: conv.canStart() });
+  }
+
+  // A started conversation owns the target: the tap flow's review, ticket and dictation go.
+  function startConversation() {
+    if (!startBlocker() && conv.start(Logic.destinationOf(findTarget(selectedId), state.epoch))) voidCompose(null);
+    render();
   }
 
   // ---- Clear, enroll ------------------------------------------------------
@@ -706,6 +728,10 @@
   // ---- Wiring -------------------------------------------------------------
 
   function wire() {
+    conv = window.DeskConversation.create({ api: api, env: window.DeskConversation.browserEnv(window), deps: {
+      selectedId: function () { return selectedId; }, visible: function () { return document.visibilityState === "visible"; },
+      voiceAvailable: voiceAvailable, onChange: render } });
+    convView = window.DeskConversationView.create(document, { start: startConversation, end: conv.endTap });
     startup = window.DeskStartup.create({
       api: api,
       labelFor: function (id) { var t = findTarget(id); return t ? t.label : null; }
@@ -753,6 +779,7 @@
     $("clear-yes").addEventListener("click", doClear);
     document.addEventListener("visibilitychange", function () {
       if (document.visibilityState !== "hidden") return;
+      conv.hidden();
       stopRecognition();
       stopSpeaking();
       if (compose.phase === "edit" || compose.phase === "review") {
@@ -763,7 +790,9 @@
     if ("speechSynthesis" in window) {
       window.speechSynthesis.addEventListener("voiceschanged", function () { if (state) render(); });
     }
-    window.addEventListener("pagehide", stopSpeaking);
+    function leave() { conv.hidden(); stopSpeaking(); }
+    document.addEventListener("freeze", leave);
+    window.addEventListener("pagehide", leave);
   }
 
   wire();

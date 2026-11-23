@@ -139,6 +139,21 @@
     REPLY_TIMEOUT: "no reply came in ten minutes"
   });
 
+  // Why Start conversation is refused right now, shown under the control.
+  // The reducer checks the hub's facts again once a conversation starts.
+  var BLOCKER = Object.freeze({
+    NO_STATE: "the hub has not answered yet",
+    SENDS_OFF: REASON.SENDS_OFF,
+    VOICE_OFF: REASON.VOICE_OFF,
+    LOCK_STORE: REASON.LOCK_STORE,
+    UNAVAILABLE: "the session is not available for sends",
+    BUSY: REASON.BUSY,
+    NO_RECOGNIZER: "this tablet has no speech recognition",
+    NO_VOICE: REASON.NO_VOICE,
+    TAP_SEND: "a tapped send is still in progress",
+    NOT_QUIET: "the desk may still be speaking; wait until it is quiet"
+  });
+
   function withDetail(reason, detail) { return detail ? reason + ": " + detail : reason; }
 
   var OUTSTANDING = {};
@@ -230,6 +245,24 @@
     return requestsFor(snap, c.dest.session_id).some(function (rq) {
       return !c.history[rq.request_id] && !c.own[rq.request_id];
     });
+  }
+
+  // The first BLOCKER that holds for `targetId` in snapshot `snap`, or null
+  // when Start may be offered. `page` = {recognizer, voice, tapSending,
+  // canStart}: the tablet's own facts and the controller's canStart().
+  function startBlocker(snap, targetId, page) {
+    if (!snap) return BLOCKER.NO_STATE;
+    if (snap.sends_enabled !== true) return BLOCKER.SENDS_OFF;
+    if (snap.voice_confirm_enabled !== true) return BLOCKER.VOICE_OFF;
+    if (snap.lock_store_error) return BLOCKER.LOCK_STORE;
+    var t = findTarget(snap, targetId);
+    if (!t || !USABLE[t.registration]) return BLOCKER.UNAVAILABLE;
+    if (t.lock || requestsFor(snap, targetId).some(function (rq) { return OUTSTANDING[rq.state]; })) return BLOCKER.BUSY;
+    if (!page.recognizer) return BLOCKER.NO_RECOGNIZER;
+    if (!page.voice) return BLOCKER.NO_VOICE;
+    if (page.tapSending) return BLOCKER.TAP_SEND;
+    if (!page.canStart) return BLOCKER.NOT_QUIET;
+    return null;
   }
 
   function timer(name, ms) { return { fx: FX.TIMER, name: name, ms: ms }; }
@@ -556,8 +589,8 @@
   var api = {
     PHASE: PHASE, CONFIRM: CONFIRM, REQUEST_STATE: REQUEST_STATE, REGISTRATION: REGISTRATION,
     LIMITS: LIMITS, TIMER: TIMER, SAY: SAY, FX: FX, EV: EV, COMMAND: COMMAND, CUE: CUE, REASON: REASON,
-    SPEECH_DEADLINE_FACTOR: SPEECH_DEADLINE_FACTOR,
-    initial: initial, reduce: reduce, active: active, fresh: fresh, withDetail: withDetail,
+    BLOCKER: BLOCKER, SPEECH_DEADLINE_FACTOR: SPEECH_DEADLINE_FACTOR,
+    initial: initial, reduce: reduce, active: active, fresh: fresh, withDetail: withDetail, startBlocker: startBlocker,
     command: command, appendDraft: appendDraft, draftProblem: draftProblem, estimateMs: estimateMs
   };
   root.DeskConversationLogic = api;

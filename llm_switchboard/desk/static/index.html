@@ -57,6 +57,11 @@
     </div>
     <p id="detail-folder" class="note"></p>
 
+    <div class="conv-area">
+      <button id="conv-start" type="button" class="btn primary" data-testid="conv-start">Start conversation</button>
+      <p id="conv-why" class="note" data-testid="conv-why" role="status" hidden></p>
+    </div>
+
     <div id="clear-area" class="clear" hidden>
       <button id="clear-btn" type="button" class="btn warnbtn" data-testid="clear-btn">Clear after checking the session</button>
       <div id="clear-confirm" class="confirm" hidden>
@@ -98,8 +103,24 @@
   <p id="pick-note" class="note pick">Pick a target.</p>
 </main>
 
+<section id="conv-overlay" class="conv-overlay" data-testid="conv-overlay" role="dialog" aria-modal="true" aria-labelledby="conv-dest" hidden>
+  <p class="note">Conversation with</p>
+  <h2 id="conv-dest"></h2>
+  <p id="conv-state" class="conv-state" data-testid="conv-state" role="status" aria-live="polite"></p>
+  <p id="conv-commands" class="note conv-commands">Pause for the start tone before each thought. Say each command on its own: "send it", "read it back", "scratch that", "stop listening".</p>
+  <div id="conv-draft-area" class="conv-draft-area">
+    <h3>Draft</h3>
+    <pre id="conv-draft" class="text conv-draft" data-testid="conv-draft"></pre>
+    <p id="conv-interim" class="interim"></p>
+  </div>
+  <button id="conv-end" type="button" class="btn conv-end" data-testid="conv-end">End conversation</button>
+</section>
+
 <script src="/desk/text_rule.js"></script>
 <script src="/desk/desk_logic.js"></script>
+<script src="/desk/conversation_logic.js"></script>
+<script src="/desk/conversation.js"></script>
+<script src="/desk/conversation_view.js"></script>
 <script src="/desk/startup.js"></script>
 <script src="/desk/app.js"></script>
 </body>
