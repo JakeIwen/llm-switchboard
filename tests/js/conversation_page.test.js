@@ -729,6 +729,28 @@ test("the overlay is modal: focus moves in, the page behind is inert, and both c
   assert.equal(h.document.activeElement, h.$("conv-start"));
 });
 
+test("Close returns focus to Start even when the browser blurred it as it was disabled", async () => {
+  const h = await paired();
+  const start = h.$("conv-start");
+  // Like a browser: disabling the focused control blurs it.
+  let disabled = false;
+  Object.defineProperty(start, "disabled", { configurable: true, get: () => disabled, set: (v) => {
+    disabled = v;
+    if (v && h.document.activeElement === start) h.document.activeElement = null;
+  } });
+  start.focus();
+  await converse(h);
+  assert.equal(h.document.activeElement, h.$("conv-end"));
+  h.$("conv-end").click();
+  await settle();
+  h.utt().fire("end");
+  await settle();
+  await h.advance(L.LIMITS.GUARD_MS);
+  assert.equal(start.disabled, false);
+  h.$("conv-end").click();
+  assert.equal(h.document.activeElement, start);
+});
+
 test("closing the overlay while Start is disabled returns focus to the session's heading", async () => {
   const h = await paired();
   h.$("conv-start").focus();
