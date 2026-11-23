@@ -17,6 +17,7 @@
     var recognition = null;
     var spoken = new Set(); // request ids whose reply was spoken or marked spoken
     var primed = false;     // the first state after pairing must not speak old replies
+    var dictatedFrom = "";  // the draft as it was when the running dictation started
 
     function voiceAvailable() {
       return "speechSynthesis" in win && win.speechSynthesis.getVoices().length > 0;
@@ -90,8 +91,20 @@
       $("dictate").textContent = "Dictate";
     }
 
+    // A late end or error of the page's own speech while dictating (the
+    // controller's deps.lateSound): the mic may have heard the desk, so the
+    // dictation stops and the words it added go. True when one was running.
+    function lateSound() {
+      if (!recognition) return false;
+      stopDictation();
+      $("draft").value = dictatedFrom;
+      opts.note("Dictation stopped: " + L.REASON.ECHO + ". Its words were discarded.");
+      return true;
+    }
+
     // One recognizer, its final words appended to the draft as they come.
     function startDictation() {
+      dictatedFrom = $("draft").value;
       var Ctor = win.SpeechRecognition || win.webkitSpeechRecognition;
       var rec = new Ctor();
       rec.lang = "en-US";
@@ -134,7 +147,8 @@
     return {
       voiceAvailable: voiceAvailable, speechInputAvailable: speechInputAvailable, stopSpeaking: stopSpeaking,
       speak: speak, repliesArrived: repliesArrived, forgetReplies: forgetReplies, pruneReplies: pruneReplies,
-      dictating: dictating, dictateBlocker: dictateBlocker, startDictation: startDictation, stopDictation: stopDictation
+      dictating: dictating, dictateBlocker: dictateBlocker, startDictation: startDictation, stopDictation: stopDictation,
+      lateSound: lateSound
     };
   }
 

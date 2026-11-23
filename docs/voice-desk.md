@@ -758,6 +758,17 @@ silence, and Start stays disabled for twice that text's estimated duration.
 The next conversation takes a tap made when it is audibly quiet; an empty
 synthesis queue is not evidence of quiet.
 
+**Late sound.** A real `end` or `error` that arrives after the page wrote
+its utterance off (it timed out, was cancelled or had already ended) shows
+it may have sounded until then, so whatever a mic heard since is suspect.
+If a conversation has its mic open, or a draft holding words recognized
+since that utterance was written off, it ends silently with "the desk may
+have heard its own speech", the draft discarded and never sent; a running
+one-shot dictation stops and the words it added are removed, with the note
+"Dictation stopped: the desk may have heard its own speech. Its words were
+discarded.". Either way sound is uncertain again for twice that
+utterance's estimate. Otherwise the late event only moves the guard.
+
 End reasons, as the overlay and the cue word them: you said stop listening;
 End was tapped; the page was hidden; the page was closed or frozen (on
 `pagehide` or `freeze`, whatever the visibility, and always silent); another
@@ -767,7 +778,8 @@ nothing was heard for three minutes; the turn took over five minutes; the
 hub stopped answering; the hub ended the conversation; the hub refused the
 conversation: <reason>; the hub could not be reached; speech recognition
 failed (with the recognizer's error); speech recognition did not start;
-speech recognition keeps stopping; the voice failed; the hub restarted;
+speech recognition keeps stopping; the desk may have heard its own speech
+(always silent; see Late sound); the voice failed; the hub restarted;
 the session changed or went away; sends are off; voice confirm is off; the
 hub's lock store failed; the session is busy; another request reached the
 session; not sent: <reason>; delivery is unknown; check the session; the

@@ -18,8 +18,10 @@
 //     env: {Recognition, synth, Utterance, setTimeout, clearTimeout, now,
 //       wakeLock, AbortController}; `now` is a monotonic ms clock
 //       (performance.now), `wakeLock` is navigator.wakeLock or null.
-//     deps: {selectedId(), visible(), voiceAvailable(), onChange(view)}:
-//       read at the moments the plan checks them; onChange after every change.
+//     deps: {selectedId(), visible(), voiceAvailable(), onChange(view),
+//       lateSound()}: read at the moments the plan checks them; onChange
+//       after every change; lateSound() when a late end or error of the
+//       page's own speech arrives, true when it stopped a one-shot dictation.
 //   start(dest)       The Start tap. dest = {host, session_id, generation,
 //                     label, epoch} frozen from the tapped control. False
 //                     (and nothing happens) unless canStart().
@@ -115,9 +117,10 @@
     // it brought. Start waits for it, so it can't reach the hub after a
     // newer acquisition and replace that grant (the hub keeps the latest).
     var straggler = null;
-    var sound = T.create({ env: env, onChange: notify });
+    var sound = T.create({ env: env, onChange: notify, onLate: lateSound });
     var cutsAtStart = 0;     // sound.cuts() at the Start tap: more means this conversation cut one off
     var interim = "";
+    var lastFinalAt = -Infinity; // when the current recognizer last gave a final result
 
     function nextId() { return ++seq; }
 
@@ -464,6 +467,7 @@
         if (!mine()) return;
         for (var i = e.resultIndex; i < e.results.length; i++) {
           var result = e.results[i];
+          if (result.isFinal) lastFinalAt = env.now();
           dispatch({ type: EV.RESULT, text: result[0].transcript, final: !!result.isFinal });
         }
       };
@@ -546,6 +550,21 @@
       } catch (e) {
         if (mine()) u.onerror({ error: "speak failed" });
       }
+    }
+
+    // A late end or error of an utterance already written off: it may have
+    // sounded until now, so what a mic heard since is suspect. An open mic,
+    // or a draft holding words recognized after the write-off, ends the
+    // conversation silently, the draft discarded and never sent; a running
+    // one-shot dictation stops and drops its words (deps.lateSound). Either
+    // way sound is uncertain again. Otherwise the guard, which the event
+    // has moved, is enough.
+    function lateSound(entry) {
+      var heard = active() && (!!rec || (!!c.draft && lastFinalAt >= entry.offAt));
+      var dictated = !!(deps.lateSound && deps.lateSound());
+      if (!heard && !dictated) return;
+      sound.markUncertain(entry.estimate);
+      if (heard) dispatch({ type: EV.END, reason: REASON.ECHO, silent: true });
     }
 
     // No `end` within twice the estimate: cancel as cleanup and fail.

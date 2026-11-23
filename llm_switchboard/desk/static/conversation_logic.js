@@ -126,6 +126,8 @@
     REC_FAILED: "speech recognition failed",
     REC_HUNG: "speech recognition did not start",
     REC_LOOP: "speech recognition keeps stopping",
+    // A late end or error of the page's own speech: the mic may have heard it.
+    ECHO: "the desk may have heard its own speech",
     SPEECH: "the voice failed",
     EPOCH: "the hub restarted",
     TARGET: "the session changed or went away",

@@ -11,13 +11,20 @@
 // that comes later still moves `quietAt`, which the guard before every mic
 // opening measures from: sound may have played until then. An utterance
 // stopped before its own end makes sound uncertain for twice its estimate.
+// A terminal event from an utterance the page had already written off (its
+// own end or error came, or the page cancelled it) is late: it proves the
+// page's earlier assumption of quiet may have been wrong, and the owner
+// hears of it through `onLate(entry)`.
 (function (root) {
   "use strict";
 
   var L = root.DeskConversationLogic || require("./conversation_logic.js");
 
   // opts: {env: {synth, setTimeout, clearTimeout, now}, onChange(): the
-  // quiet rules have passed or a tracked utterance changed state}.
+  // quiet rules have passed or a tracked utterance changed state,
+  // onLate(entry): a late terminal event, after its bookkeeping;
+  // `entry.offAt` is when the page wrote that utterance off, and
+  // `entry.estimate` its estimated duration}.
   function create(opts) {
     var env = opts.env;
     var sounding = [];       // submitted utterances with no terminal event yet
@@ -56,7 +63,7 @@
     // disarmed at once, so it can never cancel the newer speech.
     function enter(estimate) {
       if (latest) disarm(latest);
-      latest = { estimate: estimate, watchdog: null };
+      latest = { estimate: estimate, watchdog: null, offAt: null };
       sounding.push(latest);
       return latest;
     }
@@ -72,9 +79,11 @@
         var i = sounding.indexOf(entry);
         if (i >= 0) {
           sounding.splice(i, 1);
+          entry.offAt = quietAt;
           if (error) markUncertain(estimate);
         }
         soundChanged();
+        if (i < 0 && opts.onLate) opts.onLate(entry);
       };
     }
 
@@ -88,6 +97,7 @@
       var stopped = sounding;
       sounding = [];
       stopped.forEach(function (entry) {
+        entry.offAt = env.now();
         markUncertain(entry.estimate);
         disarm(entry);
       });
@@ -123,7 +133,7 @@
     function busy(now) { return sounding.length > 0 || now < uncertainUntil; }
 
     return {
-      submit: submit, cancel: cancel, track: track, busy: busy,
+      submit: submit, cancel: cancel, track: track, busy: busy, markUncertain: markUncertain,
       sounding: function () { return sounding.length; },
       quietAt: function () { return quietAt; },
       cuts: function () { return cuts; }

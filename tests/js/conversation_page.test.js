@@ -513,6 +513,36 @@ test("a Play replaced just before its deadline: the old watchdog never cuts the 
   assert.equal(h.synth.cancels, cancels + 1);
 });
 
+test("a late end of written-off speech stops one-shot dictation and drops its words", async () => {
+  const h = await paired(snap({ requests: [rq("a", "answered", "Short.")] }));
+  slowCancel(h);
+  playFor(h, "a").click();
+  await settle();
+  const play = h.utt();
+  const deadline = L.estimateMs("Short.") * L.SPEECH_DEADLINE_FACTOR;
+  await h.advance(deadline);
+  assert.equal(h.synth.cancels, 2, "the watchdog did not cancel the Play");
+  await h.advance(deadline);
+  h.$("draft").value = "Typed first.";
+  h.$("draft").dispatch("input");
+  await h.answer(PATH.TICKET, 200, { ticket: "tap-ticket" });
+  h.$("dictate").click();
+  await settle();
+  const dictation = h.rec();
+  assert.equal(dictation.starts, 1);
+  dictation.onresult({ resultIndex: 0, results: [Object.assign([{ transcript: "and then" }], { isFinal: false })] });
+  dictation.hear("open the hatch");
+  assert.equal(h.$("draft").value, "Typed first. open the hatch");
+  play.fire("end");
+  await settle();
+  assert.equal(dictation.aborts, 1);
+  assert.equal(h.$("draft").value, "Typed first.");
+  assert.equal(h.$("interim").textContent, "");
+  assert.equal(h.$("dictate").textContent, "Dictate");
+  assert.equal(h.$("compose-note").textContent, "Dictation stopped: " + REASON.ECHO + ". Its words were discarded.");
+  assert.equal(h.$("dictate").disabled, true, "the desk may still be speaking");
+});
+
 // Through "send it" to the voice send's POST, left pending.
 async function voiceSend(h, words) {
   h.rec().hear(words);

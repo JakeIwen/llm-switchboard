@@ -711,7 +711,8 @@
   function wire() {
     conv = window.DeskConversation.create({ api: api, env: window.DeskConversation.browserEnv(window), deps: {
       selectedId: function () { return selectedId; }, visible: function () { return document.visibilityState === "visible"; },
-      voiceAvailable: function () { return audio.voiceAvailable(); }, onChange: renderForController } });
+      voiceAvailable: function () { return audio.voiceAvailable(); }, onChange: renderForController,
+      lateSound: function () { return audio.lateSound(); } } });
     audio = window.DeskPageAudio.create({ win: window, $: $, conv: conv, note: setNote });
     convView = window.DeskConversationView.create(document, { start: startConversation, end: conv.endTap });
     startup = window.DeskStartup.create({

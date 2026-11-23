@@ -718,6 +718,63 @@ test("a superseded page utterance's watchdog is disarmed, and a cancel goes thro
   assert.equal(h.ctl.canStart(), true);
 });
 
+// A Play the watchdog cancelled, whose real end never came, then its quiet
+// period: Start is allowed again.
+async function writtenOff(h) {
+  const play = new h.Utterance("4815162342");
+  h.ctl.track(play);
+  const deadline = L.estimateMs(play.text) * L.SPEECH_DEADLINE_FACTOR;
+  await h.advance(deadline);
+  assert.equal(h.synth.cancels, 1);
+  await h.advance(deadline);
+  assert.equal(h.ctl.canStart(), true);
+  return play;
+}
+
+test("a late end of written-off speech ends the conversation silently and its draft is never sent", async () => {
+  for (const late of ["end", "error"]) {
+    const h = harness();
+    const play = await writtenOff(h);
+    await listening(h);
+    await h.hear("check the logs");
+    const mic = h.rec();
+    play.fire(late, { error: "interrupted" });
+    await flush();
+    assert.equal(h.view().reason, REASON.ECHO, late);
+    assert.equal(h.view().draft, "", late);
+    assert.equal(mic.aborts, 1, late);
+    assert.equal(h.said.length, 0, late);
+    assert.deepEqual(releases(h), ["g1"], late);
+    // The desk may still have been speaking: Start waits out a new quiet period.
+    assert.equal(h.ctl.canStart(), false, late);
+    mic.result("send it");
+    await flush();
+    assert.equal(h.all(PATH.TICKET).length, 0, late);
+  }
+
+  // An open mic with nothing drafted yet ends too.
+  const m = harness();
+  const play = await writtenOff(m);
+  await listening(m);
+  play.fire("end");
+  await flush();
+  assert.equal(m.view().reason, REASON.ECHO);
+
+  // The draft frozen for sending, its ticket still out: nothing is posted.
+  const s = harness();
+  s.honorAbort = false;
+  const sending = await writtenOff(s);
+  await listening(s);
+  await s.hear("check the logs");
+  await s.hear("send it");
+  assert.equal(s.phase(), PHASE.SENDING);
+  sending.fire("end");
+  await flush();
+  assert.equal(s.view().reason, REASON.ECHO);
+  await s.answer(PATH.TICKET, 200, { ticket: "t" });
+  assert.equal(s.all(PATH.SEND).length, 0);
+});
+
 test("the voice list emptying during the start's guard keeps the mic closed", async () => {
   const h = harness();
   const u = new h.Utterance("Play this.");
