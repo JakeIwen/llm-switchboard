@@ -1364,7 +1364,10 @@ the candidates list, the unattributed admission refusals.
      the host's line has its key, or the message above when it doesn't; with
      the lock held elsewhere the step fails with the run lock's refusal:
      confirmation changed nothing, the credential edits already made stand,
-     and running the command again confirms them. Each outcome holds as of
+     and running the command again reapplies the requested authorization
+     and then confirms it: a rerun is not a read-only status check, so if
+     the key was revoked or replaced in between, it authorizes the supplied
+     key again. Each outcome holds as of
      the hub's answer (or the offline reread): an edit that starts after it
      is not this command's to report, and the next command run sees it.
      When a lock of that host was handed over a link with another key, it
