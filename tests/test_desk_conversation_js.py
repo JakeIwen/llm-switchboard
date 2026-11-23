@@ -23,6 +23,7 @@ process.stdout.write(JSON.stringify({
   paths: C.PATH,
   confirm: L.CONFIRM, request: L.REQUEST_STATE, registration: L.REGISTRATION, limits: L.LIMITS,
   tooLong: L.draftProblem("a".repeat(L.LIMITS.MAX_DRAFT_BYTES + 1)), refusals: D.REFUSALS,
+  grantGone: L.GRANT_GONE,
 }));
 """
 
@@ -72,6 +73,11 @@ class ConversationMirrorTests(unittest.TestCase):
         self.assertEqual(paths.pop("STATE"), STATE_PATH)
         for name, path in paths.items():
             self.assertIn(path, POST_ROUTES, name)
+
+    def test_the_page_knows_the_hub_answers_that_end_its_grant(self):
+        # These mean the grant is gone: the page ends silently, with no closing cue.
+        for reason in (grants.GRANT_NOT_CURRENT, grants.GRANT_WRONG_TARGET, grants.TARGET_CHANGED):
+            self.assertIn(reason, self.js["grantGone"])
 
     def test_voice_send_refusals_are_definitive_on_the_page(self):
         # A send refused for these reasons was never handed off, so the page

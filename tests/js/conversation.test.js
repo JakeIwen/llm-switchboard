@@ -404,6 +404,42 @@ test("a send with no answer is unknown and never retried", async () => {
   assert.equal(r.view().reason, "not sent: conversation grant not current");
 });
 
+test("a hub answer that proves the grant gone ends it silently on every call path", async () => {
+  for (const [path, status, error] of [
+    [PATH.SEND, 409, "conversation grant not current"],
+    [PATH.SEND, 409, "conversation grant not for this target"],
+    [PATH.SEND, 409, "stale epoch"],
+    [PATH.TICKET, 409, "stale generation"],
+  ]) {
+    const h = await listening(harness());
+    await h.hear("x");
+    await h.hear("send it");
+    if (path === PATH.SEND) await h.answer(PATH.TICKET, 200, { ticket: "t" });
+    await h.answer(path, status, { error: error });
+    assert.equal(h.view().reason, L.withDetail(REASON.NOT_SENT, error), error);
+    assert.equal(h.view().lost, true, error);
+    assert.equal(h.said.length, 0, error);
+    assert.deepEqual(releases(h), ["g1"], error);
+  }
+  // A poll showing a new epoch or generation: the grant died with it.
+  for (const s of [() => snap({ epoch: "e2" }), () => snap({ targets: [target({ generation: 4 })] })]) {
+    const h = await listening(harness());
+    h.ctl.snapshot(s());
+    await flush();
+    assert.equal(h.view().lost, true);
+    assert.equal(h.said.length, 0);
+    assert.deepEqual(releases(h), ["g1"]);
+  }
+  // A refusal that says nothing about the grant still gets its closing cue.
+  const b = await listening(harness());
+  await b.hear("x");
+  await b.hear("send it");
+  await b.answer(PATH.TICKET, 200, { ticket: "t" });
+  await b.answer(PATH.SEND, 409, { error: "busy" });
+  assert.equal(b.view().lost, false);
+  assert.deepEqual(texts(b), [CUE.ENDED + ": " + L.withDetail(REASON.NOT_SENT, "busy") + "."]);
+});
+
 test("an utterance that never ends is cancelled, ends it, and holds Start for the quiet period", async () => {
   const h = await listening(harness());
   await h.hear("one two three four five");

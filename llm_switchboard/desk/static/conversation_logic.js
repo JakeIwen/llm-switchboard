@@ -156,6 +156,16 @@
 
   function withDetail(reason, detail) { return detail ? reason + ": " + detail : reason; }
 
+  // Hub refusals that prove this page's grant is gone (grants.py), plus the
+  // ticket and send refusals for a changed epoch or generation, which the
+  // grant is bound to. tests/test_desk_conversation_js.py checks the hub's.
+  var GRANT_GONE = Object.freeze([
+    "conversation grant not current", "conversation grant not for this target", "target changed",
+    "stale epoch", "stale generation"
+  ]);
+
+  function grantGone(error) { return GRANT_GONE.indexOf(error) !== -1; }
+
   var OUTSTANDING = {};
   OUTSTANDING[REQUEST_STATE.PENDING] = true;
   OUTSTANDING[REQUEST_STATE.HANDED_OFF] = true;
@@ -236,14 +246,26 @@
     return ((snap && snap.requests) || []).filter(function (rq) { return rq.session_id === id; });
   }
 
+  function problem(reason, lost) { return { reason: reason, lost: !!lost }; }
+
+  // Whether a snapshot proves the grant for `dest` is gone: it died with the
+  // epoch, and the hub drops it once the target's registration changes.
+  function grantGoneIn(snap, dest) {
+    if (snap.epoch !== dest.epoch) return true;
+    var t = findTarget(snap, dest.session_id);
+    return !!t && t.generation !== dest.generation;
+  }
+
   // Ends that hold in every phase: the target, the epoch and the switches.
   function targetProblem(c, snap) {
-    if (snap.epoch !== c.dest.epoch) return REASON.EPOCH;
-    if (snap.sends_enabled !== true) return REASON.SENDS_OFF;
-    if (snap.voice_confirm_enabled !== true) return REASON.VOICE_OFF;
-    if (snap.lock_store_error) return REASON.LOCK_STORE;
+    if (snap.epoch !== c.dest.epoch) return problem(REASON.EPOCH, true);
+    if (snap.sends_enabled !== true) return problem(REASON.SENDS_OFF);
+    if (snap.voice_confirm_enabled !== true) return problem(REASON.VOICE_OFF);
+    if (snap.lock_store_error) return problem(REASON.LOCK_STORE);
     var t = findTarget(snap, c.dest.session_id);
-    if (!t || t.generation !== c.dest.generation || !USABLE[t.registration]) return REASON.TARGET;
+    if (!t || t.generation !== c.dest.generation || !USABLE[t.registration]) {
+      return problem(REASON.TARGET, grantGoneIn(snap, c.dest));
+    }
     return null;
   }
 
@@ -382,7 +404,7 @@
 
   function recheck(c, fx) {
     var why = targetProblem(c, c.snap);
-    if (why) return finish(c, fx, why);
+    if (why) return finish(c, fx, why.reason, why.lost);
     // Until the start's snapshot is taken there is no history to compare
     // with. Only while the POST itself is unresolved do the request and lock
     // checks wait, with what they saw kept; before it, the ticket fetch
@@ -400,7 +422,7 @@
     var snap = ev.snapshot;
     if (newer(c, snap)) c.snap = snap;
     var why = targetProblem(c, snap);
-    if (why) return finish(c, fx, why);
+    if (why) return finish(c, fx, why.reason, why.lost);
     var t = findTarget(snap, c.dest.session_id);
     var mine = requestsFor(snap, c.dest.session_id);
     if (t.lock || mine.some(function (rq) { return OUTSTANDING[rq.state]; })) return finish(c, fx, REASON.BUSY);
@@ -426,7 +448,7 @@
     if (!ctx.visible) return finish(c, fx, REASON.HIDDEN);
     if (!ctx.voice) return finish(c, fx, REASON.NO_VOICE);
     var why = targetProblem(c, c.snap);
-    if (why) return finish(c, fx, why);
+    if (why) return finish(c, fx, why.reason, why.lost);
     if (foreign(c, c.snap)) return finish(c, fx, REASON.BUSY);
     toListening(c, ev, fx, true);
   }
@@ -586,13 +608,14 @@
     c.evidence = { requests: {}, locks: {} };
     fx.push({ fx: FX.SEND, ticket: ev.ticket, text: c.frozenText });
   };
+  // A refusal that proves the grant gone ends it as lost: no closing cue.
   HANDLERS[EV.TICKET_FAIL] = function (c, fx, ev) {
-    if (c.phase === PHASE.SENDING) finish(c, fx, withDetail(REASON.NOT_SENT, ev.reason));
+    if (c.phase === PHASE.SENDING) finish(c, fx, withDetail(REASON.NOT_SENT, ev.reason), grantGone(ev.reason));
   };
   HANDLERS[EV.SEND_OK] = onSendOk;
   // A refusal before handoff ends the conversation; nothing is retried.
   HANDLERS[EV.SEND_REFUSED] = function (c, fx, ev) {
-    if (c.phase === PHASE.SENDING) finish(c, fx, withDetail(REASON.NOT_SENT, ev.reason));
+    if (c.phase === PHASE.SENDING) finish(c, fx, withDetail(REASON.NOT_SENT, ev.reason), grantGone(ev.reason));
   };
   HANDLERS[EV.SEND_UNKNOWN] = function (c, fx) {
     if (c.phase === PHASE.SENDING) finish(c, fx, REASON.UNKNOWN);
@@ -632,7 +655,8 @@
   var api = {
     PHASE: PHASE, CONFIRM: CONFIRM, REQUEST_STATE: REQUEST_STATE, REGISTRATION: REGISTRATION,
     LIMITS: LIMITS, TIMER: TIMER, SAY: SAY, FX: FX, EV: EV, COMMAND: COMMAND, CUE: CUE, REASON: REASON,
-    BLOCKER: BLOCKER, SPEECH_DEADLINE_FACTOR: SPEECH_DEADLINE_FACTOR,
+    BLOCKER: BLOCKER, SPEECH_DEADLINE_FACTOR: SPEECH_DEADLINE_FACTOR, GRANT_GONE: GRANT_GONE,
+    grantGone: grantGone, grantGoneIn: grantGoneIn,
     initial: initial, reduce: reduce, active: active, fresh: fresh, renew: renew, withDetail: withDetail,
     startBlocker: startBlocker,
     command: command, appendDraft: appendDraft, draftProblem: draftProblem, estimateMs: estimateMs
