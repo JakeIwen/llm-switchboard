@@ -347,9 +347,10 @@
     runAll([renderTargets, renderDetail, renderSettings, function () { convView.render(conv.view(), startBlocker()); }]);
   }
 
-  // The controller's onChange: a fault in the page's render is the page's,
-  // shown like a snapshot fault, and never thrown into the controller's own
-  // steps (track() before a speak(), a fetch's answer).
+  // The controller's onChange and page_audio's changed: a fault in the
+  // page's render is the page's, shown like a snapshot fault, and never
+  // thrown into the steps that asked for it (track() before a speak(), a
+  // fetch's answer, a dictation stopped on the way to a send's result).
   function renderForController() {
     try { render(); } catch (e) { pageFault(e); }
   }
@@ -416,15 +417,18 @@
     var composable = canCompose(t);
     var editing = compose.phase === "edit";
     var busy = compose.phase === "sending" || conv.holds();
-    $("draft").disabled = !composable || busy;
+    // While Dictate listens only its words may change the draft (Test
+    // rewrites it), so a late sound can undo them without losing typing.
+    var dictating = audio.dictating();
+    $("draft").disabled = !composable || busy || dictating;
     // A running dictation keeps its Stop; one that can't start says why.
-    var unheard = audio.dictating() ? null : audio.dictateBlocker();
+    var unheard = dictating ? null : audio.dictateBlocker();
     $("dictate").disabled = !composable || busy || !!unheard;
     $("dictate-why").hidden = !unheard || !composable || !audio.speechInputAvailable();
     $("dictate-why").textContent = unheard ? "Dictate is unavailable: " + unheard + "." : "";
-    $("test-btn").disabled = !composable || busy;
+    $("test-btn").disabled = !composable || busy || dictating;
     $("review-btn").disabled = !composable || busy;
-    $("dictate").textContent = audio.dictating() ? "Stop" : "Dictate";
+    $("dictate").textContent = dictating ? "Stop" : "Dictate";
     $("dictate").hidden = !audio.speechInputAvailable();
     var noteNode = $("compose-note");
     if (t.lock) {
@@ -717,7 +721,7 @@
       selectedId: function () { return selectedId; }, visible: function () { return document.visibilityState === "visible"; },
       voiceAvailable: function () { return audio.voiceAvailable(); }, onChange: renderForController,
       lateSound: function () { return audio.lateSound(); } } });
-    audio = window.DeskPageAudio.create({ win: window, $: $, conv: conv, note: setNote });
+    audio = window.DeskPageAudio.create({ win: window, $: $, conv: conv, note: setNote, changed: renderForController });
     convView = window.DeskConversationView.create(document, { start: startConversation, end: conv.endTap });
     startup = window.DeskStartup.create({
       api: api,

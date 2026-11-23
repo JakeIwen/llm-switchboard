@@ -11,7 +11,9 @@
   var L = root.DeskConversationLogic || require("./conversation_logic.js");
 
   // opts: {win: the page's window, $(id) -> element, conv: the controller,
-  // note(text): the compose note, for dictation errors}.
+  // note(text): the compose note, for dictation errors, changed(): dictation
+  // started or ended, by any route, so the page re-renders the controls that
+  // depend on it}.
   function create(opts) {
     var win = opts.win, $ = opts.$, conv = opts.conv;
     var recognition = null;
@@ -81,8 +83,8 @@
       return null;
     }
 
-    function stopDictation() {
-      if (!recognition) return;
+    // Ends the running dictation without telling the page; callers do.
+    function halt() {
       var r = recognition;
       recognition = null;
       r.onresult = r.onend = r.onerror = null;
@@ -91,14 +93,24 @@
       $("dictate").textContent = "Dictate";
     }
 
+    function stopDictation() {
+      if (!recognition) return;
+      halt();
+      opts.changed();
+    }
+
     // A late end or error of the page's own speech while dictating (the
     // controller's deps.lateSound): the mic may have heard the desk, so the
-    // dictation stops and the words it added go. True when one was running.
+    // dictation stops and the words it added go. Restoring the draft as it
+    // was at the start removes only dictated words: the page keeps the draft
+    // and Test disabled while dictation runs, so nothing else can change it.
+    // True when one was running.
     function lateSound() {
       if (!recognition) return false;
-      stopDictation();
+      halt();
       $("draft").value = dictatedFrom;
       opts.note("Dictation stopped: " + L.REASON.ECHO + ". Its words were discarded.");
+      opts.changed();
       return true;
     }
 
@@ -133,6 +145,7 @@
         recognition = null;
         $("interim").textContent = "";
         $("dictate").textContent = "Dictate";
+        opts.changed();
       };
       recognition = rec;
       try {
@@ -142,6 +155,7 @@
         opts.note("Dictation could not start. You can type instead.");
       }
       $("dictate").textContent = "Stop";
+      opts.changed();
     }
 
     return {

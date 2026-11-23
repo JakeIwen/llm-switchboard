@@ -395,6 +395,79 @@ test("a late end of written-off speech stops one-shot dictation and drops its wo
   assert.equal(h.$("dictate").disabled, true, "the desk may still be speaking");
 });
 
+// Typing as a browser allows it: a disabled control takes none.
+function type(h, text) {
+  if (h.$("draft").disabled) return;
+  h.$("draft").value = text;
+  h.$("draft").dispatch("input");
+}
+
+// A Play the watchdog wrote off, its cancel's error not yet in, and the
+// uncertain period after it over: its own `end` can still come, late.
+async function writtenOffPlay(h) {
+  slowCancel(h);
+  playFor(h, "a").click();
+  await settle();
+  const play = h.utt();
+  const deadline = L.estimateMs("Short.") * L.SPEECH_DEADLINE_FACTOR;
+  await h.advance(deadline);
+  await h.advance(deadline);
+  return play;
+}
+
+test("while Dictate listens the draft and Test take no input, so a late sound drops only dictated words", async () => {
+  const h = await paired(snap({ requests: [rq("a", "answered", "Short.")] }));
+  const play = await writtenOffPlay(h);
+  type(h, "Original.");
+  await h.answer(PATH.TICKET, 200, { ticket: "tap-ticket" });
+  h.$("dictate").click();
+  await settle();
+  assert.equal(h.$("draft").disabled, true);
+  assert.equal(h.$("test-btn").disabled, true);
+  h.rec().hear("open the hatch");
+  type(h, "Corrected by keyboard.");
+  h.$("test-btn").click();
+  assert.equal(h.$("draft").value, "Original. open the hatch");
+  play.fire("end");
+  await settle();
+  assert.equal(h.$("draft").value, "Original.");
+  assert.equal(h.$("draft").disabled, false);
+  assert.equal(h.$("test-btn").disabled, false);
+  type(h, "Corrected by keyboard.");
+  assert.equal(h.$("draft").value, "Corrected by keyboard.");
+});
+
+test("the draft and Test come back when dictation ends, by every route", async () => {
+  const h = await paired();
+  const routes = {
+    "its own end": (rec) => rec.onend(),
+    "an error, then its end": (rec) => { rec.onerror({ error: "no-speech" }); rec.onend(); },
+    "a Stop tap": () => h.$("dictate").click(),
+    "a Review tap": () => h.$("review-btn").click(),
+    "the page hidden": () => { h.document.visibilityState = "hidden"; return h.fire("visibilitychange"); }
+  };
+  for (const [route, end] of Object.entries(routes)) {
+    h.document.visibilityState = "visible";
+    h.$("dictate").click();
+    await settle();
+    assert.equal(h.$("draft").disabled, true, route);
+    assert.equal(h.$("test-btn").disabled, true, route);
+    await end(h.rec());
+    await settle();
+    assert.equal(h.$("dictate").textContent, "Dictate", route);
+    assert.equal(h.$("draft").disabled, false, route);
+    assert.equal(h.$("test-btn").disabled, false, route);
+  }
+  // A recognizer that refuses to start never leaves them disabled.
+  h.win.webkitSpeechRecognition.prototype.start = () => { throw new Error("not allowed"); };
+  h.$("dictate").click();
+  await settle();
+  assert.equal(h.$("compose-note").textContent, "Dictation could not start. You can type instead.");
+  assert.equal(h.$("dictate").textContent, "Dictate");
+  assert.equal(h.$("draft").disabled, false);
+  assert.equal(h.$("test-btn").disabled, false);
+});
+
 test("the hub's handoff refusal for a changed target ends the conversation silently", async () => {
   const h = await paired();
   await converse(h);

@@ -691,7 +691,9 @@ isn't uncertain, and no conversation holds the voice. Otherwise it is
 disabled with "Dictate is unavailable: <reason>." (the desk may still be
 speaking; wait until it is quiet, or a conversation is in progress), and it
 comes back on its own when that passes. A dictation already running keeps
-its Stop.
+its Stop. While it listens, the draft and Test (which rewrites the draft)
+are disabled, so only its own words change the draft; both come back when
+it ends, however it ends.
 
 **Start conversation** is enabled only when the snapshot has sends and voice
 confirm on and no lock-store error, the selected session is available with
@@ -804,9 +806,11 @@ have heard its own speech" and the draft discarded. While the turn's ticket
 is still being fetched, the draft is never sent; once its send POST is out,
 the end says delivery is unknown and that POST's own answer, if it comes,
 settles it (see the end reasons below). A running one-shot dictation
-stops and the words it added are removed, with the note "Dictation stopped:
-the desk may have heard its own speech. Its words were discarded.". Either
-way sound is uncertain again for twice that utterance's estimate. Otherwise the late event only moves the guard.
+stops and the draft goes back to what it was when the dictation started,
+which removes only the words it added (nothing else could change the draft
+meanwhile), with the note "Dictation stopped: the desk may have heard its
+own speech. Its words were discarded.". Either way sound is uncertain again
+for twice that utterance's estimate. Otherwise the late event only moves the guard.
 
 End reasons, as the overlay and the cue word them: you said stop listening;
 End was tapped; the page was hidden; the page was closed or frozen (on
