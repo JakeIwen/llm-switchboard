@@ -826,7 +826,14 @@ followed by "; delivery is unknown; check the session" (for example
 "Conversation ended: the hub stopped answering; delivery is unknown; check
 the session."), since the prompt may have been delivered; nothing is
 retried, and nothing is spoken when the grant was lost. An end before any
-POST shows its cause alone.
+POST shows its cause alone. If that POST's own answer still comes (after
+the end, after the freshness deadline, or as the 401 that ended it), it
+settles the reason shown, after the same cause: "; the prompt was handed
+off; check the session for its reply" when the hub accepted it, or "; not
+sent: <reason>" when it refused it. That answer changes the reason only:
+the conversation stays ended, nothing is spoken, no mic opens, and a
+conversation started since never sees it. An answer that settles nothing
+(a 5xx, an unrecognised body) leaves delivery unknown.
 
 ### Hub side
 

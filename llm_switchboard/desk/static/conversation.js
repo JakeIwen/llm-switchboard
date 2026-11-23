@@ -135,6 +135,9 @@
     // it brought. Start waits for it, so it can't reach the hub after a
     // newer acquisition and replace that grant (the hub keeps the latest).
     var straggler = null;
+    // The id of the send POST an end left unanswered with delivery open:
+    // its answer may still settle what the end reason says, and nothing else.
+    var lateSend = null;
     var sound = T.create({ env: env, onChange: notify, onLate: lateSound });
     var cutsAtStart = 0;     // sound.cuts() at the Start tap: more means this conversation cut one off
     var interim = "";
@@ -240,6 +243,13 @@
     function settle(kind, id) {
       if (!fetches[kind] || fetches[kind].id !== id) return false;
       delete fetches[kind];
+      return true;
+    }
+
+    // True once for the send POST the last end left open; a newer start forgets it.
+    function settleLate(id) {
+      if (lateSend === null || lateSend !== id) return false;
+      lateSend = null;
       return true;
     }
 
@@ -444,18 +454,20 @@
       });
     }
 
-    // Unknown is never retried; a refusal before handoff is final.
+    // Unknown is never retried; a refusal before handoff is final. The
+    // answer is dispatched even after an end, and after a 401 has ended the
+    // conversation, so the end reason keeps what it establishes.
     function postSend(ticket, text) {
       var id = begin(FETCH.SEND, true);
       setTimer(TIMER.SEND_ABORT, LIMITS.SEND_DEADLINE_MS);
       var body = { ticket: ticket, text: text, confirm: L.CONFIRM.VOICE, grant: grant };
       api("POST", PATH.SEND, body, signal(FETCH.SEND)).then(function (r) {
-        if (!settle(FETCH.SEND, id)) return;
+        if (!settle(FETCH.SEND, id) && !settleLate(id)) return;
         clearTimer(TIMER.SEND_ABORT);
-        if (unauthorized(r)) return;
+        unauthorized(r);
         dispatch(sendEvent(r));
       }, function () {
-        if (!settle(FETCH.SEND, id)) return;
+        if (!settle(FETCH.SEND, id) && !settleLate(id)) return;
         clearTimer(TIMER.SEND_ABORT);
         dispatch({ type: EV.SEND_UNKNOWN });
       });
@@ -616,6 +628,7 @@
       // A page that lost its grant, is leaving, cut a sound off, can't be
       // heard or has no voice speaks nothing: a successor may be listening.
       var cue = !!held && !lost && !silent && !cut && L.fresh(c, env.now()) && deps.visible() && deps.voiceAvailable();
+      lateSend = c.deliveryOpen && fetches[FETCH.SEND] ? fetches[FETCH.SEND].id : null;
       Object.keys(timers).forEach(function (name) { if (!(cue && CLOSING_TIMERS[name])) clearTimer(name); });
       // The grant request stays open so a late grant is released; a late
       // ticket or send answer is dropped; the beat goes on under the cue.
@@ -672,6 +685,7 @@
     function start(dest) {
       if (!dest || !canStart()) return false;
       cutsAtStart = sound.cuts();
+      lateSend = null;
       dispatch({ type: EV.START, dest: Object.freeze({
         host: dest.host, session_id: dest.session_id, generation: dest.generation,
         label: dest.label, epoch: dest.epoch

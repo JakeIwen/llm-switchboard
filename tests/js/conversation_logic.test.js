@@ -394,8 +394,10 @@ test("past the freshness deadline no event acts or renews, before the tick has r
   s.ev(EV.TICKET_OK, { ticket: "t1" });
   late(s);
   s.ev(EV.SEND_OK, { request_id: "r1", state: "handed_off" });
-  // Handed off, but the conversation won't follow it: the session says what happened.
-  ended(s, REASON.HUB_LOST + "; " + REASON.UNKNOWN);
+  // Handed off, but the conversation won't follow it: the session says what
+  // happened, and the reason says the prompt reached it.
+  ended(s, REASON.HUB_LOST + "; " + REASON.HANDED_OFF);
+  assert.equal(s.c().lost, true);
   assert.ok(!has(s.fx, FX.SAY));
   const n = listening();
   say(n, "x");
@@ -403,7 +405,15 @@ test("past the freshness deadline no event acts or renews, before the tick has r
   n.ev(EV.TICKET_OK, { ticket: "t1" });
   late(n);
   n.ev(EV.SEND_REFUSED, { reason: "busy" });
-  ended(n, REASON.HUB_LOST);
+  ended(n, REASON.HUB_LOST + "; " + L.withDetail(REASON.NOT_SENT, "busy"));
+  // An answer that settles nothing leaves delivery unknown.
+  const u = listening();
+  say(u, "x");
+  say(u, "send it");
+  u.ev(EV.TICKET_OK, { ticket: "t1" });
+  late(u);
+  u.ev(EV.SEND_UNKNOWN, {});
+  ended(u, REASON.HUB_LOST + "; " + REASON.UNKNOWN);
   // A grant whose own request started more than FRESH_MS ago never opens the mic.
   const g = machine();
   g.ev(EV.START, { dest: DEST });

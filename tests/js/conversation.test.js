@@ -361,6 +361,64 @@ test("an end that abandons an unanswered send POST also says delivery is unknown
   assert.equal(r.view().reason, L.withDetail(REASON.NOT_SENT, "busy"));
 });
 
+test("the send's own answer, come after the end, settles what the end says about delivery and nothing else", async () => {
+  const unknown = (reason) => reason + "; " + REASON.UNKNOWN;
+  const handedOff = (reason) => reason + "; " + REASON.HANDED_OFF;
+  const out = async () => {
+    const h = await listening(harness());
+    await h.hear("check the logs");
+    await h.hear("send it");
+    await h.answer(PATH.TICKET, 200, { ticket: "t" });
+    return h;
+  };
+  // End tapped with the POST out, then the hub accepts it.
+  const e = await out();
+  e.ctl.endTap();
+  assert.equal(e.view().reason, unknown(REASON.END_TAPPED));
+  const said = e.said.length;
+  const recs = e.recs.length;
+  await e.answer(PATH.SEND, 200, { request_id: "r1", state: "handed_off" });
+  assert.equal(e.view().reason, handedOff(REASON.END_TAPPED));
+  assert.equal(e.phase(), PHASE.ENDED);
+  assert.equal(e.said.length, said);
+  assert.equal(e.recs.length, recs);
+  // The freshness deadline ends it, then a definitive refusal comes.
+  const f = await out();
+  await f.advance(LIMITS.FRESH_MS + LIMITS.TICK_MS);
+  assert.equal(f.view().reason, unknown(REASON.HUB_LOST));
+  await f.answer(PATH.SEND, 409, { error: "busy" });
+  assert.equal(f.view().reason, REASON.HUB_LOST + "; " + L.withDetail(REASON.NOT_SENT, "busy"));
+  assert.equal(f.view().lost, true);
+  assert.equal(f.said.length, 0);
+  // Past the deadline before the tick has run: the answer itself ends it.
+  const s = await out();
+  s.t += LIMITS.FRESH_MS + 1;
+  await s.answer(PATH.SEND, 200, { request_id: "r1", state: "handed_off" });
+  assert.equal(s.view().reason, handedOff(REASON.HUB_LOST));
+  assert.equal(s.view().lost, true);
+  assert.equal(s.said.length, 0);
+  // A 401 ends it as unpaired, and is itself a definitive refusal.
+  const u = await out();
+  await u.answer(PATH.SEND, 401, { error: "unauthorized" });
+  assert.equal(u.view().reason, REASON.UNPAIRED + "; " + L.withDetail(REASON.NOT_SENT, "unauthorized"));
+  assert.equal(u.view().lost, true);
+  assert.equal(u.said.length, 0);
+  // An answer that settles nothing leaves it unknown.
+  const n = await out();
+  n.ctl.endTap();
+  await n.answer(PATH.SEND, 500, { error: "internal error" });
+  assert.equal(n.view().reason, unknown(REASON.END_TAPPED));
+  // A newer conversation is never touched by the old POST's answer.
+  const g = await out();
+  g.ctl.endTap();
+  await g.finish();
+  await g.advance(LIMITS.GUARD_MS);
+  await listening(g);
+  await g.answer(PATH.SEND, 200, { request_id: "r1", state: "handed_off" });
+  assert.equal(g.phase(), PHASE.LISTENING);
+  assert.equal(g.view().reason, null);
+});
+
 test("only a refusal that keeps ownership gets a closing cue; any other ends it silently on both paths", async () => {
   for (const [path, status, error] of [
     [PATH.SEND, 409, "conversation grant not current"],

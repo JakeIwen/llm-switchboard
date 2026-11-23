@@ -138,6 +138,8 @@
     FOREIGN: "another request reached the session",
     NOT_SENT: "not sent",
     UNKNOWN: "delivery is unknown; check the session",
+    // Said after an end's cause once the send it left open was accepted.
+    HANDED_OFF: "the prompt was handed off; check the session for its reply",
     NO_REPLY: "the request ended without a reply",
     REPLY_TIMEOUT: "no reply came in ten minutes"
   });
@@ -160,12 +162,6 @@
   });
 
   function withDetail(reason, detail) { return detail ? reason + ": " + detail : reason; }
-
-  // An end that abandons a send POST issued and never answered says so
-  // after its cause: the prompt may have been delivered.
-  function withUnknownDelivery(reason) {
-    return reason === REASON.UNKNOWN ? reason : reason + "; " + REASON.UNKNOWN;
-  }
 
   // The hub's refusals of a ticket or a send that leave this page's sound
   // slot intact (refusals.py, Ownership.INTACT): the hub gives each only
@@ -202,7 +198,10 @@
       quickEnds: 0, listenAt: null, freshUntil: 0, snap: null,
       // The drafting deadlines as absolute times; their timers may fire late.
       turnAt: null, idleAt: null,
-      reason: null, lost: false
+      reason: null, lost: false,
+      // After an end that left a send POST unanswered: the end's own cause,
+      // and whether the POST's answer may still settle what the reason says.
+      cause: null, deliveryOpen: false
     };
   }
 
@@ -360,8 +359,13 @@
   // forgets what the conversation held.
   // `lost`: the grant is gone; `silent`: the page is leaving. Either way the
   // controller speaks no closing cue.
+  // An end that abandons a send POST issued and never answered says so
+  // after its cause, the prompt may have been delivered, until that POST's
+  // own answer settles it (settleDelivery).
   function finish(c, fx, reason, lost, silent) {
-    if (c.phase === PHASE.SENDING && c.posted) reason = withUnknownDelivery(reason);
+    c.cause = reason;
+    c.deliveryOpen = c.phase === PHASE.SENDING && c.posted && reason !== REASON.UNKNOWN;
+    if (c.deliveryOpen) reason = reason + "; " + REASON.UNKNOWN;
     c.posted = false;
     c.phase = PHASE.ENDED;
     c.reason = reason;
@@ -708,6 +712,24 @@
     if (c.phase === PHASE.SENDING) finish(c, fx, REASON.UNKNOWN, ownershipLost(c.dest, { refusal: ev.refusal }));
   };
 
+  var SEND_ANSWER = {};
+  SEND_ANSWER[EV.SEND_OK] = true;
+  SEND_ANSWER[EV.SEND_REFUSED] = true;
+  SEND_ANSWER[EV.SEND_UNKNOWN] = true;
+
+  // The answer to the send POST an end left open: what it establishes
+  // replaces "delivery is unknown" after the end's cause. It changes only
+  // the reason shown: the conversation stays ended and nothing is spoken.
+  function settleDelivery(c, ev) {
+    if (!c.deliveryOpen || !SEND_ANSWER[ev.type]) return;
+    c.deliveryOpen = false;
+    if (ev.type === EV.SEND_OK && ACCEPTED[ev.state] && typeof ev.request_id === "string") {
+      c.reason = c.cause + "; " + REASON.HANDED_OFF;
+    } else if (ev.type === EV.SEND_REFUSED) {
+      c.reason = c.cause + "; " + withDetail(REASON.NOT_SENT, ev.reason);
+    }
+  }
+
   function copy(c) {
     var next = {};
     Object.keys(c).forEach(function (k) { next[k] = c[k]; });
@@ -729,6 +751,11 @@
       return { c: c0, fx: [{ fx: FX.SNAPSHOT }] };
     }
     var handler = HANDLERS[ev.type];
+    if (!active(prev) && prev.deliveryOpen && SEND_ANSWER[ev.type]) {
+      var ended = copy(prev);
+      settleDelivery(ended, ev);
+      return { c: ended, fx: [] };
+    }
     if (!active(prev) || !handler) return { c: prev, fx: [] };
     var c = copy(prev);
     var fx = [];
@@ -736,9 +763,11 @@
     // or renews, whether or not the 1 s tick has run yet. Only the page's
     // own end keeps its reason.
     if (ev.type !== EV.END && c.freshUntil > 0 && !fresh(c, ev.now)) {
-      // A refusal that comes too late still proves nothing was handed off.
-      if (ev.type === EV.SEND_REFUSED) c.posted = false;
+      // The send's own answer, come too late to act on, still says what
+      // became of the prompt.
       finish(c, fx, REASON.HUB_LOST, true);
+      settleDelivery(c, ev);
+      fx.forEach(function (f) { if (f.fx === FX.END) f.reason = c.reason; });
     } else {
       handler(c, fx, ev);
     }
