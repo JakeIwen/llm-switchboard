@@ -38,6 +38,7 @@ VOICE_OFF = "voice confirm off"
 CONVERSATION_LIVE = "a conversation is in progress"
 VOICE_TEXT_TOO_LONG = "too long for a voice send"
 TARGET_CHANGED = "target changed"
+BAD_CONFIRM = "bad confirm"
 
 
 @dataclass
@@ -52,15 +53,15 @@ class Grant:
 
 
 def confirm_mode(value) -> ConfirmMode:
-    """A send's `confirm` field: omitted (or null) means a tap, as before."""
-    if value is None:
-        return ConfirmMode.TAP
+    """A send's `confirm` field as supplied: only "tap" or "voice". Callers
+    pass `ConfirmMode.TAP` when the field is omitted (a tap, as before);
+    anything supplied, JSON null included, is refused unless it names a mode."""
     if isinstance(value, str):
         try:
             return ConfirmMode(value)
         except ValueError:
             pass
-    raise DeskError(400, "bad confirm")
+    raise DeskError(400, BAD_CONFIRM)
 
 
 class ConversationGrants:

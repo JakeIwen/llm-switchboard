@@ -77,7 +77,7 @@ class ConversationMirrorTests(unittest.TestCase):
         # A send refused for these reasons was never handed off, so the page
         # may say "not sent"; any reason missing here reads as "unknown".
         for reason in (grants.VOICE_OFF, grants.GRANT_NOT_CURRENT, grants.GRANT_WRONG_TARGET,
-                       grants.VOICE_TEXT_TOO_LONG, "bad confirm"):
+                       grants.VOICE_TEXT_TOO_LONG, grants.BAD_CONFIRM):
             self.assertIn(reason, self.js["refusals"])
 
 

@@ -49,7 +49,7 @@ from .labels import SessionLabels, encodable
 from .locks import LockStore
 from .model import (
     HELLO_TIMEOUT_SECONDS, MAX_PENDING_CHANNEL_CONNECTIONS, RECHECK_SECONDS,
-    REVOKE_IN_PROGRESS, STARTUP_TMUX_TIMEOUT_SECONDS, ChannelProcess, DeskError, is_request_id,
+    REVOKE_IN_PROGRESS, STARTUP_TMUX_TIMEOUT_SECONDS, ChannelProcess, ConfirmMode, DeskError, is_request_id,
 )
 from .operator import OperatorOp, OperatorServer, bind_private_socket
 from .peer import process_presence
@@ -452,8 +452,9 @@ class Hub:
             return self.state.issue_ticket(body.get("session_id"), body.get("generation"), body.get("epoch"))
 
     def send(self, body: dict, token: str) -> dict:
+        # Only an omitted `confirm` means a tap; a supplied null is refused.
         request = self.state.begin_send(body.get("ticket"), body.get("text"), token,
-                                        body.get("confirm"), body.get("grant"))
+                                        body.get("confirm", ConfirmMode.TAP), body.get("grant"))
         try:
             conn_id, content = self._prepare_handoff(request)
         except BaseException:

@@ -255,10 +255,11 @@ class HubState(ConversationGrants):
             self._tickets[record.ticket_hash] = record
             return {"ticket": ticket, "expires_at": record.expires_at}
 
-    def begin_send(self, ticket, text, token, confirm=None, grant=None) -> Request:
+    def begin_send(self, ticket, text, token, confirm=ConfirmMode.TAP, grant=None) -> Request:
         """Validate and consume the ticket; the request starts pending and
         remembers which token sent it, and how it was confirmed (`confirm`
-        omitted is a tap; a voice send names its `grant`, desk/grants.py)."""
+        omitted is a tap, null is refused; a voice send names its `grant`,
+        desk/grants.py)."""
         token_hash = self.token_hash(token)
         with self._mutex:
             if not self._token_valid(token_hash):

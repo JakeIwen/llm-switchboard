@@ -16,7 +16,7 @@ from desk_fixtures import (
 
 from llm_switchboard.desk.enrollment import DeskSettings
 from llm_switchboard.desk.grants import (
-    ANOTHER_PAGE, CONVERSATION_LIVE, GRANT_NOT_CURRENT, GRANT_TTL_SECONDS, GRANT_WRONG_TARGET, TARGET_CHANGED,
+    ANOTHER_PAGE, BAD_CONFIRM, CONVERSATION_LIVE, GRANT_NOT_CURRENT, GRANT_TTL_SECONDS, GRANT_WRONG_TARGET, TARGET_CHANGED,
     VOICE_OFF, VOICE_TEXT_TOO_LONG,
 )
 from llm_switchboard.desk.hub_state import HubState
@@ -185,8 +185,14 @@ class VoiceSendTest(GrantStateCase):
         self.assertIs(request.confirm, ConfirmMode.TAP)
         _, content = self.state.hand_off(request.request_id)
         self.assertEqual(content, "hello there" + DELIVERY_SUFFIX.format(request_id=request.request_id))
-        self.refused(400, "bad confirm", self.state.begin_send, self.ticket(SESSION_B, self.gen_b), "hi", self.token,
-                     "shout")
+
+    def test_a_supplied_confirm_other_than_tap_or_voice_is_refused_even_null(self):
+        ticket = self.ticket(SESSION_B, self.gen_b)
+        for confirm in (None, 1, "", "shout", "TAP", True, ["tap"]):
+            with self.subTest(confirm=confirm):
+                self.refused(400, BAD_CONFIRM, self.state.begin_send, ticket, "hi", self.token, confirm)
+        # None of them consumed the ticket.
+        self.assertIs(self.state.begin_send(ticket, "hi", self.token, "tap").confirm, ConfirmMode.TAP)
 
     def test_a_voice_send_carries_the_notice_after_the_delivery_suffix(self):
         request = self.voice_send(self.grant())
@@ -402,6 +408,19 @@ class ConversationHubTest(HubCase):
         token = self.pair()
         channel, generation = self.registered()
         status, sent = self.post("/desk/api/send", {"ticket": self.ticket(token, generation), "text": "hi"}, token)
+        self.assertEqual((status, sent["state"]), (200, "handed_off"))
+        self.assertEqual(channel.read()[1]["content"], "hi" + DELIVERY_SUFFIX.format(request_id=sent["request_id"]))
+
+    def test_a_send_whose_confirm_is_null_or_not_tap_or_voice_is_a_bad_request(self):
+        token = self.pair()
+        channel, generation = self.registered()
+        send = {"ticket": self.ticket(token, generation), "text": "hi"}
+        for confirm in (None, 0, "", "shout"):
+            with self.subTest(confirm=confirm):
+                self.assertEqual(self.post("/desk/api/send", {**send, "confirm": confirm}, token),
+                                 (400, {"error": BAD_CONFIRM}))
+        self.assertIsNone(self.target(SESSION_A)["lock"])
+        status, sent = self.post("/desk/api/send", send, token)
         self.assertEqual((status, sent["state"]), (200, "handed_off"))
         self.assertEqual(channel.read()[1]["content"], "hi" + DELIVERY_SUFFIX.format(request_id=sent["request_id"]))
 

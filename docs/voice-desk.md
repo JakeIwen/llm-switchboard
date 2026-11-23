@@ -784,7 +784,8 @@ that ended never resumes when the link returns.
   voice gate on (403 `voice confirm off`), the current grant (409
   `conversation grant not current`) for the ticket's target (409
   `conversation grant not for this target`) and text within 1,024 bytes (400
-  `too long for a voice send`); any other `confirm` is 400 `bad confirm`.
+  `too long for a voice send`); any other supplied `confirm`, JSON `null`
+  included, is 400 `bad confirm`.
   The mode and the grant id are stored on the request and both are checked
   again at `hand_off`, so a grant that expired or was replaced, or the gate
   switched off, between `begin_send` and the handoff refuses it (the request
