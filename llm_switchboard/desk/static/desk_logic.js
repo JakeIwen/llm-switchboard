@@ -12,7 +12,10 @@
     "target changed; not sent", "too many outstanding requests",
     // text_rule.py reasons
     "empty", "too long", "invalid character", "leading or trailing whitespace",
-    "control character", "starts with a command character"
+    "control character", "starts with a command character",
+    // a send confirmed by voice (grants.py), refused at begin_send or hand_off
+    "bad confirm", "voice confirm off", "conversation grant not current",
+    "conversation grant not for this target", "too long for a voice send"
   ];
 
   var UNKNOWN_TEXT = "Delivery unknown: the hub did not confirm the hand-off. Check the target and its replies. It is not retried.";
@@ -93,7 +96,7 @@
   }
 
   var api = {
-    classifySend: classifySend, describeRequestState: describeRequestState,
+    REFUSALS: REFUSALS, classifySend: classifySend, describeRequestState: describeRequestState,
     freezeClear: freezeClear, waitingOver: waitingOver, clearStillValid: clearStillValid, pruneIds: pruneIds
   };
   root.DeskLogic = api;
