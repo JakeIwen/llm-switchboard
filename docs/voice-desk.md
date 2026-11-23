@@ -1143,10 +1143,10 @@ covers parked use only.
 
 This section is the contract for reaching Claude sessions on the Mac from the
 same desk. Nothing in it exists yet; everything above stays true for Pi
-sessions. In it, `<mac>` is the Mac's host name from `local.env`
-(`LLM_SWITCHBOARD_MAC_NAME`, the same name the v1 host exchange uses), `pi` is
-the desk's fixed name for the Pi's own sessions (`model.HOST`), and `/Users/me`
-is the Mac's home.
+sessions except where a "Pi side" note below says otherwise. In it, `<mac>`
+is the Mac's host name from `local.env` (`LLM_SWITCHBOARD_MAC_NAME`, the same
+name the v1 host exchange uses), `pi` is the desk's fixed name for the Pi's
+own sessions (`model.HOST`), and `/Users/me` is the Mac's home.
 
 ### Shape
 
@@ -1154,23 +1154,67 @@ is the Mac's home.
 Mac                                                     Pi
 claude --desk session                                   desk hub (desk serve)
   └─ bin/desk-channel ──0600 Unix socket──► desk relay    ▲ link.sock (0600)
-     (unchanged code)    run/channel.sock   (launchd)     │
-                                              │ ssh -T    │
-                                              └──────────►sshd ─► bin/desk-link <mac>
+     (checks its        run/channel.sock    (launchd,     │
+      listener on macOS)                    bin/desk-relay)
+                                              │ ssh -F none -T
+                                              └──────────►sshd ─► bin/desk-link
                                                  one stream,      (forced command:
                                                  new key          a bounded line pump)
 ```
 
 - The Mac opens the one stream; the Pi never connects to the Mac.
-- On the Mac, the channel server is the phase 1 `bin/desk-channel`, unchanged.
-  It connects to `DeskConfig.channel_socket`, which on the Mac is the relay's
-  socket, and speaks the channel protocol (`protocol.py`) to the relay as it
-  does to the hub on the Pi.
+- On the Mac, the channel server is the phase 1 `bin/desk-channel`. It
+  connects to `DeskConfig.channel_socket`, which on the Mac is the relay's
+  socket, checks on macOS that the process listening there is the relay
+  (Identity on the Mac, below), and speaks the channel protocol
+  (`protocol.py`) to the relay as it does to the hub on the Pi.
 - The relay checks each channel's identity on the Mac and carries frames over
   the link. It is not a second hub: the hub issues every epoch, generation,
   request id, ticket and lock, holds enrollment and decides routing.
+- The hub admits a link only after the relay proves, over the link, that it
+  holds the Mac's desk private key (Admission, below). The SSH login is
+  transport; it is not what the hub trusts.
 - The v1 host agent, its key, its forced command (`host-exchange`), its
-  actions and its snapshots are untouched, and carry nothing from the desk.
+  actions and its frames are untouched, and the desk adds nothing to them.
+
+### Who the design defends against
+
+Three classes, on either machine:
+
+1. **Another local user.** Kept out by 0600 sockets in 0700 directories and
+   by the uid checks on every socket (`SO_PEERCRED`, `LOCAL_PEERCRED`).
+2. **An ordinary process running as the operator's user**: one that opens,
+   connects and binds sockets and starts programs from unmodified files, but
+   edits none of the checkout, `~/.ssh`, `local.env`, Claude's settings or
+   shell files, and injects code into no other process. The desk gives it no
+   way to pose as the Mac to the hub (it lacks the Mac's private key, which
+   never leaves the Mac), no way to stand in for the relay towards a Mac
+   channel (the listener check), and no way to pose as a desk channel (the
+   channel check). Limits that remain, stated so nobody relies on more:
+   - It can start the pinned relay itself; that relay carries only what the
+     real hub sends.
+   - On the Pi it already reaches Pi sessions through the supervisor's tmux
+     server, which runs as the same user; the desk neither adds nor removes
+     that.
+   - On the Mac it can read every key in `~/.ssh`. Any key there with an
+     unrestricted login to the Pi gives it the Pi's `pi` account, which is the
+     trust question below. A Mac desk session runs with its terminal's
+     privacy grants (Full Disk Access, for example), which a background
+     process lacks; that is what the listener check and the per-launch flag
+     protect.
+3. **Full account compromise** (editing the checkout, keys or configuration,
+   or injecting code into a running process). No design whose code and keys
+   the operator's user can write excludes it, and this one doesn't claim to.
+
+**The trust this adds.** The relay delivers whatever the hub sends, and the
+Mac cannot check that a send was tapped. Whoever controls the Pi's `pi`
+account (and so can stop the hub and stand in for it on `link.sock`) can
+prompt, with bypass permissions, every live Mac session launched with
+`claudep --desk` while the relay runs, whether or not the honest hub would
+show it as enrolled, as a candidate or as unenrolled. The Pi's enrollment
+list and sends switch are the hub's rules, not limits the Mac can verify.
+The Mac-side limits are the per-launch flag, the listener check, and the
+off switches (Switching it off, below). See "Open questions".
 
 ### Processes, sockets and files
 
@@ -1178,20 +1222,22 @@ claude --desk session                                   desk hub (desk serve)
 
 | Item | What |
 | --- | --- |
-| launchd job `dev.llm-switchboard.desk-relay` | `ProgramArguments`: `[<repo>/.venv/bin/python, -m, llm_switchboard, desk, relay]`, `WorkingDirectory` the checkout, `RunAtLoad`, `KeepAlive`, `ThrottleInterval` 10, `ProcessType` `Standard`, `EnvironmentVariables` `HOME` and `PATH` as the v1 jobs (`host_launchd.PATH`) |
+| launchd job `dev.llm-switchboard.desk-relay` | `ProgramArguments`: `DeskConfig.relay_argv` = `[<repo>/.venv/bin/python, -I, -B, <repo>/bin/desk-relay]`, `RunAtLoad`, `KeepAlive`, `ThrottleInterval` 10, `ProcessType` `Standard`, `EnvironmentVariables` `HOME` and `PATH` as the v1 jobs (`host_launchd.PATH`) and nothing else, `StandardOutPath` and `StandardErrorPath` `/dev/null` |
+| `bin/desk-relay` | The relay's entry point. Standard library only; before importing anything else it opens `desk-relay-launchd.log` with `O_APPEND`, truncates it when it is over 256 KiB, and `dup2`s it onto stderr, so an early crash leaves a traceback there and a crash loop never grows it past 256 KiB plus one traceback. A failure before that point (no interpreter, an unreadable script) goes to `/dev/null`; launchd records the exit in the unified log |
 | `/Users/me/.config/llm-switchboard/desk/run/channel.sock` | The relay's listener (0600 in the 0700 `run/` directory, `operator.bind_private_socket`), where Mac channel servers connect. The relay refuses to start when the path is over 103 bytes (macOS `sun_path`) |
 | `/Users/me/.config/llm-switchboard/desk/run/relay.lock` | Empty file; the relay holds an exclusive `flock` on it for its lifetime, so only one relay runs (a second exits 3) |
 | `/Users/me/.config/llm-switchboard/desk/mcp.json` | The Mac's pinned MCP config, written by `llm-switchboard desk install-config` on the Mac; it names the Mac checkout's `.venv/bin/python -I -B <repo>/bin/desk-channel` |
-| `/Users/me/.ssh/llm-switchboard-desk-<mac>`, `.pub` | The link key (below) |
+| `/Users/me/.ssh/llm-switchboard-desk-<mac>`, `.pub` | The link key (SSH, below) |
 | `/Users/me/Library/LaunchAgents/dev.llm-switchboard.desk-relay.plist` | Written by `desk relay-install`, deleted by `desk relay-install --unload` |
 | `/Users/me/Library/Logs/llm-switchboard/desk-relay.log` | The relay's own log through a `RotatingFileHandler`, 1 MiB, one backup (2 MiB in all) |
-| `/Users/me/Library/Logs/llm-switchboard/desk-relay-launchd.log` | launchd's `StandardOutPath` and `StandardErrorPath` (a crash before logging starts); the relay truncates it at start when it is over 256 KiB |
+| `/Users/me/Library/Logs/llm-switchboard/desk-relay-launchd.log` | Tracebacks from before logging starts, capped by `bin/desk-relay` as above |
 
-The relay keeps no other state on disk. Its logs carry link states, ssh exit
-codes, session id prefixes, request ids of the hub's shape and refusal
-reasons; never prompt text, reply text, labels or folders. ssh's own stderr is
-read bounded (64 KiB per connection) and logged only as its first line, cut to
-200 characters, at most once per minute.
+The relay keeps no other state on disk. Its logs carry link states, wire
+codes (Framing, below), ssh exit codes with a classified stderr code, session
+id prefixes and request ids of the hub's shape; never prompt text, reply
+text, labels, folders or any free-form text from ssh, a channel or the hub.
+It spawns every child (`ssh`, `ssh-keygen`) with `close_fds=True`, so no
+child holds a channel connection.
 
 The relay does not keep the Mac awake (no power assertion). While the Mac
 sleeps the link is down and the desk says so.
@@ -1200,58 +1246,15 @@ sleeps the link is down and the desk says so.
 
 | Item | What |
 | --- | --- |
-| `bin/desk-link <host>` | The forced command. Runs as `<repo>/.venv/bin/python -I -B <repo>/bin/desk-link <host>` (the argv `DeskConfig.link_argv(host)` pins); a line pump between its stdin/stdout (the SSH channel) and the hub's link socket. No state, no log of its own; it writes one diagnostic line to stderr when it exits, which ssh carries back to the relay |
+| `bin/desk-link` | The forced command, run as `<repo>/.venv/bin/python -I -B <repo>/bin/desk-link` (`DeskConfig.link_argv`); a line pump between its stdin/stdout (the SSH channel) and the hub's link socket. No arguments, no state, no log of its own; on exit it writes one line `desk-link: <code>` to stderr, which ssh carries back to the relay |
 | `runtime_dir/link.sock` | A third 0600 socket of the hub, beside `channel.sock` and `operator.sock`, created by `desk serve` at start |
+| `config_dir/link-signers` | The allowed-signers list the hub verifies link proofs against: one line per Mac, `<mac> namespaces="llm-switchboard-desk-link" ssh-ed25519 AAAA…`, at most 4 lines and 4 KiB, 0600, written only by `desk link-authorize` and `desk link-revoke` under `link-signers.lock` |
 | `config_dir/enrolled-hosts.json` | Mac enrollment (Enrollment, below) |
 | `~/.ssh/authorized_keys` | One added line per Mac (SSH, below) |
 
-The hub keeps everything else about the link in memory: one link record per
-host, the remote registrations, the candidates list. The desk's files on the
-Pi never hold prompt or reply text. A Mac session's desk reply lives in the
-hub's memory exactly as a Pi session's does (the 20-reply, 256 KiB ring);
-like the rest of the hub's memory it can be paged to the Pi's swap, which is
-outside these files' promise.
-
-### How `desk-link` reaches the hub
-
-`bin/desk-link <host>` connects to `link.sock` and copies whole lines both
-ways. It checks each line's length against `MAX_LINK_LINE_BYTES` before
-forwarding it and exits on an oversize line, on EOF from either side, or when
-it can't connect. It parses nothing else: the hub is the one parser. When the
-hub isn't running it writes one `link_refused {reason: "hub not running"}`
-line to stdout (the version-independent shape, below) and exits 3. Each
-direction blocks on a full peer: when ssh stops reading, the pump stops
-reading the hub, and the hub's write times out (Backpressure, below).
-
-The hub authenticates the hop by the connecting process, never by what it
-sends (`desk/link_peer.py`):
-
-1. `SO_PEERCRED` gives the peer's pid and uid; the uid must be the hub's.
-2. The peer's `/proc/<pid>/cmdline` must be `DeskConfig.link_argv(host)` for
-   the `host` in its last argument, and `/proc/<pid>/exe` must resolve to the
-   same file as that argv's interpreter (the phase 1 channel rule).
-3. `host` must pass `host_protocol.host_name`, must not be `pi`, and at most
-   `MAX_REMOTE_HOSTS` (4) distinct hosts may hold links in one hub run.
-4. The peer's parent must be an sshd session process (`stat` comm `sshd` or
-   `sshd-session`) with the hub's uid, and the parent's parent must be an sshd
-   monitor (comm `sshd` or `sshd-session`) whose real uid is 0 and which is
-   not pid 1. `/proc/<pid>/exe` of sshd processes is not readable by `pi`
-   (they changed credentials), so names and uids come from `stat` and
-   `status`, which are.
-
-The host the hub assigns to the link is that argv's last argument, which
-comes from the `authorized_keys` line, which only the Mac's key selects. No
-frame names the host.
-
-What this keeps out: a process running as `pi` that starts `bin/desk-link
-<mac>` itself has a parent that isn't an sshd session (and, if orphaned, a
-grandparent that is the user manager or pid 1, not a root sshd). Only a login
-over SSH produces the required ancestry, and the only key whose login runs
-that argv is the Mac's. What it doesn't keep out, as for the rest of the desk
-(see "Prime orchestrator" in the plan): a `pi` process that can SSH into the
-Pi as `pi` with an unrestricted key, rewrite this checkout, or stop the hub
-and listen on its sockets. A process that passes as the Mac's link can only
-act for Mac targets (it can't make a Pi target, below).
+The Pi holds only public material for the link. The hub keeps everything
+else about it in memory: one link object per host, the remote registrations,
+the candidates list.
 
 ### SSH
 
@@ -1262,62 +1265,200 @@ act for Mac targets (it can't make a Pi target, below).
 - **The `authorized_keys` line** on the Pi:
 
   ```
-  restrict,command="/home/pi/dev/llm-switchboard/.venv/bin/python -I -B /home/pi/dev/llm-switchboard/bin/desk-link <mac>" ssh-ed25519 AAAA… llm-switchboard-desk-link:<mac>
+  restrict,command="/home/pi/dev/llm-switchboard/.venv/bin/python -I -B /home/pi/dev/llm-switchboard/bin/desk-link" ssh-ed25519 AAAA… llm-switchboard-desk-link:<mac>
   ```
 
   `restrict` turns off port, agent and X11 forwarding, the pty and
-  `~/.ssh/rc`. The command is `shlex.join(DeskConfig.link_argv(host))`;
-  sshd runs it through the login shell, which execs the single command, so
-  the process argv is exactly that list (the hub's check 2). The final
+  `~/.ssh/rc`. The command is `shlex.join(DeskConfig.link_argv)`. The final
   comment is the marker that installs and removals match, as v1's
-  `llm-switchboard-host:<mac>` is for its line.
+  `llm-switchboard-host:<mac>` is for its line. The line limits what the
+  key can run; it is not what the hub trusts.
 - **Installer**: `llm-switchboard desk link-authorize <mac>` on the Pi reads
-  one public-key line on stdin (`host_authorize.public_key` validates it),
-  refuses `pi` and bad names, refuses a key blob that already appears on any
-  other `authorized_keys` line (so the v1 key or another host's key can't be
-  reused), and replaces any earlier line carrying its marker. The file edit
-  (lock, temp file, fsync, rename, every unrelated line kept) moves out of
-  `host_authorize.authorize` into a shared `ssh_authorized_keys.py`
-  (`replace_marked_line`, `remove_marked_line`) in a separate tidying commit
-  that leaves v1's behavior and tests as they are; both commands use it.
-- **Rollback**: `llm-switchboard desk link-revoke <mac>` on the Pi removes
-  exactly the line with that marker and then asks a running hub to drop that
-  host's link (operator op `link_drop`). The v1 line is never touched by
-  either command, and `host-authorize` never touches the desk line (the
-  markers differ).
-- **The relay's ssh call**: `ssh -T -i <key> -o IdentitiesOnly=yes -o
-  BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o
-  ServerAliveCountMax=3 -o ControlMaster=no -o ControlPath=none -o
-  ClearAllForwardings=yes -o RequestTTY=no <pi alias> desk-link`. The alias
-  is `LLM_SWITCHBOARD_PI_SSH` from the Mac's `local.env` (LAN or Tailscale
-  as the Mac's ssh config routes it). No multiplexing: a shared master would
-  run the session under another key's authentication, without the forced
-  command. The remote command word is informational; the forced command
-  ignores it.
+  one public-key line on stdin (`host_authorize.public_key` validates it).
+  1. It runs the proof verifier's self-test (Admission, below) through the
+     exact code path the hub uses. A failure refuses with "the Pi's
+     ssh-keygen can't verify SSH signatures (OpenSSH 8.1 or later is
+     needed); nothing changed", exit 2. The self-test is the version check:
+     it needs no version parsing, and the Mac's setup runs `link-authorize`
+     over ssh (Installing, below), so an older Pi stops the setup there,
+     before any file changes on either machine.
+  2. It refuses `pi`, bad names, a key blob that appears on any other
+     `authorized_keys` line or `link-signers` line (so the v1 key or another
+     host's key can't be reused), and a fifth host.
+  3. Under `link-signers.lock`, it writes the host's `link-signers` line,
+     then replaces any earlier `authorized_keys` line carrying its marker.
+  4. It asks a running hub to drop that host's link (operator op
+     `link_drop`), so no link authenticated with a replaced key lingers.
+     When a lock of that host was handed over a link with another key, it
+     prints that those locks now need `desk clear-stopped` (Hub side, below).
+
+  The `authorized_keys` edit (lock, temp file, fsync, rename, every
+  unrelated line kept) moves out of `host_authorize.authorize` into a
+  shared `ssh_authorized_keys.py` (`replace_marked_line`,
+  `remove_marked_line`) in a separate tidying commit that leaves v1's
+  behavior and tests as they are; both commands use it.
+- **Revocation**: `llm-switchboard desk link-revoke <mac>` on the Pi, under
+  `link-signers.lock`: removes the host's `link-signers` line first (from
+  then on no admission for that host can be published, since publication
+  rereads the file), then exactly the `authorized_keys` line with that
+  marker, then asks a running hub to drop the host's link (`link_drop`).
+  The v1 line is never touched by either command, and `host-authorize`
+  never touches the desk line (the markers differ).
+- **The relay's ssh call.** The relay never lets ssh read a configuration
+  file, so no `IdentityFile`, `CertificateFile` or agent from Jacob's
+  configuration can be offered. Each connection attempt:
+  1. `/usr/bin/ssh -G <pi alias>` (the alias is `LLM_SWITCHBOARD_PI_SSH`
+     from the Mac's `local.env`; stdin `/dev/null`, 5 s, output read to at
+     most 64 KiB, no shell). It evaluates Jacob's configuration, including
+     the `Match exec` that picks the LAN or Tailscale, and connects to
+     nothing. The relay takes only `hostname`, `port`, `user`,
+     `hostkeyalias` and `userknownhostsfile`, each validated (no
+     whitespace or control characters; a port 1..65535). It refuses
+     (`ssh_config_unsupported`, a 10-minute backoff) when `proxycommand` or
+     `proxyjump` is anything but `none`.
+  2. `/usr/bin/ssh -F none -T -i <key> -o IdentitiesOnly=yes -o
+     IdentityAgent=none -o PubkeyAuthentication=yes -o
+     PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o
+     HostbasedAuthentication=no -o GSSAPIAuthentication=no -o BatchMode=yes
+     -o StrictHostKeyChecking=yes -o HostName=<hostname> -o Port=<port> -o
+     User=<user> -o HostKeyAlias=<hostkeyalias> -o
+     UserKnownHostsFile=<userknownhostsfile> -o ConnectTimeout=15 -o
+     ServerAliveInterval=15 -o ServerAliveCountMax=3 -o ControlMaster=no -o
+     ControlPath=none -o ClearAllForwardings=yes -o ForwardAgent=no -o
+     RequestTTY=no <pi alias> desk-link`, with the environment `HOME` and
+     `PATH` only (no `SSH_AUTH_SOCK`). `HostKeyAlias` is omitted when `-G`
+     gives none. The remote command word is informational; the forced
+     command ignores it.
+
+  Why `-F none`: with Jacob's configuration loaded, `-i` adds to the
+  configuration's `IdentityFile` entries and `IdentitiesOnly=yes` keeps
+  them, so a refused desk key would fall back to another key with an
+  ordinary shell. Checked 2026-11-23 on the Mac (OpenSSH_10.3p1) with
+  throwaway keys and a throwaway configuration: `ssh -F <cfg> -i desk -o
+  IdentitiesOnly=yes -G x` lists both identity files; `ssh -F none -i desk
+  -o IdentitiesOnly=yes -o IdentityAgent=none -G x` lists only the desk key
+  and `identityagent none`. No multiplexing: a shared master would run the
+  session under another key's authentication.
+
+### Admission and proof of possession (hub, `desk/link_hub.py` and `desk/link_proof.py`)
+
+The hub admits a connection on `link.sock` as the link for `<mac>` only when
+the connecting side signs a fresh challenge with the private key whose
+public half `link-signers` lists for `<mac>`. Nothing about the connecting
+process, its parent or its SSH session counts: any process on the Pi, inside
+an SSH session (with any key, Jacob's unrestricted one included) or outside,
+fails without the Mac's private key.
+
+1. **Accept.** At most 2 admissions run at once and at most 20 connections
+   are accepted a minute across hosts; beyond either, the connection is
+   closed at accept, unread (logged once a minute). Steps 2 to 7 share one
+   10 s deadline from accept.
+2. **Peer uid.** `SO_PEERCRED`'s uid must be the hub's (it repeats what the
+   0600 socket in its 0700 directory already ensures).
+3. **Hello.** `link_hello {versions, relay_build, host, machine}` (Framing,
+   below). `host` passes `host_protocol.host_name` and is not `pi`;
+   `machine` is 32 hex characters. No common version: `link_refused`.
+4. **Signer entry.** `link-signers` is read through `read_bounded` (4 KiB)
+   and validated strictly (at most 4 lines, each `<host>
+   namespaces="llm-switchboard-desk-link" ssh-ed25519 <blob>`, hosts and
+   blobs unique). `host` must have a line, else `link_refused
+   {not_authorized}`; an unreadable or malformed file refuses every link
+   (`signers_unreadable`).
+5. **Challenge.** The hub sends `link_challenge {version, epoch, nonce}`:
+   the negotiated version, its epoch, and 32 fresh random bytes as hex,
+   used once. The relay answers `link_proof {v, signature}`: an armored
+   SSH signature (`-----BEGIN SSH SIGNATURE-----` to `-----END SSH
+   SIGNATURE-----`, at most 4 KiB) over the exact bytes
+
+   ```
+   llm-switchboard-desk-link-proof
+   version=<version>
+   host=<host>
+   machine=<machine>
+   epoch=<epoch>
+   nonce=<nonce>
+   ```
+
+   in namespace `llm-switchboard-desk-link`, made by `/usr/bin/ssh-keygen
+   -Y sign -f <key> -n llm-switchboard-desk-link` with the message on stdin
+   and the signature on stdout (environment `PATH=/usr/bin:/bin` only, so no
+   agent is consulted; 5 s; output read to at most 4 KiB).
+6. **Verify.** `/usr/bin/ssh-keygen -Y verify -f /dev/fd/<a> -I <host> -n
+   llm-switchboard-desk-link -s /dev/fd/<b>`, the message on stdin, `<a>` a
+   pipe carrying only that host's validated `link-signers` line, `<b>` a
+   pipe carrying the signature (so ssh-keygen reads exactly what the hub
+   validated, and the hub writes nothing to disk). No shell; `pass_fds` only
+   those two; environment `PATH=/usr/bin:/bin`; 5 s, then killed; stdout and
+   stderr each read to at most 4 KiB and never logged. Success is exit 0 and
+   stdout beginning `Good "llm-switchboard-desk-link" signature for <host>
+   with `. The log line is a code: `proof_ok`, `proof_bad`,
+   `verifier_timeout` or `verifier_unavailable`.
+7. **Publish**, under the hub's links lock: reread `link-signers`; the
+   host's line must still carry the blob just verified (a revocation or a
+   rotation since step 4 refuses, `not_authorized`). Then the per-host rate
+   (below), the host cap (4), retiring the host's current link if there is
+   one (Link objects, below), installing the new link object with the
+   verified key's SHA-256 fingerprint and `machine`, and `link_welcome`.
+
+The link's host is the principal whose `link-signers` line verified the
+signature. The hello's `host` only says which line to try; no frame field
+and no argv word decides it alone. The signed message binds the nonce, the
+hub's epoch, the negotiated version, the host and the machine, so a proof
+can't be replayed into another admission, run or version.
+
+**Self-test.** `desk/link_proof.py` carries a fixed test vector (a public
+key, a message, its signature; the private key was discarded when it was
+made). At hub start, and in `link-authorize`, the verifier must accept the
+vector and refuse it with one byte of the message changed, through the same
+pipe path as step 6. A failure disables links (`links` shows
+`verifier_unavailable`, every `link_hello` is refused with it); Pi targets
+are unaffected.
+
+Checked 2026-11-23 on the Mac (OpenSSH_10.3p1) with throwaway keys:
+`-Y sign` reads the message from stdin and writes a 322-byte armored
+signature; `-Y verify` accepts it with the signature given as `/dev/fd/3`,
+from a file and from a pipe, and exits 255 for another principal, another
+namespace and a changed message. `-Y` exists from OpenSSH 8.1. The Pi side
+(its OpenSSH version, `/dev/fd` pipes on Linux) is checked by the self-test
+itself and in the live checks.
+
+**The pump** (`bin/desk-link`, `desk/link_pump.py`) connects to `link.sock`
+and copies whole lines both ways. It checks each line's length against
+`MAX_LINK_LINE_BYTES` before forwarding it and exits on an oversize line
+(`desk-link: oversize`, exit 4), on EOF from either side (exit 0), or when it
+can't connect: then it writes `{"type": "link_refused", "reason":
+"hub_not_running", "versions": [1]}` (the version-independent shape,
+`versions` from `link_protocol`) to stdout and exits 3. It parses nothing
+else: the hub is the one parser. Each direction blocks on a full peer: when
+ssh stops reading, the pump stops reading the hub, and the hub's link
+writer reaches its deadline (Deadlines, below).
 
 ### Framing (`desk/link_protocol.py`, both machines)
 
 One JSON object per line, UTF-8, `\n`-terminated, at most
 `MAX_LINK_LINE_BYTES` = 80 KiB. Every reader (hub, relay, pump) checks the
-length before parsing and closes the link on an oversize line, invalid JSON,
-a non-object, a wrong `v`, an unknown `type`, a field of the wrong shape, or
-a message the receiver doesn't expect in its state. The cap is the channel
-protocol's 64 KiB line plus room for the link fields, so any channel frame
-the relay accepts fits once rewrapped (a test encodes the largest valid
-reply both ways).
+length before parsing. The hub and the relay close the link on an oversize
+line, invalid JSON, a non-object, a wrong `v`, an unknown `type`, a field of
+the wrong shape, a code outside its table, or a message the receiver can't
+accept in its state (the exceptions for late messages are listed below).
+The cap is the channel protocol's 64 KiB line plus room for the link fields,
+so any channel frame the relay accepts fits once rewrapped (a test encodes
+the largest valid reply both ways).
 
 **Version negotiation.** The first frame each way has a shape that never
 changes between versions and carries no `v`:
 
-- relay -> hub: `link_hello {versions: [1], relay_build: "<git short hash or ''>"}`.
-- hub -> relay: `link_welcome {version, epoch, heartbeat_seconds,
-  idle_timeout_seconds, max_line_bytes}`, the highest version both list; or
-  `link_refused {reason, versions}` and close. `reason` is one of `version`,
-  `hub not running`, `too many reconnects`, `too many hosts`, `not the desk
-  link`.
+- relay -> hub: `link_hello {versions: [1], relay_build: "<git short hash or ''>",
+  host, machine}`. `machine` is the first 32 hex characters of the SHA-256 of
+  `llm-switchboard-desk-machine:` plus the Mac's hardware UUID
+  (`gethostuuid`), so the raw UUID never leaves the Mac.
+- hub -> relay: `link_challenge {version, epoch, nonce}`, the highest version
+  both list; or `link_refused {reason, versions}` and close.
 
-After `link_welcome`, every frame carries `"v": <version>`. A mixed pair with
-no common version is refused, never downgraded silently:
+Then `link_proof {v, signature}` and `link_welcome {v, link_id,
+heartbeat_seconds, idle_timeout_seconds, max_line_bytes}` (or
+`link_refused`). Every later frame carries `"v": <version>`. A mixed pair
+with no common version is refused, never downgraded silently:
 
 - The hub records the host's link as `mismatch` with both version lists
   until a later link succeeds; the desk page shows "Mac link refused: the
@@ -1326,108 +1467,248 @@ no common version is refused, never downgraded silently:
 - The relay logs it once per change, refuses every channel hello with
   `desk link version mismatch`, and retries only after 10 minutes.
 
+**Wire codes.** Every `reason` on the link is a code, `[a-z_]{1,40}`, from
+the fixed table for its message type; free text from a channel, from ssh or
+from the hub never crosses the link and never reaches a log. The relay turns
+a code back into the exact text a Pi channel would get from the hub for the
+same case, so Claude sees the same words on both machines. The hub's reply
+refusal reasons and the channel's undeliverable reasons become named
+constant sets (`model.ReplyRefusal`, `channel.UndeliverableReason`, strings
+unchanged, a tidying commit), and the code tables are keyed maps over them,
+so a reason without a code fails a test.
+
+| Message | Codes |
+| --- | --- |
+| `link_refused` | `version`, `hub_not_running`, `too_many_reconnects`, `too_many_hosts`, `not_authorized`, `proof_failed`, `signers_unreadable`, `verifier_unavailable`, `admission_timeout` |
+| `register_refused` | `not_enrolled`, `enrolled_on_another_host`, `too_many_registrations`, `too_many_registers` |
+| `unregistered` (relay) | `channel_closed`, `channel_idle`, `channel_write_timeout`, `channel_busy`, `relay_recheck_failed` |
+| `drop` (hub) | `unenrolled`, `hub_recheck_failed` |
+| `undeliverable` | `guard_session_file`, `guard_session_changed`, `stdout_failed`, `channel_other` (the channel's own report, classified by the relay from `channel.UndeliverableReason`), `relay_recheck_failed`, `channel_busy`, `channel_write_timeout` (the relay's) |
+| `reply_result` | `ok: true` with `reason: null`; `ok: false` with one of `bad_reply`, `not_utf8`, `too_large`, `unknown_request`, `wrong_connection`, `not_outstanding`, `lock_store_error`, `session_changed` |
+| `presence` `state` | `gone`, `running`, `unverifiable` |
+
 **Messages (version 1).** `chan` is the relay's number for one channel
-connection (1..2^31-1, unique within the link, never reused within it);
-`query_id` is 16 hex characters; `request_id` has the hub's shape
-(`model.REQUEST_ID_PATTERN`); `reason` is at most 80 characters of
-`[A-Za-z0-9 _.:/-]`.
+connection, from a counter that runs for the relay process's whole life
+(1..2^31-1; the relay exits at the end of the range), so a `chan` never
+recurs, across links either. `query_id` is 16 hex characters;
+`request_id` has the hub's shape (`model.REQUEST_ID_PATTERN`).
 
 | Direction | Type | Fields | Meaning |
 | --- | --- | --- | --- |
-| relay -> hub | `register` | `chan, session_id, channel_pid, channel_start, claude_pid, claude_start, label, cwd` | A channel passed the Mac identity check. `label` is the session file's `name` (one line, at most `MAX_TITLE_LEN`, no control characters, may be empty); `cwd` its `cwd` (absolute, at most 4096, no control characters, may be empty); both metadata of the kind v1 rows carry |
+| relay -> hub | `register` | `chan, session_id, channel_pid, channel_start, claude_pid, claude_start, label, cwd` | A channel passed the Mac identity check. `label` is the session file's `name` (one line, at most `MAX_TITLE_LEN`, no control characters, may be empty); `cwd` its `cwd` (absolute, at most 4096, no control characters, may be empty) |
 | hub -> relay | `registered` | `chan, generation` | The hub registered it; the relay answers the channel `welcome {epoch, generation}` |
-| hub -> relay | `register_refused` | `chan, reason` | e.g. `not enrolled`, `enrolled on another host`, `too many registrations`; the relay answers the channel `refused {reason}` and closes it |
-| relay -> hub | `unregistered` | `chan, reason` | The channel disconnected or failed a Mac recheck; the hub drops that registration |
-| hub -> relay | `drop` | `chan, reason` | The hub dropped the registration (unenroll, a failed hub-side check); the relay closes that channel connection |
+| hub -> relay | `register_refused` | `chan, reason` | The relay answers the channel `refused {reason text}` and closes it |
+| relay -> hub | `unregistered` | `chan, reason` | The channel connection ended or failed a Mac recheck; the hub drops that registration |
+| hub -> relay | `drop` | `chan, reason` | The hub dropped the registration; the relay closes that channel connection |
 | hub -> relay | `event` | `chan, request_id, content` | A handed-off desk event for exactly that channel connection |
-| relay -> hub | `delivered` | `chan, request_id` | The channel reported writing it to Claude's stdin |
-| relay -> hub | `undeliverable` | `chan, request_id, reason` | The relay's or the channel's last check failed, or the channel's queue was full: nothing was written to Claude |
-| relay -> hub | `reply` | `chan, request_id, text, spoken` | The channel's `reply` tool call, after the relay's recheck |
-| hub -> relay | `reply_result` | `chan, request_id, ok, reason` | Passed back to the channel as `reply_result` |
+| relay -> hub | `delivered` | `chan, request_id` | The channel reported writing it to Claude's stdin pipe |
+| relay -> hub | `undeliverable` | `chan, request_id, reason` | The channel or the relay reported the event not written (codes above) |
+| relay -> hub | `reply` | `chan, request_id, text, spoken` | The channel's `reply` tool call, after the relay's checks (below) |
+| hub -> relay | `reply_result` | `chan, request_id, ok, reason` | Passed back to the channel as `reply_result` with the code's text |
 | hub -> relay | `presence_query` | `query_id, channel_pid, channel_start` | Is that Mac channel process still running? |
-| relay -> hub | `presence` | `query_id, state` | `gone`, `running` or `unverifiable` |
-| either | `ping`, `pong` | | Heartbeat; never reaches a channel or Claude |
+| relay -> hub | `presence` | `query_id, state` | The answer, on the link the query came on |
+| either | `ping`, `pong` | `n` (a counter) | Heartbeat; a `pong` echoes its `ping`'s `n`; never reaches a channel or Claude |
 
-**Heartbeats and timeouts.**
+**Replies the relay refuses itself.** Before forwarding a channel's `reply`,
+the relay checks that `request_id` has the hub's shape and is one of the
+last 8 request ids it forwarded to that `chan` as an `event`. Otherwise it
+answers the channel `reply_result {ok: false, reason: "no desk request with
+that id on this session; the reply was not delivered"}` and forwards
+nothing, so a model's typo never puts its text on the link. The hub still
+decides acceptance of everything forwarded.
 
-| Side | Rule |
+**Late and unsolicited messages.** Teardown races are normal, so these are
+dropped quietly (counted, not logged per message), never treated as a bad
+frame:
+
+| Receiver | Message | When | Handling |
+| --- | --- | --- | --- |
+| relay | `registered` | the channel already left or was refused for time | send `unregistered {chan, channel_closed}` |
+| relay | `register_refused`, `drop`, `reply_result`, `event` | the `chan` is already closed | ignore; for `event`, send `undeliverable {chan, request_id, channel_closed}` so the hub's evidence is exact |
+| relay | `reply_result` | no waiting reply for that id | ignore |
+| hub | `unregistered`, `delivered`, `undeliverable`, `reply` | a `chan` this link registered and the hub has since dropped | ignore (a `reply` gets no `reply_result`; the channel's own 10 s rule tells Claude it is unconfirmed) |
+| hub | `presence` | a `query_id` this link was sent that already timed out | ignore |
+
+A `chan` the receiver never saw on this link (the hub: above the highest
+`chan` registered on it; the relay: not yet issued) and a `query_id` never
+sent on this link are protocol violations: the link closes.
+
+### Deadlines, heartbeats and backpressure
+
+Every wait has a total deadline that includes queue and lock waits. No
+state, policy, enrollment or admission lock is held across link I/O or a
+wait for it.
+
+| Operation | Total deadline | On expiry |
+| --- | --- | --- |
+| Admission (hub, accept to `link_welcome`) | 10 s | close; `admission_timeout` |
+| A hub frame to the link (enqueue to written) | 5 s | the link is retired |
+| `Hub.send`'s event (enqueue to written) | 5 s | the link is retired; the request is `unknown` with its lock, `attempted` once the writer began the frame |
+| Presence at clear (enqueue to answer) | 5 s | `unverifiable` (503) |
+| A relay frame to ssh (enqueue to written) | 5 s | the link is retired |
+| A relay frame to one channel (enqueue to written) | 5 s | the channel is closed, `unregistered {channel_write_timeout}`; an `event` not wholly written also `undeliverable {channel_write_timeout}` (its final `\n` never went, so the channel can't act on it) |
+| A channel's `register` (hello to `welcome`) | the channel's 5 s (`WELCOME_WAIT_SECONDS`) | the relay waits 3.5 s for `registered`, then answers the channel `refused {desk link slow}`; a later `registered` gets `unregistered` |
+| A channel's `reply` (the tool call to `reply_result`) | the channel's 10 s (`REPLY_WAIT_SECONDS`), counted from the tool call, not from the event | the channel tells Claude the delivery is unconfirmed and resets its connection; the hub's decision stands and the desk shows it |
+
+**Heartbeats.**
+
+| Leg | Rule |
 | --- | --- |
-| Hub | Admission: the peer check, then `link_hello` within 10 s. Sends `ping` when it has sent nothing for 15 s; drops the link after 45 s without a frame from it. A write to the link socket that doesn't finish in 5 s drops the link |
-| Relay | Waits 15 s for ssh to connect plus 10 s for `link_welcome`. Sends `ping` after 15 s without sending; declares the link dead after 45 s without a frame from the hub, measured on `time.clock_gettime(time.CLOCK_MONOTONIC)`, which on macOS keeps counting through sleep. `time.monotonic()` is `mach_absolute_time()` on the Mac (checked 2026-11-23, Python 3.15 and 3.13), which stops during sleep, so it is not used for liveness. After a wake, a link silent for 45 s or more is dead at once; a shorter gap sends a `ping` at once and the 45 s rule applies |
+| Hub <-> relay | Each side sends `ping {n}` after 15 s without sending and retires the link after 45 s without a frame from the other. The hub measures on `time.monotonic()` (the Pi doesn't sleep); the relay on `time.clock_gettime(time.CLOCK_MONOTONIC)`, which on macOS keeps counting through sleep, plus the sleep gate (Sleep and wake, below) |
+| Relay <-> each channel | The relay answers a channel's `ping` with `pong` itself, sends the channel `ping` after 15 s without sending to it, and closes a channel with no frame from it for 45 s (`unregistered {channel_idle}`). The unchanged channel pings every 15 s from its one serve thread, which is also the thread that writes events to Claude's stdin, so a channel blocked on that write goes silent and is unregistered within 45 s; an idle healthy channel stays up on the relay's pings |
 | ssh | `ServerAliveInterval` 15 x `ServerAliveCountMax` 3: a dead TCP path ends the ssh process within about 45 s even when no frame is due |
 | Pump | No timer: it exits when either side closes, so the hub's and ssh's timeouts end it |
-| Channel (unchanged code) | Waits 5 s after `hello` for `welcome` (`WELCOME_WAIT_SECONDS`), so the relay's check plus the `register` round trip must fit in 5 s; a late `registered` finds the channel gone and the relay sends `unregistered`. Waits 10 s for `reply_result` (`REPLY_WAIT_SECONDS`), so the reply round trip over ssh must fit in 10 s; past it the channel tells Claude the delivery is unconfirmed and resets its connection, and the hub's later result stands |
 
-**Reconnect and backoff (relay).** 1 s, doubling to 60 s, with ±20 %
-jitter, reset once a link has stayed up 60 s. `hub not running`: doubling to
-5 minutes. `version`, `not the desk link`, or ssh exit 255 with
-`Permission denied`: a fixed 10 minutes, logged once per change.
-
-**Admission rate and replacement (hub).** At most one link per host. A new
-link for a host that has one replaces it: the hub drops the old link first
-(Link loss, below), then welcomes the new one. Replacement is what makes a
-wake from sleep reconnect at once while the Pi still holds the half-open
-old link. More than 6 admissions for one host in a minute are refused (`too
-many reconnects`), so two relays can't flap each other indefinitely (the
-relay's `flock` already prevents two on one Mac).
-
-**Backpressure: bounded everywhere, nothing buffered without a cap.**
+**Writers and queues.**
 
 | Where | Bound | When full |
 | --- | --- | --- |
-| Hub -> link socket | No hub-side queue: frames are written synchronously under the link's write lock with a 5 s timeout, into the kernel socket buffer to the pump | The write fails: the link is dropped (an `event` counts as attempted, so its request is unknown with its lock) |
+| Hub -> link | One writer thread per link object, 64 frames and 1 MiB. Callers enqueue and never write; `Hub.send` waits on its `event`'s completion (written, failed, or not begun) | The link is retired. An `event` that couldn't be queued counts as not attempted (`finish_write(attempted=False)`: nothing can emit it) |
 | Pump | One line in flight per direction | It stops reading its source |
-| Relay -> ssh stdin | One writer thread, 64 frames and 1 MiB | `reply`: refused back to the channel as `reply_result {ok: false, reason: "desk link busy; the reply was not delivered"}` (the request stays handed off; Claude may call `reply` again). `register`: the channel is refused `busy`. `delivered`, `undeliverable`, `unregistered`, `presence`: the link is dropped, since losing them would lose evidence. `ping`: skipped (the idle rule ends a link that stays stuck) |
-| Relay -> each channel | One writer thread per channel, 8 frames | An `event` that doesn't fit: nothing is written to the channel, the relay sends `undeliverable {reason: "channel busy"}`, then `unregistered` and closes the channel. Any other frame: the channel is closed and `unregistered` |
+| Relay -> ssh | One writer thread, 64 frames and 1 MiB | `reply`: refused back to the channel as `reply_result {ok: false, reason: "desk link busy; the reply was not delivered"}` (it was never queued; the request stays handed off; Claude may call `reply` again). `register`: the channel is refused `busy`. `delivered`, `undeliverable`, `unregistered`, `presence`: the link is retired, since losing them would lose evidence. `ping`: skipped (the idle rule ends a link that stays stuck) |
+| Relay -> each channel | One writer thread per channel, 8 frames | An `event` that doesn't fit: nothing is written to the channel, the relay sends `undeliverable {channel_busy}`, then `unregistered {channel_busy}` and closes the channel. Any other frame: the channel is closed and `unregistered {channel_busy}` |
 | Relay channels | 16 verified and 8 unverified connections | Refused at accept |
-| Hub per link | 16 registrations, 4 outstanding presence queries, 60 `register` attempts a minute | `register_refused {reason: "too many registrations"}`; a presence query beyond 4 answers `unverifiable` at once; past 60 a minute the link is dropped |
+| Relay refusal cache | 32 entries (LRU) | A channel refused `not_enrolled` is refused locally, for that session id and claude pid, for 25 s, without a `register` (Enrollment, below) |
+| Hub per link | 16 registrations, 4 outstanding presence queries, 120 `register` frames a minute | `register_refused {too_many_registrations}` or `{too_many_registers}`, the link kept; a presence query beyond 4 answers `unverifiable` at once |
+| Hub admissions | 2 at once, 20 accepts a minute, 6 admissions a minute per host | closed at accept; per host, `link_refused {too_many_reconnects}` |
 
-Hub logs for the link: link up, down and refused (host, version, reason),
+Because the reader threads only enqueue, a saturated Mac link delays
+nothing outside that link: a Pi send, a token revoke, the 5 s housekeeping
+pass and every HTTP request finish within their own bounds.
+
+**Reconnect and backoff (relay).** 1 s, doubling to 60 s, with ±20 %
+jitter, reset once a link has stayed up 60 s. `hub_not_running`: doubling to
+5 minutes. `version`, `not_authorized`, `proof_failed`,
+`verifier_unavailable`, `ssh_config_unsupported`, ssh exit 255 with a
+`permission_denied` or `host_key` stderr code, or an ssh exit whose first
+stdout line isn't a link frame (`forced_command_failed`: a missing
+`bin/desk-link` under Python exits 2, not 127): a fixed 10 minutes, logged
+once per change. ssh's stderr is read to at most 64 KiB and only classified
+(`permission_denied`, `host_key`, `connection_refused`, `timeout`,
+`name_resolution`, `other`); the code is logged at most once a minute.
+
+Hub logs for the link: link up, down and refused (host, version, code),
 registrations (session id prefix, generation), refusals, request ids of the
 hub's shape, presence results. Repeated identical refusals are logged at
-most once a minute per reason. Never content, labels or folders.
+most once a minute per code. Never content, labels or folders.
+
+### Link objects, replacement and the fence on old work
+
+Each admitted link is one object (`LinkSession`: `link_id` from the hub's
+counter, host, key fingerprint, machine, socket, writer, reader, a
+`retired` flag). On the relay the same holds for its side (`RelayLink`).
+Nothing ever looks a host's link up by name to act on it:
+
+- A remote registration's proxy, a pending presence query, a queued frame
+  and a reader each hold the link object they began on. Writing to a
+  retired object fails at once (`False`), without touching its successor.
+- **Retiring** (EOF, idle, a bad frame, a writer deadline, replacement,
+  `link_drop`, hub stop), under the links lock: set `retired`; remove the
+  host's entry only if it is this object; close the socket; discard the
+  writer's queue. A queued `event` the writer had not begun completes as
+  not attempted; one it had begun as attempted. Then, outside the lock,
+  every registration whose proxy holds this object is dropped through
+  `_drop_connection`, so its requests follow `drop_registration`
+  (`pending` -> `expired`, `handed_off` -> `unknown`, the lock kept), and
+  its pending presence queries answer `unverifiable`.
+- **Replacement**: a new link for a host that has one retires the old one
+  first (as above; no `drop` is sent, the old socket is simply closed),
+  then publishes the new one. Replacement is what makes a wake from sleep
+  reconnect at once while the Pi still holds the half-open old link. The old
+  reader's finalizer drops only its own object's registrations, so it can't
+  drop the successor's.
+- The relay, on retiring its side: closes every channel connection, which
+  discards their queues; waiting `reply` calls answer `connection to the
+  desk hub dropped; delivery unconfirmed` (the channel's existing wording).
+  The channels reconnect through their own backoff (1 s doubling to 30 s),
+  are refused `desk link down` until a new link is up, then register afresh
+  with new generations.
+
+### Sleep and wake (relay)
+
+The relay detects a sleep as growth in `CLOCK_MONOTONIC − CLOCK_UPTIME_RAW`
+(the first counts sleep on macOS, the second doesn't), sampled before every
+frame it dispatches, before every frame its writers write, and by a 1 s
+timer. Checked 2026-11-23: on the Mac both clocks exist in Python and their
+difference is about 552,000 s, the Mac's accumulated sleep since boot.
+
+- **Long sleep**: when the sleep-inclusive time since the relay last sent a
+  frame on the link is 40 s or more, the hub's 45 s rule has retired (or is
+  about to retire) the link: the relay retires its side at once, dispatching
+  nothing it had buffered and writing nothing it had queued.
+- **Short sleep**: the relay holds dispatch and writes, sends `ping {n}`
+  with a fresh `n`, and resumes only when `pong {n}` arrives within 10 s.
+  The stream is ordered, so frames read before that `pong` were sent by the
+  hub while the link was still its current link, and are dispatched in order
+  after it (held in memory up to 64 frames and 1 MiB, else the link is
+  retired). No `pong` in 10 s: the link is retired and the held frames are
+  discarded.
+- A discarded `event` was handed off by the hub, which by then has made the
+  request `unknown` with its lock kept: discarding it is consistent with
+  that state, and so is the rare case where it was dispatched just before
+  the gate (the lock stays until presence or Jacob clears it).
 
 ### Identity on the Mac (`desk/peer_mac.py`)
 
-The relay verifies a connecting channel before it says anything to the hub,
-and again before every event and every reply it forwards, and every 5 s.
 Process facts come from the kernel through `ctypes` (standard library):
 `proc_pidinfo(PROC_PIDTBSDINFO)` for the parent pid, uid and start time
 (`pbi_start_tvsec`, `pbi_start_tvusec`), `proc_pidinfo(PROC_PIDUNIQIDENTIFIERINFO)`
 for `p_uniqueid` and `p_puniqueid`, `proc_pidpath` for the executable, and
-`sysctl(KERN_PROCARGS2)` for the exec path and argv. Same-user processes are
-readable without privileges. A process that is gone (`ESRCH`) is distinct
-from one that can't be read (anything else).
+`sysctl(KERN_PROCARGS2)` for the exec path, argv and initial environment.
+Same-user processes are readable without privileges. A process that is gone
+(`ESRCH`) is distinct from one that can't be read (anything else).
+
+**The pinned-interpreter rule** (shared by both checks below): a process
+runs pinned argv `A` when its argv from the second element on equals
+`A[1:]`, and its first element, its `KERN_PROCARGS2` exec path and its
+`proc_pidpath` all equal the interpreter `A[0]` really runs:
+`realpath(A[0])`, or, when that is a framework build's
+`…/Python.framework/Versions/<v>/bin/python<v>`, that framework's
+`…/Versions/<v>/Resources/Python.app/Contents/MacOS/Python`. Homebrew's
+framework Python re-executes into `Python.app` with the same pid and
+replaces argv[0] (checked 2026-11-23 with the checkout's `.venv/bin/python`,
+3.13.2), so the phase 1 rule (argv equal, exe equal to `realpath(argv[0])`)
+can never hold on the Mac. The expected path is worked out at each check, so
+it follows a Homebrew upgrade; processes started before an upgrade are
+refused until they restart.
+
+**The channel check** (the relay, on each connecting channel, before it
+says anything to the hub; again before every event and every reply it
+forwards, and every 5 s):
 
 1. **Peer**: `getsockopt(SOL_LOCAL, LOCAL_PEERPID)` gives the pid, and
    `LOCAL_PEERCRED` the uid, which must be the relay's.
-2. **Pinned entrypoint**: the peer's argv from its second element on must
-   equal `DeskConfig.channel_argv[1:]` (`-I -B <repo>/bin/desk-channel`).
-   Its first element, its `KERN_PROCARGS2` exec path and its `proc_pidpath`
-   must all equal the interpreter that `channel_argv[0]` really runs:
-   `realpath(channel_argv[0])`, or, when that is a framework build's
-   `…/Python.framework/Versions/<v>/bin/python<v>`, that framework's
-   `…/Versions/<v>/Resources/Python.app/Contents/MacOS/Python`. Homebrew's
-   framework Python re-executes into `Python.app` with the same pid and
-   replaces argv[0] (checked 2026-11-23 with the checkout's `.venv/bin/python`,
-   3.13.2), so the phase 1 rule (argv equal to `channel_argv`, exe equal to
-   `realpath(argv[0])`) can never hold on the Mac. The expected path is
-   worked out at each check, so it follows a Homebrew upgrade; channels
-   started before an upgrade are refused until their sessions restart.
-3. **Parent**: the peer's parent pid (never `CLAUDE_PID`) is a live process
-   whose `p_uniqueid` equals the peer's `p_puniqueid` (pid reuse can't
-   substitute a parent), whose argv carries `--mcp-config <DeskConfig.mcp_config>`
-   and `--dangerously-load-development-channels server:desk` as adjacent
-   pairs (`peer.has_mcp_config_flag`, `peer.has_channel_enablement`).
+2. **Pinned entrypoint**: the peer runs `DeskConfig.channel_argv`
+   (`-I -B <repo>/bin/desk-channel`) by the pinned-interpreter rule.
+3. **Parent is an installed Claude with the desk flags first**: the peer's
+   parent pid (never `CLAUDE_PID`) is a live process whose `p_uniqueid`
+   equals the peer's `p_puniqueid` (pid reuse can't substitute a parent);
+   whose `proc_pidpath` is a regular file directly in
+   `realpath(DeskConfig.claude_versions_dir)` named for a version (the Pi's
+   `startup_identity.is_installed_claude` rule, reused); and whose argv
+   elements 1 to 4 are exactly `DeskConfig.launch_flags` (`--mcp-config
+   <mcp.json> --dangerously-load-development-channels server:desk`). In
+   first position nothing can make them the value of another option or put
+   them after `--`, so they are effective options of that launch. This
+   proves the launch carried the desk flags as its first options; it doesn't
+   prove which launcher typed them, and any launch that does is an equally
+   deliberate opt-in. Checked 2026-11-23 on this Mac's own running Claude:
+   `proc_pidpath` is `~/.local/share/claude/versions/<version>`, the exec
+   path `~/.local/bin/claude`, argv[0] `claude`.
 4. **Session file**: `~/.claude/sessions/<parent pid>.json`, read through
    `bounded_read.read_bounded` (one non-blocking open, no link followed, a
    regular file, at most 64 KiB), has `pid` equal to the parent's pid,
    `sessionId` equal to the hello's session id, and `procStart` equal to the
-   parent's start second. On the Mac `procStart` is a UTC ctime-style string
-   (`"Mon Nov 23 02:00:40 2026"`, checked 2026-11-23), not clock ticks: the
-   relay collapses runs of spaces, parses it with `%a %b %d %H:%M:%S %Y` as
-   UTC, and compares it with `pbi_start_tvsec`. Whole seconds only; the
-   `p_uniqueid` link in step 3 is what rules out a reused pid.
+   parent's start second; and the file's `st_mtime` is at or after the
+   parent's start (`pbi_start_tvsec`, `pbi_start_tvusec`), so a file left by
+   an earlier process with the same pid and start second is refused. On the
+   Mac `procStart` is a UTC ctime-style string (`"Mon Nov 23 02:00:40
+   2026"`): the relay collapses runs of spaces, parses it with `%a %b %d
+   %H:%M:%S %Y` as UTC, and compares it with `pbi_start_tvsec`. Claude
+   rewrites the file while it runs (checked 2026-11-23: a live file's mtime
+   was 10 minutes after its process started), so the mtime rule never
+   refuses a live session. The file is evidence written by the parent; a
+   same-user file edit can forge it (class 3).
 5. The identity the relay keeps and sends: `channel_pid`, `channel_start`
    (`pbi_start_tvsec * 1_000_000 + pbi_start_tvusec` as decimal digits, so
    it fits `model.CHANNEL_START_PATTERN`), `p_uniqueid` of both (kept on the
@@ -1437,141 +1718,249 @@ from one that can't be read (anything else).
 **Recheck** (`peer_mac.recheck`): the channel still has the same pid,
 `p_uniqueid` and parent; the parent still has its `p_uniqueid`; the session
 file still names the session. Enrollment is not checked on the Mac (the hub
-holds it). A failed recheck before an event: `undeliverable {reason}`, then
-`unregistered`, and the channel is closed, with nothing written to it.
-Before a reply: the channel gets `reply_result {ok: false, reason:
-"session changed"}`, then `unregistered`, and it is closed. Every 5 s:
-`unregistered`. The channel's own check before writing to Claude's stdin
-(`HubLink._session_still_ours`) stays the last one.
+holds it). A failed recheck before an event: `undeliverable
+{relay_recheck_failed}`, then `unregistered {relay_recheck_failed}`, and the
+channel is closed, with nothing written to it. Before a reply: the channel
+gets `reply_result {ok: false, reason: "session changed"}`, then
+`unregistered`, and it is closed. Every 5 s: `unregistered`.
+
+**The last check is the channel's own** (`HubLink._session_still_ours`,
+under its stdout lock, right before the write), and its boundary is not
+atomic: between that check and Claude reading the line from its stdin pipe,
+`/clear` can still move the session, and the event then reaches the new
+session. The checks narrow that window; nothing closes it. `delivered`
+therefore means the line was written to the pipe, not that Claude handled it
+in the session the hub chose.
 
 **Conflicting registrations.** The relay doesn't arbitrate: it forwards
-every verified channel. Two live registrations for one session id are
-**ambiguous** at the hub, as on the Pi, and neither is routed until one goes.
+every verified channel. Two live registrations for one session id from the
+same host are **ambiguous** at the hub, as on the Pi, and neither is routed
+until one goes.
 
 **Presence** (`peer_mac.process_presence`): `gone` when `proc_pidinfo` says
 `ESRCH` or the start time differs, `running` when it matches, `unverifiable`
 otherwise.
 
+**The listener check** (`peer_mac.verify_relay_listener`, called by the
+channel on macOS after `connect` and before it sends `hello`):
+
+1. `LOCAL_PEERCRED`'s uid is the channel's own.
+2. `LOCAL_PEERPID` names a process that runs `DeskConfig.relay_argv` by the
+   pinned-interpreter rule.
+3. That process's initial environment (`KERN_PROCARGS2`) holds no `DYLD_`
+   variable (the launchd job sets only `HOME` and `PATH`).
+4. `LOCAL_PEERPID` read again gives the same pid, whose `p_uniqueid` didn't
+   change during the check.
+
+A failure logs one line (`relay listener refused: <code>`), closes, and
+takes the channel's normal backoff. Checked 2026-11-23: on macOS a connected
+client's `LOCAL_PEERPID` and `LOCAL_PEERCRED` name the listening process and
+its uid. So a same-user process listening on `channel.sock` while the relay
+is unloaded is refused, and unloading the relay is an off switch against
+class 2. `channel.py` imports `peer_mac` only on macOS, at that call.
+
+**Pi side.** The Linux channel keeps phase 1 behavior: no listener check
+beyond the 0600 socket in its 0700 directory. A same-user process on the Pi
+already drives Pi desk sessions through the supervisor's tmux server, so a
+listener check there would remove no capability, while pinning the hub's
+argv in every channel would make a unit change strand every Pi session. A
+test asserts the Linux channel still connects to a listener of any argv.
+
 **What the hub trusts the relay for, and what it decides itself.**
 
-- Trusted: that a `register` names a channel that passed steps 1 to 4 on the
-  Mac; that `delivered`, `undeliverable` and `reply` come from that channel
-  connection after a recheck; that `presence` answers truly.
-- Decided by the hub alone: the host (from the key, never a frame); the epoch;
-  the generation; whether `(host, session id)` is enrolled; ambiguity;
-  tickets, request ids, the target lock and its clear rule; whether a reply is
+- Trusted, once the link has proved the Mac's key: that a `register` names a
+  channel that passed the channel check on the Mac; that `delivered`,
+  `undeliverable` and `reply` come from that channel connection after a
+  recheck; that `presence` answers truly.
+- Decided by the hub alone: the host (the verified signer); the epoch; the
+  generation; whether `(host, session id)` is enrolled; ambiguity; tickets,
+  request ids, the target lock and its clear rule; whether a reply is
   accepted (the request handed to that registration, still handed off, the
   size caps, strict UTF-8, first valid wins); sends on or off; and every
   readiness label.
 - A relay cannot make a Pi target. Every registration from a link gets that
-  link's host. A session id enrolled for `pi`, or with a live Pi
-  registration, is refused (`enrolled on another host`). The relay never sees
-  a Pi session's events, since the hub writes an event only to the
-  registration it handed it to.
+  link's host, and a session id whose enrollment names another host is
+  refused (`enrolled_on_another_host`). The relay never sees a Pi session's
+  events, since the hub writes an event only to the registration it handed
+  it to.
 - The relay can't originate a request: the link has no message that creates
-  one. A link that passes as the Mac's can reach only Mac targets.
+  one.
 
 ### Hub side (`desk/link_hub.py`)
 
-- `LinkHub` owns `link.sock`: accept, the peer check (`link_peer.py`), the
-  hello, negotiation, replacement, one reader thread per link, the heartbeat
-  timer, presence queries, and the per-host link record for the snapshot.
+- `LinkHub` owns `link.sock`: accept, admission, negotiation, replacement,
+  one reader and one writer thread per link object, the link heartbeat,
+  presence queries, candidates, and the per-host link record for the
+  snapshot.
 - A remote registration is a `Registration` whose `host` is the link's host
   and whose `identity` is a `model.RemoteIdentity(host, link_id, chan,
   channel_pid, channel_start, claude_pid, claude_start, session_id)`. Its
   conn_id comes from the hub's own counter (`Hub._conn_ids`), so local and
   remote connections share one id space.
 - Each remote registration also has a `RemoteChannel` proxy in
-  `Hub._connections` under its conn_id, with the `ChannelConnection` surface
-  the hub already calls: `send(kind, **fields)` writes `EVENT` and
-  `REPLY_RESULT` as the link's `event` and `reply_result` with the proxy's
-  `chan` (returning whether the write finished), `send(PING)` is a no-op
-  (the link has its own heartbeat), and `close()` sends `drop` while the
-  link is up. So `Hub.send`, `_drop_connection`, `_drop_unenrolled` and
-  `_send_heartbeats` work for Mac targets without branches.
+  `Hub._connections` under its conn_id, holding its link object, with the
+  `ChannelConnection` surface the hub already calls: `send(EVENT)` enqueues
+  the link's `event` and waits for its completion within `Hub.send`'s 5 s;
+  `send(REPLY_RESULT)` enqueues and returns; `send(PING)` is a no-op (the
+  link has its own heartbeat; the relay pings the channel); `close()`
+  enqueues `drop` when its link is live and never waits. So `Hub.send`,
+  `_drop_connection`, `_drop_unenrolled` and `_send_heartbeats` work for Mac
+  targets without branches and never block on the link.
 - Link frames call the hub's existing handlers with the proxy as the
   connection: `state.mark_delivered`, `Hub._handle_undeliverable`,
-  `Hub._handle_reply`.
-- `Hub._recheck(identity)` for a `RemoteIdentity`: `None` while that link is
-  the host's current link and `(host, session id)` is still enrolled; else
-  the reason. It is cheap and local, so it runs in the 5 s loop, before
-  handoff and before a reply as for Pi identities.
-- **Link loss** (EOF, idle, a bad frame, a write timeout, replacement,
-  `link_drop`, hub stop): every registration of that link is dropped through
-  `_drop_connection`, so its outstanding requests follow
-  `drop_registration`: `pending` -> `expired`, `handed_off` -> `unknown` with
-  the lock kept. Outstanding presence queries answer `unverifiable`.
+  `Hub._handle_reply`. The link layer maps `_handle_reply`'s
+  `model.ReplyRefusal` to its code and a `None` reason to `reason: null`.
+- `Hub._recheck(identity)` for a `RemoteIdentity`: `None` while its link
+  object is not retired, is still the host's current link, and `(host,
+  session id)` is still enrolled for that host; else the reason. It is cheap
+  and local, so it runs in the 5 s loop, before handoff and before a reply
+  as for Pi identities.
 - **Clearing a Mac lock**: `Hub.clear` looks the lock up first
-  (`HubState.lock_info(session_id, lock_id)`, a new read under the state's
-  lock). For a host other than `pi` it asks that host's link for presence
-  outside every lock, bounded by 5 s, and then calls the unchanged
-  `HubState.clear_lock` with a `channel_process` that returns that answer.
-  `gone` is final (pid and start time are never reused together), so the
-  answer can't go stale in between. No link: `unverifiable`, which refuses
-  with 503 and the reason `the Mac link is down, so the session's channel
-  can't be checked; reconnect the Mac, or stop the session there and clear
-  once it reconnects`. A delivery the channel reported (`delivered`,
-  `undeliverable`) in this hub run needs no presence check, as on the Pi.
-- **Operator-only override**: `llm-switchboard desk clear <session id> <lock
-  id> --mac-session-stopped` on the Pi's shell (operator op `clear` with
-  `assert_stopped: true`) clears a lock whose host is not `pi`, only while
-  that host has no link, on Jacob's word that the session is stopped. It
-  exists so a Mac link removed for good can't leave a target locked forever.
-  It is refused for Pi locks, never offered on the page, and logged (lock id,
-  session prefix).
+  (`HubState.lock_info(session_id, lock_id)`, a read under the state's
+  lock). For a host other than `pi`, presence counts only from the host's
+  current link when that link's key fingerprint and machine equal the
+  lock's `link_key` and `machine` (Locks, below). The hub asks that link
+  outside every lock, within 5 s, the query bound to its `query_id` and to
+  that link object (an answer on any other link, or after the timeout, is
+  not used), and then calls the unchanged `HubState.clear_lock` with a
+  `channel_process` that returns that answer. `gone` is final (pid and start
+  time are never reused together on one machine), so it can't go stale in
+  between. No such link (down, or a link with another key or machine):
+  `unverifiable`, 503, with the reason `the Mac that holds this lock is not
+  connected, so its channel can't be checked; reconnect that Mac, or, once
+  you have seen the session exit there, use desk clear-stopped on the Pi`. A
+  delivery the channel reported (`delivered`, `undeliverable`) in this hub
+  run needs no presence check, as on the Pi.
+- **Operator-only override**: `llm-switchboard desk clear-stopped <session
+  id> <lock id>` on the Pi's shell, operator op `clear_stopped` (a phase 1
+  hub answers `unknown op`). It is for a lock whose Mac can't answer: the
+  link removed for good, the key rotated, the Mac replaced.
+  - The command first shows the lock (host, session id, since, key
+    fingerprint, machine prefix) and the statement it records: "I have
+    seen this Mac session exit and its desk channel is not running". On a
+    terminal Jacob types the session id's first 8 characters to confirm;
+    off a terminal, `--confirm <lock id>` must repeat the exact lock id.
+    The op carries `confirm` equal to the lock id.
+  - The hub rechecks everything at the mutation, under the state's lock:
+    the lock exists with that id and session; its host is not `pi`; no
+    current link for that host has the lock's key and machine (when one
+    does, the presence clear is the way); the request is not in delivery.
+  - It is never offered on the page and no HTTP route reaches it; it is
+    logged (lock id, session prefix, host).
+
+### Locks bound to the Mac that wrote them
+
+A lock handed over a link records, besides phase 1's fields, `link_key` (the
+link's verified key fingerprint, `SHA256:<base64>`) and `machine` (the
+hello's machine id, part of the signed proof). `locks.py` requires exactly
+phase 1's fields for a `pi` lock and phase 1's fields plus these two for any
+other host. Presence about a lock is taken only from a link with the same
+key and machine, so a replacement Mac that takes the name (a new key), or a
+second Mac given a copy of the key (another machine id), can never answer
+`gone` for the original's channel. Replacing a host's key is therefore
+always safe for locks: the old key's locks become clearable only by
+`clear-stopped`, which `link-authorize` says when it replaces a key.
 
 ### Enrollment for Mac sessions
 
 - **The Mac's opt-in is the launch.** A Mac session takes desk events only
-  when Jacob starts it with `claudep --desk`, which puts the pinned flags in
-  claude's argv; the relay requires them (identity step 3). Nothing on the
-  Mac records enrollment.
+  when Jacob starts it with `claudep --desk`, which puts the pinned flags
+  first in claude's argv; the relay requires them (identity step 3).
+  Nothing on the Mac records enrollment.
 - **The hub's list is the authority.** `config_dir/enrolled-hosts.json` on
   the Pi: `{"hosts": {"<host>": {"<session id>": {"since": <unix s>}}}}`,
   0600, at most 4 hosts, 64 sessions and 64 KiB, read through
-  `read_bounded` and validated as strictly as `enrolled.json` (anything
-  unreadable or malformed reads as no Mac enrollment and refuses edits with
-  503). It is a separate file because the phase 1 code (supervisor, picker,
-  hub) reads any unknown key in `enrolled.json` as a malformed file, which
-  would unenroll every Pi session. It is read and written only under
-  `enrolled.json`'s lock (`Enrollment.locked()`), so the lock order is
-  unchanged, and the hub rereads it with `enrolled.json` in
-  `refresh_files` and at every handoff.
-- **One host per session id.** Claude session ids are random UUIDs and
-  `fork-pi` makes a new one, so a real id never lives on two machines. The
-  hub keeps targets keyed by session id with `host` as an attribute, and
-  holds the invariant: enrolling an id for one host while it is enrolled,
-  registered or locked for another is refused (409 `enrolled on another
-  host`); an id present in both files is enrolled nowhere and its target
-  shows that error.
-- **Administration**: from the paired desk (`POST /desk/api/enroll
-  {session_id, host}`, `host` defaulting to `pi`) or the Pi's shell
-  (`llm-switchboard desk enroll --host <mac> <session id>`), as for Pi
-  sessions. The Mac has no desk enroll command.
+  `read_bounded` and validated as strictly as `enrolled.json`. It is a
+  separate file because the phase 1 code (supervisor, picker, hub) reads any
+  unknown key in `enrolled.json` as a malformed file, which would unenroll
+  every Pi session. It is read and written only under `enrolled.json`'s
+  lock (`Enrollment.locked()`), so the lock order is unchanged.
+- **One host per session id, enforced, not assumed.** Session ids are
+  random UUIDs, but `--session-id`, a copied transcript resumed elsewhere,
+  or unenrolling on one host and enrolling on another can all put one id on
+  two hosts. The hub keeps targets keyed by session id with `host` as an
+  attribute, and checks the host everywhere it matters:
+  - **One published view.** `refresh_files` reads both files under
+    `enrolled.json`'s lock and publishes one map `{session id: host}` in one
+    `HubState.set_enrollment` call, so no reader sees one file's change
+    without the other's. An id in both files is enrolled nowhere, and its
+    target shows `enrolled on two hosts`; an unreadable or malformed
+    `enrolled-hosts.json` publishes no Mac enrollment (Pi enrollment
+    stays) and refuses Mac edits with 503.
+  - **Registration, both ways.** A Mac `register` is refused unless the
+    published view names that link's host for the id; a Pi channel's
+    registration is refused unless it names `pi` (the phase 1 `is_enrolled`
+    becomes "enrolled for `pi` in the published view", which differs from
+    phase 1 only for an id that is also in `enrolled-hosts.json`).
+  - **Tickets and handoff.** A ticket is bound to `(epoch, host, session_id,
+    generation)`; `issue_ticket` and `hand_off` both require the target's
+    registration host to equal the published enrollment host.
+  - **Edits.** Enrolling an id for one host while it is enrolled,
+    registered or locked for another is refused (409 `enrolled on another
+    host`), checked against both files, the live registrations and the
+    locks under the same locks.
+  - **Offline edits** (`desk enroll` and `desk enroll --host`, when the
+    connect proved no hub listens) hold `enrolled.json`'s lock and read
+    `enrolled.json`, `enrolled-hosts.json` and `locks.json` (bounded,
+    validated) before writing either file. An unreadable or malformed file
+    among the three refuses the edit (exit 1, nothing written), as does an
+    id enrolled or locked for another host. This adds one refusal to the Pi's
+    offline `desk enroll`: an id enrolled or locked for a Mac.
+  - **The page** keys its selection, its request history, its speech and
+    its enrollment mutations by `(host, session_id)`: `renderReplies` and
+    `speakNewReplies` match both fields, so after a reassignment it never
+    shows or speaks one host's answer under the other.
+- **Host-qualified operations the phase 1 code refuses.** A new CLI or page
+  can meet a phase 1 hub during an upgrade or a rollback, so Mac enrollment
+  never rides the phase 1 messages:
+  - Operator ops `enroll_host {session_id, host}` and `unenroll_host
+    {session_id, host}`; a phase 1 hub answers `unknown op`, and the CLI
+    reports "the running desk hub is older and can't enroll Mac sessions;
+    nothing changed" (exit 1). The CLI falls back to the offline edit only on
+    `HubAbsent`, never after an answer.
+  - HTTP `POST /desk/api/enroll-host` and `/desk/api/unenroll-host
+    {session_id, host}`; a phase 1 hub answers 404, and the page says the
+    same. The page is served `no-store`, but a tab left open across a
+    rollback keeps the newer script, so this matters.
+  - The new hub refuses `enroll`/`unenroll` (op or route) carrying a `host`
+    key (400 `use enroll_host`), so nothing host-qualified is ever silently
+    read as a Pi edit. `enroll` without `host` stays the Pi edit.
+- **Enrolling a running Mac session takes effect at once. This is the Mac
+  exception to "enrolling takes effect at the next launch".** On the Pi the
+  launch adds the desk flags, so enrollment waits for it. A Mac session was
+  already launched with the desk flag, so enrolling it (from a candidate,
+  the typed form or `desk enroll --host`) makes that running session
+  reachable from the desk within about a minute (the relay's 25 s refusal
+  cache plus the channel's backoff), with no action on the Mac. The page's
+  button reads **Enroll now** and its confirmation says "Enroll now: this
+  running Mac session becomes reachable from the desk immediately"; the CLI
+  prints the same; the guide says it.
 - **Candidates**: a `register` the hub refuses only because the session
   isn't enrolled adds or refreshes an in-memory candidate `{host,
-  session_id, label, cwd, seen}` (at most 16, each forgotten 10 minutes
-  after its last attempt; a session unenrolled in this hub run is not
-  listed). The desk page lists them as **Mac sessions asking to join**, each
-  with an **Enroll** button. The channel retries on its own (its backoff
-  tops out at 30 s), so an enrolled candidate registers within 30 s with no
-  action on the Mac.
-- **Unenroll stops routing at once**: the hub's `_unenroll` rewrites the
-  file under the locks, republishes enrollment, and `_drop_unenrolled` drops
-  every registration of that session, which for a Mac session sends `drop`.
-  Routing stops in the hub before the call returns, whatever the relay does.
-  An unenroll that has returned is never overtaken by a handoff, by the same
-  locks as on the Pi. The Mac session keeps running and its channel keeps
-  retrying, refused.
+  session_id, label, folder, seen}`. `label` is cut to 80 characters and
+  `folder` is the last two components of `cwd`, cut to 120 characters, so
+  each entry is small whatever the frame carried. At most 16 candidates,
+  each forgotten 10 minutes after its last attempt. A session unenrolled in
+  the last 10 minutes is not listed (a second table of at most 16 entries,
+  oldest evicted). The desk page lists candidates as **Mac sessions asking
+  to join**, each with **Enroll now**. `desk status` lists them without the
+  folder.
+- **Unenroll stops routing at once**: `_unenroll_host` rewrites the file
+  under the locks, republishes enrollment, and `_drop_unenrolled` drops
+  every registration of that session, which for a Mac session enqueues
+  `drop`. Routing stops in the hub before the call returns, whatever the
+  relay does. An unenroll that has returned is never overtaken by a handoff,
+  by the same locks as on the Pi. The Mac session keeps running and its
+  channel keeps retrying, refused (and throttled by the relay's cache).
 - **The picker** shows the enrollment of Mac rows read-only, the same badge
   as Pi rows (`desk_enrolled`), from `enrolled-hosts.json` for that host.
 
 **The launcher change** (a separate change in the Mac shell-config repo,
 `mac/shell/agent-commands.zsh`, which the parent routes there): `claudep`
 takes `--desk` as its first argument only, removes it, and puts the flags
-`llm-switchboard desk flags --lines` prints (one argument per line) before
-the rest. `claudepr` and the other launchers are unchanged; a desk resume is
-`claudep --desk --resume <session id>`.
+`llm-switchboard desk flags --lines` prints (one argument per line) first,
+before every other argument. `claudepr` and the other launchers are
+unchanged; a desk resume is `claudep --desk --resume <session id>`.
 
 ```zsh
 claudep() {
@@ -1583,7 +1972,7 @@ claudep() {
       print -u2 "claudep --desk: llm-switchboard desk flags failed"; return 1
     fi
   fi
-  command claude --permission-mode bypassPermissions "${desk_flags[@]}" "$@"
+  command claude "${desk_flags[@]}" --permission-mode bypassPermissions "$@"
 }
 ```
 
@@ -1596,10 +1985,13 @@ path with spaces whole. `llm-switchboard` is on the Mac's PATH through the
 **Installing the Mac side**: `scripts/setup-mac-desk.sh` (new; v1's
 `setup-mac.sh` is unchanged), run on the Mac after `setup-mac.sh`:
 
-1. Generate `~/.ssh/llm-switchboard-desk-<mac>` if absent.
+1. Generate `~/.ssh/llm-switchboard-desk-<mac>` if absent, then sign and
+   verify a test message with it through `ssh-keygen -Y` (stops when the
+   Mac's ssh-keygen can't).
 2. `ssh <pi alias> /home/pi/dev/llm-switchboard/bin/llm-switchboard desk
    link-authorize <mac> < ~/.ssh/llm-switchboard-desk-<mac>.pub` (Jacob's
-   ordinary SSH access to the Pi, as v1's setup uses).
+   ordinary SSH access to the Pi, as v1's setup uses). Its verifier
+   self-test stops the setup on a Pi whose OpenSSH is too old.
 3. `llm-switchboard desk install-config` (the Mac's `mcp.json`).
 4. `<repo>/.venv/bin/python -m llm_switchboard desk relay-install`, which
    refuses off macOS or without the key, writes the plist and bootstraps it
@@ -1607,63 +1999,70 @@ path with spaces whole. `llm-switchboard` is on the Mac's PATH through the
 5. `launchctl print gui/$(id -u)/dev.llm-switchboard.desk-relay`.
 
 `scripts/setup-mac-desk.sh --remove` undoes it: `desk relay-install
---unload` (bootout and delete the plist), `ssh <pi alias> … desk
-link-revoke <mac>`, then deletes the two key files. It leaves `mcp.json`,
-which nothing loads without `--desk`.
+--unload` (bootout and delete the plist), `ssh <pi alias> … desk link-revoke
+<mac>`, then deletes the two key files. It leaves `mcp.json`, which nothing
+loads without `--desk`.
 
 ### Targets, tickets, requests, locks and replies
 
 - `Registration`, `Request` and the lock already have or gain `host`
   (`model.HOST` by default, so Pi code paths and the conversation-mode
   changes need no edits). `hand_off` writes the lock's `host` from the
-  registration instead of the constant.
+  registration, and for a remote registration its `link_key` and `machine`
+  from the link object.
 - `model.KNOWN_HOSTS` gives way to `model.is_desk_host(value)`: `pi` or a
   valid host name. The lock file's validator uses it.
 - `Target.host` is the session's host. `POST /desk/api/ticket` takes an
   optional `host`; when given it must equal the target's host (409 `wrong
-  host`). The ticket stays bound to `(epoch, session_id, generation)`, and
-  the generation is unique within the epoch across hosts.
+  host`). The generation is unique within the epoch across hosts.
 - `Request` views carry `host`. The state body gains `links: [{host, state:
-  "up"|"down"|"mismatch", since, detail}]` (hosts with an enrollment, a
-  lock, or a link in this hub run) and `candidates`.
+  "up"|"down"|"mismatch"|"verifier_unavailable", since, detail}]` (hosts in
+  `link-signers`, with an enrollment, with a lock, or with a link in this hub
+  run) and `candidates`.
 
 **Request states across the link.** "Handed off" is recorded, and the lock
-fsynced, before the hub writes the `event` frame, exactly as for a Pi
+fsynced, before the hub enqueues the `event` frame, exactly as for a Pi
 channel. A handed-off request is never retried by anyone: the hub writes each
 event once, the relay forwards it at most once to the one channel `chan`
 names and discards it if that channel is gone, and nothing re-sends a frame
 after a reconnect. A lost acknowledgement anywhere reads as unknown.
 
+What the channel's reports prove: `delivered` means the line was written to
+Claude's stdin pipe, not that Claude handled it (see the last check, above);
+a guard refusal (`guard_session_file`, `guard_session_changed`) means the
+channel wrote nothing; `stdout_failed` means the write failed and Claude's
+end of the pipe is gone, so whether a prefix of the line reached it is
+unknown. Each ends the writer's part (nothing can emit the event later), so
+each permits Jacob's explicit clear after he has checked the session, and
+none unlocks the target or retries anything by itself.
+
 | What happens | Request | Lock | Clearing it |
 | --- | --- | --- | --- |
 | Link down, or registration gone, before `hand_off` | `pending` -> `expired` | none | nothing to clear; safe to send again |
-| `hand_off` done, the `event` write fails or times out | `unknown` | kept | presence check (the write may have reached the pump) |
-| Written; link lost before `delivered` | `unknown` | kept | presence check through the relay: `running` refuses (409, stop the session), `gone` clears |
-| `delivered` received; link lost before the reply | `unknown` | kept | clears at once in this hub run (the writer reported); after a hub restart, presence check |
-| The relay's recheck or the channel's own check fails, or the channel's queue is full | `unknown` (`undeliverable`) | kept | clears at once: nothing was written to Claude |
+| `hand_off` done; the `event` couldn't be queued, or was discarded before the writer began it | `unknown` | kept | clears at once: nothing could be written |
+| The writer began the `event`; the write failed or passed its deadline | `unknown` | kept | presence check (part of it may have reached the pump) |
+| Written; link lost before `delivered` | `unknown` | kept | presence check through a link with the lock's key and machine: `running` refuses (409, stop the session), `gone` clears |
+| `delivered` received; link lost before the reply | `unknown` | kept | Jacob's clear needs no presence check in this hub run (the writer reported), and he checks the session first, since the line reached Claude's pipe; after a hub restart, presence check |
+| `undeliverable` with a guard code, or the relay's `channel_busy`, `channel_write_timeout`, `relay_recheck_failed` | `unknown` | kept | clears at once: nothing was written to Claude |
+| `undeliverable {stdout_failed}` | `unknown` | kept | clears at once; the channel can't write it later, but a prefix may have reached a Claude that was exiting |
 | Mac channel disconnects (session exit, `/clear`) | `unknown` | kept | presence check: normally `gone` |
-| Mac sleeps past about 30 s | the hub's 45 s idle rule loses the link | kept | as link loss; on wake the relay reconnects and the channels re-register with new generations |
+| Mac sleeps | the hub retires the link 45 s after the last frame it got (the relay pings every 15 s, so any sleep from about 30 s up) | kept | as link loss; on wake the relay reconnects and the channels re-register with new generations |
 | Relay restarts | link loss, channels disconnected | kept | as link loss |
-| Hub restarts (new epoch) | requests forgotten | kept, `earlier_run` | presence check through the next link |
-| Reply arrives on a new link | refused (`wrong connection`) | kept | as above |
+| Hub restarts (new epoch) | requests forgotten | kept, `earlier_run` | presence check through the next link with the lock's key and machine |
+| Reply arrives on a new link | refused (`wrong_connection`) | kept | as above |
 | Link lost while a reply is in flight | the hub may have accepted it | removed only if accepted | the channel tells Claude `delivery unconfirmed`; the desk shows what the hub decided |
+| The Mac's key is rotated, or another Mac takes the name | unchanged | kept | only `desk clear-stopped`, after Jacob saw the session exit on the original Mac |
 
 A tab's ticket or review bound to an older generation or epoch is stale, as
 on the Pi.
-
-On link loss the relay closes every channel connection and discards
-everything queued for them; waiting `reply` calls answer `connection to the
-desk hub dropped; delivery unconfirmed` (the channel's existing wording). The
-channels reconnect through their own backoff (1 s doubling to 30 s) and are
-refused (`desk link down`) until a new link is up, then register afresh.
 
 ### Readiness, Test, and the startup warning on the Mac
 
 - Readiness is the hub's, unchanged: a Mac registration shows `registered`
   ("no desk reply verified yet") until an exchange Jacob tapped, or the
   **Test** button, is answered through `reply` on that registration, then
-  `replied`. No hidden probe crosses the link; the link heartbeat never
-  reaches Claude.
+  `replied`. No hidden probe crosses the link; the heartbeats never reach
+  Claude.
 - The Mac combination (`claudep --desk` through the model gateway, tool search
   on, Jacob's hooks) counts as ready only after a disposable Mac session
   answers Test through `reply` on that exact setup; the hub can't see the
@@ -1683,27 +2082,45 @@ refused (`desk link down`) until a new link is up, then register afresh.
 
 - Each target carries a host badge (`Pi`, or the Mac's name).
 - One line per remote host: **Mac link up**, **Mac link down since
-  <time>**, or **Mac link refused: version mismatch (update both
-  machines)**. While a host's link is down its targets are listed (enrolled,
-  with any lock) but have no registration, so Dictate, Review, Send and Test
-  are disabled for them; enroll, unenroll and clear still work (clear answers
-  as above).
-- **Mac sessions asking to join**, with **Enroll**.
-- The typed enroll form gains a host choice (`pi` and the hosts in `links`).
+  <time>**, **Mac link refused: version mismatch (update both machines)**,
+  or **Mac link unavailable: the Pi can't verify the Mac's key (OpenSSH 8.1
+  or later is needed)**. While a host's link is down its targets are listed
+  (enrolled, with any lock) but have no registration, so Dictate, Review,
+  Send and Test are disabled for them; enroll, unenroll and clear still work
+  (clear answers as above).
+- **Mac sessions asking to join**, each with **Enroll now** and its
+  confirmation (Enrollment, above).
+- The typed enroll form gains a host choice (`pi` and the hosts in `links`);
+  choosing a Mac host shows the same **Enroll now** confirmation.
 - No **Acknowledge startup warning** for Mac targets.
 
 ### Privacy
 
+The boundary, exactly: **the desk itself writes no prompt or reply content to
+any log, to the v1 host exchange or to the Pi's disk, and adds nothing to v1
+frames.**
+
 - Desk prompts and replies cross between machines only on the link, only
   between the hub and the relay, and only for a request the hub handed off
   (prompt) or a reply to one (text and spoken).
-- Nothing desk-related enters v1: host rows, snapshots under
-  `~/.local/share/llm-switchboard/hosts/`, the action queue and its history,
-  the picker's POST audit log, or search. The hub never reads those either.
-- No log on either machine holds prompt or reply text, labels or folders
-  (the hub, the relay, the pump's one exit line, launchd's file).
-- Claude's own transcript on the Mac records the event and the `reply` call,
-  as on the Pi.
+- On the Pi they live in the hub's memory (the 20-reply, 256 KiB ring, as
+  for a Pi session), which, like any process memory, can be paged to the
+  Pi's swap. The desk's files on either machine never hold them.
+- No desk log holds prompt or reply text, labels or folders: the hub's, the
+  relay's, the pump's one exit line, the relay's launch log. Logs carry
+  codes, ids and prefixes only.
+- The desk adds nothing to the v1 exchange's frames, host rows, snapshots
+  under `~/.local/share/llm-switchboard/hosts/`, the action queue and its
+  history, or the picker's POST audit log, and never reads them.
+- **A desk exchange is part of the Mac session's own transcript**, which
+  follows the rules that already apply to every Mac session (AGENTS.md
+  "Mac sessions"): an unnamed session's title is its first prompt cut to one
+  line and goes to the Pi as metadata (Jacob's call on 2026-10-26), so a
+  session whose first prompt came from the desk sends that line as its
+  title; the Mac's own search index covers the transcript under its usual
+  extraction rule, on the Mac only; and an explicit `fork-pi` uploads the
+  whole transcript, desk exchanges included. The desk doesn't filter these
+  and doesn't promise more than v1 does for any Mac session.
 
 **AGENTS.md's "Mac sessions" rule** says "Nothing queued may start a process
 or send a prompt there." The link doesn't queue v1 actions or start a
@@ -1715,228 +2132,346 @@ after that one:
 > with its own key and forced command, delivering only desk events the hub
 > handed off (a tapped or voice-confirmed send) to sessions Jacob started on
 > the Mac with `claudep --desk` and enrolled on the desk. It never starts a
-> process. Its prompts and replies stay out of host rows, the action queue,
-> search and every log; a Mac session's desk reply lives only in the hub's
-> memory, like a Pi session's.
-
-And the search rule's "the Mac's index, its text and its search results
-never go to the Pi" stays true: desk replies are not index text and are
-never indexed.
-
-**The trust this adds.** The relay delivers whatever the hub sends. Whoever
-controls the Pi's `pi` account (and so can run or impersonate the hub) can
-therefore prompt any Mac session launched with `claudep --desk` while the
-relay runs, with that session's bypass permissions. The Mac-side limits are
-the per-launch flag and the relay's off switch. See "Open questions".
+> process. The desk writes no prompt or reply text to any log, to the host
+> exchange or to the Pi's disk, and adds nothing to the exchange's frames. A
+> desk exchange is part of the session's transcript on the Mac, which these
+> rules cover like any Mac session's: it can supply an unnamed session's
+> title, the Mac's index covers it, and `fork-pi` uploads it.
 
 ### Bounds
 
 | Where | What | Bound |
 | --- | --- | --- |
 | Pi, SD | `config_dir/enrolled-hosts.json` | 4 hosts, 64 sessions, 64 KiB; rewritten only on enroll and unenroll |
-| Pi, SD | `~/.ssh/authorized_keys` | one line per Mac (replaced, never appended twice) |
-| Pi, SD | `state_dir/locks.json` | unchanged: 64 entries, 64 KiB, Pi and Mac locks together |
-| Pi, memory | links, registrations, candidates, presence queries | 4 hosts; 16 registrations per link within the hub's 64; 16 candidates for 10 minutes; 4 queries per link |
-| Pi, journal | hub link logs | state changes and rate-limited refusals, under journald's limits |
-| Mac | relay log | 1 MiB x 2; the launchd file truncated at start above 256 KiB |
-| Mac, memory | relay queues | 64 frames / 1 MiB to ssh; 8 frames per channel; 16 + 8 channels |
+| Pi, SD | `config_dir/link-signers` | 4 lines, 4 KiB; rewritten only by `link-authorize` and `link-revoke` |
+| Pi, SD | `~/.ssh/authorized_keys` | one desk line per Mac, at most 4 (replaced, never appended twice) |
+| Pi, SD | `state_dir/locks.json` | unchanged: 64 entries, 64 KiB, Pi and Mac locks together (a Mac lock is about 100 bytes longer) |
+| Pi, memory | admissions | 2 at once (2 threads), 20 accepts a minute, 10 s each |
+| Pi, memory | links | 4 hosts, 2 threads each; writer queue 64 frames / 1 MiB each |
+| Pi, memory | registrations, presence queries | 16 per link within the hub's 64; 4 queries per link |
+| Pi, memory | candidates | 16 entries (label 80, folder 120 characters) for 10 minutes; 16 recently unenrolled |
+| Pi, memory | verifier | one `ssh-keygen` per admission, 5 s, 4 KiB of output |
+| Pi, operator socket | `desk status` | fits the 64 KiB response line at the worst case (64 registrations, 64 locks, 4 links, 16 candidates without folders, labels escaped as `\uXXXX`) |
+| Pi, journal | hub link logs | state changes and once-a-minute refusals, under journald's limits |
+| Mac | relay log | 1 MiB x 2 |
+| Mac | relay launch log | 256 KiB plus one traceback, across any number of crashes |
+| Mac, memory | relay queues | 64 frames / 1 MiB to ssh; 8 frames per channel; 16 + 8 channels; 64 frames / 1 MiB held across a wake; refusal cache 32 |
 
 `ROOTFS_PATH_BUDGETS_MIB` (the scripts repo's
 `pi/scripts/backup/backup_conf.sh`) has an entry for
 `/home/pi/.local/state/llm-switchboard/desk` (1 MiB) and none for
 `/home/pi/.config/llm-switchboard/desk`, which phase 1 already writes
 (`enrolled.json`, `desk-settings.json`, `mcp.json`, the TLS leaf) and which
-gains `enrolled-hosts.json`: the same change adds
+gains `enrolled-hosts.json` and `link-signers`: the same change adds
 `/home/pi/.config/llm-switchboard/desk:1` (a separate change in that repo).
 
-### Switching it off, and rollback
+### Switching it off, revocation and rollback
 
-- **Mac side**: `<repo>/.venv/bin/python -m llm_switchboard desk
+- **Mac side, for now**: `<repo>/.venv/bin/python -m llm_switchboard desk
   relay-install --unload` stops the relay and deletes its plist (so it
-  doesn't return at login). Running `--desk` sessions keep retrying the
-  missing socket every 30 s, silently; launching with `--desk` stays
-  harmless.
-- **Pi side**: `llm-switchboard desk link-revoke <mac>` removes the key line
-  and drops a live link; the relay's next login is refused and it retries
-  every 10 minutes, logging it once.
+  doesn't return at login). With the listener check, no other process can
+  stand in for it. Running `--desk` sessions keep retrying the missing
+  socket, each failure one line in that channel's stderr (Claude's MCP log),
+  backing off to every 30 s; launching with `--desk` stays harmless.
+- **Mac side, for good**: `scripts/setup-mac-desk.sh --remove` also deletes
+  the desk key, so even a relay someone starts by hand can't log in.
+- **Pi side**: `llm-switchboard desk link-revoke <mac>` removes the
+  `link-signers` line, then the key line, then drops a live link. An
+  admission already past its proof fails at publication; an SSH session
+  that authenticated before the revoke gets no link, because every link
+  needs a fresh proof against the current file. The relay's next attempts
+  are refused and it retries every 10 minutes, logging it once.
 - **While off**, the desk shows **Mac link down since <time>**, Mac targets
   unavailable with their locks, and nothing for Pi targets changes.
-- **Rolling the Pi back to phase 1 code**: first clear every Mac lock (with
-  the link up, or with `--mac-session-stopped`) and run `desk link-revoke
-  <mac>`. A phase 1 hub reads a `locks.json` entry with a host other than
-  `pi` as a corrupt lock file and refuses every send until it's gone; it
-  ignores `enrolled-hosts.json`. A forced command whose `bin/desk-link` is
-  missing exits 127 and the relay backs off.
+- **Rolling the Pi back to phase 1 code**, in this order:
+  1. `desk link-revoke <mac>` for every Mac host. From then on no Mac
+     handoff can happen, so no new Mac lock can appear.
+  2. For each remaining Mac lock: stop that session on the Mac, see it
+     exit, then `desk clear-stopped <session id> <lock id>`.
+  3. Immediately before the downgrade: `desk status` shows no link and no
+     lock whose host isn't `pi`.
+  4. Downgrade. A phase 1 hub reads a `locks.json` entry with a host other
+     than `pi` as a corrupt lock file and refuses every send until it's
+     gone; it ignores `enrolled-hosts.json` and `link-signers`; its
+     operator socket and routes answer the host-qualified operations with
+     `unknown op` and 404. A forced command whose `bin/desk-link` is missing
+     exits 2 (Python can't open the script) and the relay backs off 10
+     minutes (`forced_command_failed`).
 - **Rolling the Mac back**: unload the relay; nothing else on the Mac
-  depends on it.
+  depends on it. A phase 1 channel on the Mac would skip the listener
+  check, so roll back the relay and the channel code together, or remove the
+  key.
 
 ### Module plan
+
+Commits that come before the feature, each with the whole suite green:
+
+1. **Behavior: bounded session-file reads.** `peer.read_session_file`
+   reads through `bounded_read.read_bounded` (64 KiB, one non-blocking open,
+   no link followed, a regular file). Today it is an unbounded, following
+   `read_text()`, and the channel's final guard (`_session_still_ours`) calls
+   it under the stdout lock, so a FIFO or a huge file in its place blocks
+   event delivery; the Pi hub's `verify_peer` and `recheck` use it too. After
+   this commit such a file reads as `None` (the guard refuses with
+   `guard_session_file`; the hub refuses or drops the registration), on both
+   machines. Tests: `test_session_file_fifo_does_not_block_channel_guard`,
+   `test_oversize_session_file_reads_none`,
+   `test_session_file_symlink_reads_none`.
+2. **Tidying**: `ssh_authorized_keys.py` out of `host_authorize.py`, v1
+   behavior and tests unchanged.
+3. **Tidying**: `model.ReplyRefusal` and `channel.UndeliverableReason` as
+   named constant sets, strings unchanged.
 
 New modules, one concern each, standard library only (`ctypes` included),
 none importing the HTTP stack:
 
 | Module | Machine | Concern |
 | --- | --- | --- |
-| `desk/link_protocol.py` | both | Link framing: versions, the hello shapes, `LinkMessage`, `MAX_LINK_LINE_BYTES`, field validators, link timing and caps |
-| `desk/link_peer.py` | Pi | Who is on `link.sock`: `SO_PEERCRED`, the pinned `link_argv`, the sshd ancestry; returns the host |
+| `desk/link_protocol.py` | both | Link framing: versions, the hello and challenge shapes, `LinkMessage`, `MAX_LINK_LINE_BYTES`, field validators, the wire-code tables, link timing and caps |
+| `desk/link_proof.py` | both | The signed message, the namespace, the bounded `ssh-keygen -Y sign` and `-Y verify` calls, the self-test vector, `link-signers` parsing |
 | `desk/link_pump.py`, `bin/desk-link` | Pi | The forced command: connect to `link.sock`, pump bounded lines both ways |
-| `desk/link_hub.py` | Pi | `LinkHub`, the per-host link, `RemoteChannel` proxies, presence queries, candidates, link records |
-| `desk/remote_enrollment.py` | Pi | `enrolled-hosts.json`, under `enrolled.json`'s lock |
-| `desk/link_authorize.py` | Pi | `desk link-authorize` / `link-revoke`: the desk key's `authorized_keys` line |
+| `desk/link_hub.py` | Pi | `LinkHub`: admission, `LinkSession` objects and their writer queues, `RemoteChannel` proxies, presence queries, candidates, link records |
+| `desk/remote_enrollment.py` | Pi | `enrolled-hosts.json` under `enrolled.json`'s lock; the combined view; the offline-edit checks over both files and `locks.json` |
+| `desk/link_authorize.py` | Pi | `desk link-authorize` / `link-revoke`: the `link-signers` line and the `authorized_keys` line, in their order |
 | `ssh_authorized_keys.py` | Pi | (tidying) the marked-line edit shared by `host_authorize` and `link_authorize` |
-| `desk/peer_mac.py` | Mac | Channel identity on macOS: `LOCAL_PEERPID`, libproc and `KERN_PROCARGS2` through `ctypes` (loaded on first use, so the module imports on Linux for tests), the framework-interpreter rule, `procStart` parsing, recheck, presence |
-| `desk/relay_channels.py` | Mac | The relay's channel socket: accept, hello, verify, per-channel writers, the 5 s recheck |
-| `desk/relay_link.py` | Mac | The ssh child, negotiation, the writer queue, heartbeats on `CLOCK_MONOTONIC`, wake handling, backoff |
-| `desk/relay.py` | Mac | Wires the two, the `flock`, the rotating log; `desk relay` |
+| `desk/peer_mac.py` | Mac | macOS process facts through `ctypes` (loaded on first use, so the module imports on Linux for tests): the pinned-interpreter rule, the channel check, `procStart` and mtime rules, recheck, presence, the listener check |
+| `desk/relay_channels.py` | Mac | The relay's channel socket: accept, hello, verify, local ping/pong and idle, per-channel writers with deadlines, the 5 s recheck, the refusal cache, local reply refusals |
+| `desk/relay_ssh.py` | Mac | `ssh -G` reading and validation, the `-F none` argv, ssh stderr classification |
+| `desk/relay_link.py` | Mac | `RelayLink`: the ssh child, negotiation and proof, the writer queue, heartbeats on `CLOCK_MONOTONIC`, the sleep gate, backoff |
+| `desk/relay.py`, `bin/desk-relay` | Mac | Wires the two, the `flock`, the rotating log, the capped launch log; `desk relay` |
 | `desk/relay_launchd.py` | Mac | `dev.llm-switchboard.desk-relay`: plist, install, `--unload` |
 | `scripts/setup-mac-desk.sh` | Mac | Install and `--remove` |
 
 Wiring edits to existing files, kept small because the conversation-mode
 branch also edits several of them:
 
+- `desk/channel.py`: on macOS, `peer_mac.verify_relay_listener` after
+  connect (Linux unchanged); its undeliverable reasons from
+  `UndeliverableReason`.
 - `desk/model.py`: `is_desk_host`; `Registration.host`, `Request.host`
-  (default `HOST`); `RemoteIdentity`.
-- `desk/locks.py`: the host check uses `is_desk_host`.
+  (default `HOST`); `RemoteIdentity`; `ReplyRefusal`.
+- `desk/locks.py`: the host check uses `is_desk_host`; `link_key` and
+  `machine` required exactly for non-`pi` locks.
 - `desk/hub_state.py`: `register(..., host=HOST)`; `hand_off` takes the
-  lock's host from the registration; `set_remote_enrolled({session_id:
-  host})` beside `set_enrolled`, and `_check_routing` reads both with the
-  one-host rule; the optional `host` check in `issue_ticket`; `lock_info`;
-  `set_links` and `set_candidates` (like `set_labels`) and their snapshot
-  fields; `host` in target and request views.
+  lock's host, key and machine from the registration; `set_enrollment({session
+  id: host}, conflicts)` replacing `set_enrolled`'s callers, and
+  `_check_routing` reading it; the host in tickets; `lock_info`;
+  `clear_stopped`; `set_links` and `set_candidates` (like `set_labels`) and
+  their snapshot fields; `host` in target and request views.
 - `desk/hub.py`: build, start and close `LinkHub`; `_recheck` dispatch for
-  `RemoteIdentity`; `refresh_files` also reads `enrolled-hosts.json`;
+  `RemoteIdentity`; `refresh_files` publishes the combined view;
   `refresh_labels` takes Mac labels from the link; `clear` prefetches
-  presence for remote locks; enroll and unenroll take `host`; operator ops
-  `link_drop`, `status` with links and candidates, `clear` with
-  `assert_stopped`.
+  presence for remote locks; operator ops `enroll_host`, `unenroll_host`,
+  `clear_stopped`, `link_drop`; `status` with links and candidates; the
+  refusal of `host` on the phase 1 ops.
 - `desk/operator.py`: the new `OperatorOp` members.
-- `desk/config.py`: `link_socket`, `link_argv(host)`, `relay_lock`,
-  `remote_enrolled_file`.
-- `desk/cli.py`: `enroll|unenroll --host`, `clear --mac-session-stopped`,
-  `link-authorize`, `link-revoke` (Pi); `relay`, `relay-install [--unload]`
-  (Mac); `flags --lines` (both).
+- `desk/http_server.py`: the `enroll-host` and `unenroll-host` routes.
+- `desk/config.py`: `link_socket`, `link_argv`, `link_signers_file`,
+  `relay_argv`, `relay_lock`, `remote_enrolled_file`.
+- `desk/cli.py`: `enroll|unenroll --host` (through `enroll_host`, never the
+  phase 1 op), `clear-stopped`, `link-authorize`, `link-revoke` (Pi);
+  `relay`, `relay-install [--unload]` (Mac); `flags --lines` (both).
 - `desk/static/app.js`, `index.html`, `app.css`: host badges, link lines,
-  candidates, the host choice, the Mac hint.
+  candidates with **Enroll now**, the host choice, selection, history and
+  speech keyed by `(host, session_id)`, the Mac hint.
 - `web_app.py`: `desk_enrolled` for Mac rows from `enrolled-hosts.json`.
 - `host_authorize.py`: uses `ssh_authorized_keys` (the tidying commit only).
 - `AGENTS.md`: map rows, the contracts below, the "Mac sessions" rule.
 - `tests/test_architecture.py`: Mac-only modules (`peer_mac`, `relay*`)
-  never imported by Pi runtime modules and the reverse; the relay's
-  launchd target exists.
+  never imported by Pi runtime modules and the reverse, except
+  `channel.py`'s macOS-only call; the relay's launchd target exists.
 - The user guide: the Mac section, `claudep --desk`, the link line, the
-  candidates, the CLI.
+  candidates and **Enroll now** (the Mac exception), `clear-stopped`, the
+  CLI, what `delivered` proves.
 
 New contracts (paths other things call):
 
 | Path | Caller | Owner |
 | --- | --- | --- |
-| `bin/desk-link <host>` | sshd, through the `authorized_keys` forced command; its argv is pinned by `DeskConfig.link_argv` and checked by `link_peer.py`, so moving it breaks the link | `desk/link_pump.py` |
+| `bin/desk-link` | sshd, through the `authorized_keys` forced command (`DeskConfig.link_argv`); moving it breaks the link | `desk/link_pump.py` |
+| `bin/desk-relay` | launchd (`DeskConfig.relay_argv`), and the Mac channel's listener check; moving it breaks the link | `desk/relay.py` |
 | `config_dir/run/link.sock` (Pi) | `bin/desk-link` | `desk/link_hub.py` |
+| `config_dir/link-signers` (Pi) | the hub's verifier | `desk/link_authorize.py` |
 | `config_dir/run/channel.sock` (Mac) | Mac channel servers (`DeskConfig.channel_socket`) | `desk/relay_channels.py` |
 | `authorized_keys` marker `llm-switchboard-desk-link:<host>` | `desk link-authorize`, `link-revoke` | `desk/link_authorize.py` |
 | `~/.ssh/llm-switchboard-desk-<host>` | the relay, `setup-mac-desk.sh` | `desk/relay_link.py` |
 | launchd `dev.llm-switchboard.desk-relay` | launchd | `desk/relay_launchd.py` |
+| Operator ops `enroll_host`, `unenroll_host`, `clear_stopped`, `link_drop`; routes `/desk/api/enroll-host`, `/desk/api/unenroll-host` | the CLI, the page | `desk/hub.py`, `desk/http_server.py` |
 | `llm-switchboard desk flags --lines` | `claudep --desk` in the Mac shell config | `desk/cli.py` |
 | `scripts/setup-mac-desk.sh [--remove]` | Mac operator | itself |
 
 ### Tests
 
-Unit and integration tests run on both machines in the whole suite; the
-macOS kernel calls and ssh are faked behind the adapters (`peer_mac`'s
-libproc reader, the relay's ssh spawner), and the integration tests join the
-hub, the pump and the relay with socket pairs in place of ssh, with the real
-`channel.HubLink` pointed at the relay's socket.
+Unit and integration tests run on both machines in the whole suite. The
+macOS kernel calls are faked behind `peer_mac`'s libproc reader; `ssh` is
+replaced by socket pairs joining the hub, the pump and the relay; the real
+`channel.HubLink` connects to the relay's socket. `ssh-keygen` and `ssh -G`
+are the real programs (both machines have them) with throwaway keys and
+configurations in a temporary directory.
 
-| Plan case | Tests |
+| Area | Tests |
 | --- | --- |
-| Mixed versions | relay `[1]` vs hub `[2]` and the reverse: refused, `mismatch` in the snapshot with both lists, channels refused with the mismatch reason, the 10-minute backoff; a frame with another `v` after the welcome, an unknown type, a hello with a `v`: link closed |
-| Disconnect | a link lost at each row of the request table, with the request state, the lock and the clear outcome asserted; channel disconnect -> `unregistered` -> unknown -> presence `gone` clears; link replacement drops the old link's registrations; `link_drop`; the pump's EOF on either side |
-| Sleep and wake | a fake `CLOCK_MONOTONIC` that jumps: the hub drops after 45 s of silence, the relay reconnects at once on a gap over 45 s and pings on a shorter one; outstanding requests stay unknown; channels re-register with new generations; a ticket for the old generation is refused |
-| Frame limits | an oversize line at the hub, the relay and the pump is closed before parsing; a line exactly at the cap passes; the largest valid channel reply fits once rewrapped; bad field shapes (`chan`, pids, starts, ids, label control characters, a relative `cwd`) refused |
-| Backpressure | a hub write that blocks past 5 s drops the link and leaves the event attempted; the relay's full ssh queue refuses a reply to the channel and drops the link for `delivered`; a full channel queue gives `undeliverable` with nothing written; caps on channels, registrations, presence queries, register attempts; memory stays within the caps under a flood |
-| Rollback | `link-authorize` keeps every other line, refuses `pi`, a bad name and a reused key blob; `link-revoke` removes only its marker; `host-authorize` leaves the desk line; `relay-install --unload` boots out only its label and deletes its plist; a phase 1 `LockStore` (KNOWN_HOSTS = {pi}) reading a Mac lock fails closed (documents the rollback step); the phase 1 `Enrollment` ignores `enrolled-hosts.json` |
-| Identity (Mac) | with a fake libproc: argv tail, exec path and `proc_pidpath` against the framework rule; a decoy second Python child; a parent without the pinned flags; a reused parent pid (`p_puniqueid` mismatch); `procStart` with one- and two-digit days and either spacing; a session id mismatch; `/clear` between register and event -> `undeliverable` before any write; `LOCAL_PEERCRED` of another uid |
-| Identity (link hop) | with a fake `/proc`: the pinned argv with another host, a parent that isn't sshd, an orphan reparented to pid 1, a grandparent with a non-zero uid; the host comes from argv, never a frame |
-| Hub rules | a Mac `register` for a Pi-enrolled id, or one with a live Pi registration, is refused; two Mac registrations for one id are ambiguous; unenroll sends `drop` and stops routing before it returns; candidates' cap and expiry; presence `running`, `gone`, `unverifiable` and timeout at clear; `--mac-session-stopped` only for remote locks and only without a link |
-| Privacy | prompts and replies carrying a marker phrase through a whole exchange; the hub's, relay's and pump's captured logs, the v1 hosts directory and the lock file never contain it |
+| Proof of possession | `test_good_proof_admits`; `test_proof_with_another_key_refused`; `test_proof_for_another_host_refused`; `test_old_nonce_replay_refused`; `test_proof_bound_to_epoch_version_and_machine`; `test_ordinary_same_uid_process_refused` (connects to `link.sock` and speaks the hello, then signs with no key, and with an unrelated key); `test_other_uid_refused`; `test_verifier_timeout_and_output_cap`; `test_verifier_gets_only_validated_signer_line`; `test_self_test_vector`; `test_verifier_unavailable_refuses_links_keeps_pi`; `test_publication_rechecks_signer_line` |
+| Relay ssh | `test_only_desk_identity_offered` (runs `ssh -G` with the relay's argv: one `identityfile`, `identityagent none`, `identitiesonly yes`, no `certificatefile`, password, keyboard-interactive, hostbased and GSSAPI off); `test_user_config_identity_would_be_added` (documents why `-F none`); `test_proxy_settings_refused`; `test_g_output_values_validated`; `test_stderr_classified_never_logged` |
+| Listener and channel identity (Mac) | with a fake libproc: `test_substitute_listener_refused` (another argv; another uid; a `DYLD_` variable; a pid that changed during the check); `test_genuine_relay_listener_accepted`; `test_linux_channel_listener_unchanged`; `test_parent_not_installed_claude_refused`; `test_desk_flags_not_first_refused` (later in argv, after `--`, as another option's value); `test_stale_session_file_same_second_refused` (mtime before the parent's start); argv tail, exec path and `proc_pidpath` against the framework rule; a decoy second Python child; a reused parent pid (`p_puniqueid` mismatch); `procStart` with one- and two-digit days and either spacing; a session id mismatch; `/clear` between register and event -> `undeliverable` before any write; `LOCAL_PEERCRED` of another uid |
+| Mixed versions | relay `[1]` vs hub `[2]` and the reverse: refused, `mismatch` in the snapshot with both lists, channels refused with the mismatch reason, the 10-minute backoff; a frame with another `v` after the challenge, an unknown type, a hello with a `v`: link closed. `test_new_cli_against_phase1_operator_handler`: the phase 1 desk package at commit `d024217`, exported with `git archive` into a temporary directory, serves a temporary home's operator socket through its own `OperatorServer` and `Hub.handle_operator` (no TLS or channel socket needed); `enroll --host mac`, `unenroll --host mac` and `clear-stopped` each exit 1 with nothing changed in `enrolled.json` or `enrolled-hosts.json` (skipped, naming the reason, only when that commit isn't in the local repository); `test_phase1_op_with_host_refused_by_new_hub`; `test_phase1_route_with_host_refused`; `test_host_routes_404_on_phase1_http` (same archive) |
+| Locks and presence | `test_presence_from_link_with_other_key_is_unverifiable`; `test_presence_from_other_machine_is_unverifiable`; `test_presence_answer_bound_to_query_and_link`; `test_late_presence_after_timeout_ignored`; `test_never_sent_query_id_closes_link`; `test_clear_stopped_requires_confirm_equal_to_lock_id`; `test_clear_stopped_refused_while_matching_link_up`; `test_clear_stopped_rechecks_lock_at_mutation`; `test_no_http_route_reaches_clear_stopped`; `test_lock_fields_by_host` (phase 1 fields for `pi`, plus `link_key` and `machine` otherwise) |
+| Replacement and late messages | `test_replacement_with_event_write_waiting` (the old writer blocked mid-queue; the event completes as attempted or not begun, never on the new link); `test_old_reader_finalizer_spares_successor`; `test_late_registered_reply_result_unregistered_ignored`; `test_unknown_chan_closes_link`; `test_chan_never_recurs_across_links`; `test_retired_proxy_write_fails_without_lookup` |
+| Deadlines and heartbeats | `test_relay_answers_channel_ping_locally`; `test_healthy_idle_channel_kept_by_relay_pings`; `test_channel_blocked_on_stdout_unregistered_within_45s` (the real channel with a stdout that never drains); `test_channel_write_deadline_includes_queue`; `test_event_wait_includes_queue_wait`; `test_saturated_link_does_not_delay_pi_send_revoke_or_housekeeping` (a pump that stops reading; each finishes within its own bound); `test_remote_close_never_blocks`; `test_register_wait_3_5s_then_refused` |
+| Wire codes | `test_successful_reply_null_reason` (the real `_handle_reply` result over the link); `test_final_check_reasons_mapped_to_codes` (the real channel's guard reasons, apostrophes included, after a simulated `/clear`); `test_every_reply_refusal_has_a_code`; `test_bad_or_unsolicited_request_id_refused_at_relay` (nothing forwarded); `test_free_text_never_on_wire_or_in_logs` |
+| Sleep and wake | `test_sleep_detector_arithmetic` (fake clocks); `test_dispatch_and_writes_held_after_short_sleep_until_pong`; `test_buffered_frames_before_pong_dispatched_in_order`; `test_no_pong_retires_and_discards`; `test_long_sleep_retires_without_dispatch` (an `event` buffered and a `delivered` queued: neither acted on) |
+| Disconnect | a link lost at each row of the request table, with the request state, the lock and the clear outcome asserted; channel disconnect -> `unregistered` -> unknown -> presence `gone` clears; `link_drop`; the pump's EOF on either side |
+| Hosts and enrollment | `test_registration_host_must_match_enrollment` (a Mac `register` for a `pi` id, a Pi channel for a Mac id); `test_enrollment_published_atomically` (no reader sees one file's change alone); `test_id_in_both_files_enrolled_nowhere`; `test_offline_enroll_checks_both_files_and_locks`; `test_offline_enroll_refused_on_unreadable_file` (each of the three files); `test_ticket_bound_to_host`; two Mac registrations for one id are ambiguous; unenroll enqueues `drop` and stops routing before it returns; the page's `desk_logic` tests: history and speech filter by host and session id; reassignment never shows the old host's reply |
+| Enroll now | `test_enroll_running_mac_candidate_reachable_without_relaunch`; `test_enroll_now_wording_page_and_cli`; candidates' cap, expiry, field cuts and the recently-unenrolled table |
+| Revocation and rollback | `test_revoke_during_active_send`; `test_revoke_during_delayed_hello` (an admission past its proof at the revoke fails at publication); `test_key_rotation_during_revoke`; `test_link_authorize_drops_old_link`; `test_rollback_order_leaves_no_remote_lock`; `link-authorize` keeps every other line, refuses `pi`, a bad name, a reused key blob and a fifth host; `link-revoke` removes only its marker and signer line; `host-authorize` leaves the desk line; `relay-install --unload` boots out only its label and deletes its plist; a phase 1 `LockStore` (KNOWN_HOSTS = {pi}) reading a Mac lock fails closed |
+| Bounds | `test_pending_admissions_capped`; `test_accept_rate_capped`; `test_worst_case_status_fits_operator_line`; `test_unenrolled_channels_throttled_without_dropping_link` (16 channels retrying; established registrations and their requests untouched); `test_relay_launch_log_capped_across_crash_loop` (`bin/desk-relay` run repeatedly with a failing import); frame limits at the hub, relay and pump; a line exactly at the cap passes; bad field shapes refused; memory stays within the caps under a flood |
+| Privacy | `test_marker_absent_from_desk_logs_and_files` (a marker phrase in a prompt and its reply through a whole exchange: absent from the hub's, relay's and pump's captured logs, the relay launch log, `locks.json`, `enrolled-hosts.json`, `link-signers` and the v1 hosts directory); `test_desk_adds_no_v1_frame_fields` (a v1 exchange's frames for a session have the same fields before and after a desk exchange); `test_desk_first_prompt_title_follows_v1_rule` (a Mac transcript whose first prompt is a desk event: its v1 row's title is exactly v1's one-line rule applied to it, and the row carries no other prompt or reply text) |
 
-Checks that only run live, on both machines, before the review that gates
-install:
+**Checks that only run live**, before the review that gates install. First
+with isolated, staged credentials, listener, policy files and sessions (a
+separate HOME on each machine, a throwaway desk key and signer line), then
+again after the reviewed installation:
 
-- The real `authorized_keys` line with `restrict` and the forced command;
-  sshd's process names and uids for the ancestry check on the Pi's OpenSSH.
-- `LOCAL_PEERPID`, the `proc_bsdinfo` and `proc_uniqidentifierinfo` layouts,
-  and `KERN_PROCARGS2` on the Mac's macOS against a real `--desk` session; the
-  framework-interpreter rule against the Mac checkout's `.venv`; `procStart`
-  for a session started on a day 1 to 9.
+- **Pi**: the verifier self-test through `/dev/fd` pipes on the Pi's
+  OpenSSH; the real `authorized_keys` line with `restrict` and the forced
+  command, with a positive case (the desk key gets the pump and a link) and
+  negative cases (a throwaway key not listed is refused by sshd; the v1 key
+  runs `host-exchange`, never the pump; an ordinary `ssh` login that runs
+  `bin/desk-link` by hand is refused at the proof).
+- **Mac, adapter facts the build depends on**: `LOCAL_PEERPID` and
+  `LOCAL_PEERCRED` on both sides of the socket, the `proc_bsdinfo` and
+  `proc_uniqidentifierinfo` layouts, `KERN_PROCARGS2` argv and environment,
+  against a real `claudep --desk` session and the launchd relay; the
+  framework-interpreter rule against the checkout's `.venv`; `procStart`
+  for a session started on a day 1 to 9; the session file's mtime against
+  the process start. Already checked on 2026-11-23, by the facts noted in
+  place: the client-side `LOCAL_PEERPID`, Claude's executable path and argv
+  shape, the session file being rewritten, the two clocks.
+- **Mac, ssh**: `ssh -v` with the relay's argv shows only the desk key
+  offered; with the desk line removed on the Pi, the login fails with no
+  fallback to another key.
+- **Mac, listener**: with the relay unloaded, a substitute listener on
+  `channel.sock` is refused by a real `--desk` session's channel.
 - A disposable `claudep --desk` session: the startup Enter, registration,
-  the Test round trip through `reply`, a tapped exchange, unenroll from the
-  tablet while it runs, `/clear` (the registration drops).
-- Lid closed past a minute and opened (the desk shows the link down, then
-  up; a request outstanding across it stays unknown), the relay unloaded and
-  reloaded, a hub restart, `link-revoke`.
+  the Test round trip through `reply`, a tapped exchange, **Enroll now** on a
+  running candidate, unenroll from the tablet while it runs, `/clear` (the
+  registration drops).
+- **Sleep, on the real lid**: with both clocks recorded before and after,
+  confirming `CLOCK_MONOTONIC` advanced across the sleep and
+  `CLOCK_UPTIME_RAW` didn't. Lid closed about 20 s with a tapped send made
+  while closed (the event waits in the stream): on wake the relay pings,
+  gets its `pong`, and delivers it. Lid closed about 90 s with the same: on
+  wake the relay retires the link without delivering (the session's
+  transcript has no such prompt), the request stays unknown with its lock,
+  and the link comes back.
+- The relay unloaded and reloaded, a hub restart, `link-revoke`, a key
+  rotation with a lock outstanding (presence refused, `clear-stopped`
+  works).
 - Off the van LAN over Tailscale.
 - No marker text in the Mac's relay logs, the Pi's journal, or the v1
   snapshot after a full exchange.
 
 ### Decisions made here
 
-- **Targets stay keyed by session id, with `host` as an attribute and one
-  host per id.** Rejected: rekeying every table by `(host, session_id)`,
-  which rewrites most of `hub_state.py` (also being changed for conversation
-  mode) to guard against a collision random UUIDs and `fork-pi`'s new ids
-  don't produce.
+- **The hub authenticates the link by proof of possession of the Mac's desk
+  key, verified with `ssh-keygen -Y verify` against `link-signers`.**
+  Rejected: process ancestry (sshd parent and grandparent), which proves an
+  SSH login of some kind, not which key, and depends on sshd's process
+  layout; a secret in the key's `environment=` (needs
+  `PermitUserEnvironment`, an sshd change); passing descriptors over
+  `SCM_RIGHTS` (authenticates nothing); `from=` on the key (the Mac's address
+  changes between the LAN and Tailscale). The uid check stays; argv and
+  ancestry checks are dropped rather than kept as defense in depth, since
+  the proof makes them prove nothing more and they could refuse a
+  legitimate login.
+- **The relay runs ssh with `-F none` and the routing values from `ssh
+  -G`.** Rejected: Jacob's configuration plus `-i` and `IdentitiesOnly=yes`,
+  which keeps every configured `IdentityFile` (shown with `ssh -G`); a
+  pinned copy of the routing rules, which would drift from Jacob's
+  configuration.
+- **The Mac channel checks its listener; the Linux channel doesn't.**
+  Rejected: the same check on the Pi (removes no capability there, since
+  tmux already gives it to the same user, and pins the hub's argv in every
+  channel); no check on the Mac (a same-user listener could then reach
+  sessions holding the terminal's privacy grants).
+- **The Mac's desk flags must be claude's first four arguments.** Rejected:
+  the phase 1 adjacent-pair test anywhere in argv (it accepts the strings
+  after `--` or as another option's value); parsing Claude's whole option
+  grammar (it changes between Claude versions).
+- **Host-qualified enrollment uses new operations and routes.** Rejected: a
+  `host` field on `enroll`, which a phase 1 hub ignores and applies to the
+  Pi; a version handshake on the operator socket (more mechanism than a new
+  op name, which the phase 1 dispatch already refuses).
+- **Mac locks record the link's key and machine, and presence counts only
+  from a matching link.** Rejected: refusing key replacement while a lock
+  exists, which needs a fence between `link-authorize` and the hub's
+  handoffs; trusting any link for the host name.
+- **One writer thread and bounded queue per link; callers wait with total
+  deadlines.** Rejected: synchronous writes under a shared mutex with a
+  per-write timeout, whose waits add up across writers and which would block
+  `close()` and reader threads on a slow Mac.
+- **Fixed wire codes; the relay turns them back into the channel's text.**
+  Rejected: forwarding the hub's and the channel's free-form reasons (one
+  apostrophe or `null` broke the link grammar, and a code is the only safe
+  thing to log).
+- **After a sleep the relay acts on nothing until a fresh `pong` proves the
+  link current.** Rejected: the 45 s arithmetic alone, which can't tell
+  pre-sleep buffered frames from current ones.
+- **Enrolling a running Mac session takes effect at once (the Mac
+  exception), said on the button, the confirmation, the CLI and the
+  guide.** Rejected: enforcing the launch boundary by requiring enrollment
+  before launch, which needs the Mac to learn enrollment and adds a
+  Pi-to-Mac write.
+- **The relay throttles refused channels; the hub refuses excess registers
+  without dropping the link.** Rejected: dropping the link at a register
+  rate, which let unenrolled sessions take down enrolled ones.
+- **Revoke before reconciling Mac locks when rolling back.** Rejected:
+  clearing locks first, which leaves time for a new handoff before the
+  revoke.
 - **Mac enrollment lives on the Pi, in `enrolled-hosts.json` under
-  `enrolled.json`'s lock.** Rejected: a key in `enrolled.json` (the phase 1
-  parser would read the file as malformed, unenrolling every Pi session
-  after a rollback); a list on the Mac (a desk unenroll would then need a
-  Pi-to-Mac write, and there would be two lists).
+  `enrolled.json`'s lock, published together with it.** Rejected: a key in
+  `enrolled.json` (the phase 1 parser would read the file as malformed,
+  unenrolling every Pi session after a rollback); a list on the Mac (a desk
+  unenroll would then need a Pi-to-Mac write, and there would be two
+  lists).
+- **Targets stay keyed by session id, with `host` as an attribute and one
+  host per id enforced at registration, ticket, handoff, edit and on the
+  page.** Rejected: rekeying every table by `(host, session_id)`, which
+  rewrites most of `hub_state.py` (also being changed for conversation
+  mode).
 - **The Mac's opt-in is the `--desk` launch, recorded nowhere on the Mac.**
   Rejected: a Mac-local enrollment file; the argv check already proves a
   per-launch act at the Mac.
-- **Discovery through candidates.** Rejected: typing Mac session ids on the
-  tablet as the only route (kept as a fallback through the host choice).
+- **Discovery through bounded candidates.** Rejected: typing Mac session ids
+  as the only route (kept through the host choice).
 - **On link loss the relay closes its channels; they re-register.**
   Rejected: keeping them and re-registering them itself, which adds relay
   state and special handling of in-flight replies to save at most 30 s.
-- **A newer link replaces the older one, rate-limited.** Rejected: refusing
-  the newer one, which would hold off a woken Mac until the Pi's idle
-  timeout.
-- **The hub writes link frames synchronously with a 5 s timeout.** Rejected:
-  a hub-side queue and writer, which adds an "enqueued but not written"
-  state to the handoff evidence.
+- **A newer link replaces the older one, rate-limited, and `chan` never
+  recurs within a relay process.** Rejected: refusing the newer one, which
+  would hold off a woken Mac until the Pi's idle timeout.
 - **The pump only checks line lengths; the hub parses.** Rejected: a second
   parser in the forced command.
-- **The link hop is authenticated by process ancestry.** Rejected: a secret
-  passed in the key's `environment=` (needs `PermitUserEnvironment`, an sshd
-  change), passing descriptors over `SCM_RIGHTS` (authenticates nothing),
-  `from=` on the key (the Mac's address changes between the LAN and
-  Tailscale).
 - **The Mac's interpreter is matched by the framework rule, worked out at
   each check.** Rejected: the phase 1 exact rule (can't hold on Homebrew's
-  framework Python); calibrating from the relay's own process (wrong after a
-  Homebrew upgrade until the relay restarts, and ties the relay to the same
-  interpreter).
-- **The relay measures liveness on `CLOCK_MONOTONIC`.** Rejected:
-  `time.monotonic()`, which stops while the Mac sleeps.
-- **Mac locks are cleared on the relay's presence answer, fetched outside
-  the state lock; an operator-only `--mac-session-stopped` covers a link
-  gone for good.** Rejected: no override (a removed link could lock a
-  target forever); a time-based release (unsafe while a dialog holds the
-  prompt).
-- **Mac labels come from the session file in `register`.** Rejected: the hub
-  reading v1 snapshots (couples the desk to v1, reads of up to 4 MiB).
+  framework Python); calibrating from the relay's own process.
+- **The relay measures liveness on `CLOCK_MONOTONIC` and detects sleep with
+  `CLOCK_UPTIME_RAW`.** Rejected: `time.monotonic()` alone, which stops while
+  the Mac sleeps.
+- **Mac labels come from the session file in `register`.** Rejected: the
+  hub reading v1 snapshots (couples the desk to v1, reads of up to 4 MiB).
 - **A late reply after a link loss is refused, as on the Pi** (the reviewed
-  rule: same verified connection). The common case stays clearable at once:
-  `delivered` almost always arrives before a sleep.
+  rule: same verified connection).
 - **`relay-install --unload` deletes the plist.** Rejected: v1's bootout
   only, which reloads the job at the next login.
+- **The relay's launch log is capped by its own entry point; launchd's
+  output goes to `/dev/null`.** Rejected: truncating at relay startup, which
+  a crash before startup never reaches.
 - **A separate `setup-mac-desk.sh`.** Rejected: adding steps to
   `setup-mac.sh`, which would install the desk link with every v1 setup.
 - **`claudep --desk` as the first argument only; `claudepr` unchanged.**
-  Rejected: parsing `--desk` anywhere in the arguments (it could be a
-  prompt word after `--`), and changing `claudepr`, which calls `claude`
-  rather than `command claude`.
+  Rejected: parsing `--desk` anywhere in the arguments, and changing
+  `claudepr`, which calls `claude` rather than `command claude`.
 - **No power assertion on the Mac.** Rejected: keeping it awake for the
   desk; sleep shows as "link down".
 
@@ -1945,8 +2480,13 @@ install:
 - **The Pi gains the power to prompt Mac sessions.** Today's rule keeps the
   Pi from starting anything on the Mac. With the link, anyone who controls
   the Pi's `pi` account can send prompts, with bypass permissions, to every
-  Mac session started with `claudep --desk` while the relay runs; the tap is
-  enforced on the Pi, and the Mac can't check it. Recommendation: accept it,
-  bounded by the per-launch flag and the relay's off switch, and say so in
-  AGENTS.md (the wording above). The alternative, a confirmation on the Mac
-  for every desk prompt, defeats using the desk away from the Mac.
+  live Mac session started with `claudep --desk` while the relay runs,
+  including sessions the honest hub would show as candidates or unenrolled.
+  The tap, the enrollment list and the sends switch are enforced on the Pi,
+  and the Mac can't check them. Whoever holds a key with an unrestricted
+  login to the Pi holds that power too, which on the Mac includes any
+  process running as Jacob that can read such a key. Recommendation: accept
+  it, bounded by the per-launch flag, the listener check and the off
+  switches, and say so in AGENTS.md (the wording above). The alternative, a
+  confirmation on the Mac for every desk prompt, defeats using the desk away
+  from the Mac.
