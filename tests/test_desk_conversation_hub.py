@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import secrets
+import threading
 import unittest
 
 from desk_fixtures import (
@@ -19,9 +20,9 @@ from llm_switchboard.desk.grants import (
     ANOTHER_PAGE, BAD_CONFIRM, CONVERSATION_LIVE, GRANT_NOT_CURRENT, GRANT_TTL_SECONDS, GRANT_WRONG_TARGET, TARGET_CHANGED,
     VOICE_OFF, VOICE_TEXT_TOO_LONG,
 )
-from llm_switchboard.desk.hub_state import HubState
+from llm_switchboard.desk.hub_state import CHANNEL_UNVERIFIABLE, HubState
 from llm_switchboard.desk.locks import LockStore
-from llm_switchboard.desk.model import MAX_VOICE_TEXT_BYTES, ConfirmMode, DeskError, LockStoreError
+from llm_switchboard.desk.model import MAX_VOICE_TEXT_BYTES, ChannelProcess, ConfirmMode, DeskError, LockStoreError
 from llm_switchboard.desk.operator import OperatorOp, operator_request
 from llm_switchboard.desk.page_build import PAGE_OUT_OF_DATE
 from llm_switchboard.desk.protocol import DELIVERY_SUFFIX, VOICE_NOTICE, MessageType
@@ -39,11 +40,12 @@ def new_token(state: HubState) -> str:
 
 
 class TimedLockStore(LockStore):
-    """The real lock file, plus time passing during its durable write and a
-    remove that can fail."""
+    """The real lock file, plus time passing during its durable write, and a
+    remove that can fail or stall (an SD card) until `remove_gate` is set."""
 
     after_add = None
     fail_remove = False
+    remove_gate: threading.Event | None = None
 
     def add(self, lock):
         super().add(lock)
@@ -51,6 +53,8 @@ class TimedLockStore(LockStore):
             self.after_add()
 
     def remove(self, lock_id):
+        if self.remove_gate is not None:
+            self.remove_gate.wait(30)
         if self.fail_remove:
             raise LockStoreError("lock file unwritable")
         super().remove(lock_id)
@@ -270,33 +274,106 @@ class VoiceSendTest(GrantStateCase):
         self.state.end_grant(self.token, grant)
         self.assert_handoff_refused(409, GRANT_NOT_CURRENT, request)
 
-    def test_a_grant_that_expires_during_the_durable_lock_write_refuses_the_handoff(self):
-        request = self.voice_send(self.grant())
-        self.wait(GRANT_TTL_SECONDS - 1)
-        self.store.after_add = lambda: self.wait(1)  # a slow SD-card write crosses expiry
-        self.assert_handoff_refused(409, GRANT_NOT_CURRENT, request)
-        # Nothing was handed off, so the lock just written was released.
-        self.assertEqual(LockStore(self.config.lock_file).load(), [])
-        self.assertIsNone(self.state.snapshot()["lock_store_error"])
-        self.store.after_add = None
-        tap = self.state.begin_send(self.ticket(), "hello there", self.token)
-        self.assertEqual(self.state.hand_off(tap.request_id)[0], 1)
+    def promptly(self, call, *args):
+        """Run `call` on another thread and fail unless it returns within
+        5 s: a call stuck behind the state's lock would wait for good."""
+        outcome = {}
 
-    def test_a_lock_that_cannot_be_released_after_that_refusal_stays_and_clears_without_a_channel_check(self):
-        request = self.voice_send(self.grant())
+        def run():
+            try:
+                outcome["value"] = call(*args)
+            except BaseException as exc:  # handed back to the test thread
+                outcome["error"] = exc
+        thread = threading.Thread(target=run, daemon=True)
+        thread.start()
+        thread.join(5)
+        self.assertFalse(thread.is_alive(), f"{call.__name__} was held up")
+        if "error" in outcome:
+            raise outcome["error"]
+        return outcome["value"]
+
+    def no_process_check(self, pid, start):
+        self.fail("a lock whose event was never written needs no channel-process check")
+
+    def refuse_after_the_lock_write(self, request):
+        """Hand off `request` while its grant expires during the durable lock
+        write (a slow SD card); returns the lock the target is left with."""
         self.store.after_add = lambda: self.wait(GRANT_TTL_SECONDS)
-        self.store.fail_remove = True
-        self.refused(409, GRANT_NOT_CURRENT, self.state.hand_off, request.request_id)
+        self.refused(409, GRANT_NOT_CURRENT, self.promptly, self.state.hand_off, request.request_id)
+        self.store.after_add = None
         self.assertEqual(self.state.request_state(request.request_id), "expired")
         lock = self.target_lock()
         self.assertEqual(lock["request_id"], request.request_id)
-        # Fail closed: the target stays busy and the store refuses every send.
+        return lock
+
+    def test_a_grant_that_expires_during_the_durable_lock_write_refuses_the_handoff_and_keeps_the_target_blocked(self):
+        spare = self.ticket()  # issued while the target was still free
+        request = self.voice_send(self.grant())
+        self.wait(GRANT_TTL_SECONDS - 1)
+        self.store.after_add = lambda: self.wait(1)  # the write crosses expiry by a moment
+        self.refused(409, GRANT_NOT_CURRENT, self.state.hand_off, request.request_id)
+        self.store.after_add = None
+        self.assertEqual(self.state.request_state(request.request_id), "expired")
+        # The lock just written stays, in memory and on disk, and keeps the
+        # target busy; the store itself is fine.
+        lock = self.target_lock()
+        self.assertEqual((lock["request_id"], lock["earlier_run"]), (request.request_id, False))
+        self.assertEqual([saved.lock_id for saved in LockStore(self.config.lock_file).load()], [lock["lock_id"]])
+        self.assertIsNone(self.state.snapshot()["lock_store_error"])
+        self.refused(409, "busy", self.state.issue_ticket, SESSION_A, self.gen_a, self.state.epoch)
+        self.refused(409, "busy", self.state.begin_send, spare, "hello there", self.token)
+        # Housekeeping keeps the evidence; nothing reached the channel, so
+        # Clear releases it with no channel-process check.
+        self.state.expire()
+        self.state.clear_lock(SESSION_A, lock["lock_id"], self.no_process_check)
+        self.assertIsNone(self.target_lock())
+        self.assertEqual(LockStore(self.config.lock_file).load(), [])
+        tap = self.state.begin_send(self.ticket(), "hello there", self.token)
+        self.assertEqual(self.state.hand_off(tap.request_id)[0], 1)
+
+    def test_that_refusal_writes_nothing_more_while_holding_the_state_s_lock(self):
+        # Every removal stalls until the test lets it go: the refused handoff
+        # returns anyway, and reads, a beat and a revoke go straight through.
+        gate = threading.Event()
+        self.addCleanup(gate.set)
+        self.store.remove_gate = gate
+        lock = self.refuse_after_the_lock_write(self.voice_send(self.grant()))
+        self.promptly(self.state.snapshot)
+        self.promptly(self.state.status)
+        other = self.promptly(self.grant, SESSION_B, self.gen_b)
+        self.assertEqual(self.promptly(self.state.beat_grant, self.token, other)["grant"], other)
+        self.assertEqual(self.target_lock(), lock)
+        token_id = self.state.status()["tokens"][0]["token_id"]
+        self.assertEqual(self.promptly(self.state.revoke, token_id).count, 1)
+        # The target stayed blocked throughout, and the lock is still released
+        # with no channel-process check.
+        gate.set()
+        self.state.clear_lock(SESSION_A, lock["lock_id"], self.no_process_check)
+        self.assertIsNone(self.target_lock())
+
+    def test_a_failed_release_of_that_lock_fails_closed_like_any_clear(self):
+        lock = self.refuse_after_the_lock_write(self.voice_send(self.grant()))
+        self.store.fail_remove = True
+        self.refused(503, "lock file unwritable", self.state.clear_lock, SESSION_A, lock["lock_id"],
+                     self.no_process_check)
+        # The lock stays, the target busy, and the store refuses every send.
+        self.assertEqual(self.target_lock(), lock)
         self.assertEqual(self.state.snapshot()["lock_store_error"], "lock file unwritable")
         self.refused(503, "lock file unwritable", self.state.issue_ticket, SESSION_B, self.gen_b, self.state.epoch)
-        # Nothing reached the channel, so clearing it needs no process check.
+        # Still provably never written, so a later clear needs no check either.
         self.store.fail_remove = False
-        self.state.clear_lock(SESSION_A, lock["lock_id"])
+        self.state.clear_lock(SESSION_A, lock["lock_id"], self.no_process_check)
         self.assertIsNone(self.target_lock())
+
+    def test_after_a_hub_restart_that_lock_is_an_earlier_run_s_and_gets_the_process_check(self):
+        lock = self.refuse_after_the_lock_write(self.voice_send(self.grant()))
+        restarted = HubState(LockStore(self.config.lock_file), now=self.clock, elapsed=self.elapsed,
+                             token_bytes=secrets.token_bytes)
+        self.assertEqual([(saved["lock_id"], saved["earlier_run"]) for saved in restarted.status()["locks"]],
+                         [(lock["lock_id"], True)])
+        self.refused(503, CHANNEL_UNVERIFIABLE, restarted.clear_lock, SESSION_A, lock["lock_id"])
+        restarted.clear_lock(SESSION_A, lock["lock_id"], lambda pid, start: ChannelProcess.GONE)
+        self.assertEqual(LockStore(self.config.lock_file).load(), [])
 
     def test_the_snapshot_lists_how_each_request_was_confirmed(self):
         # The page never voices a reply to a voice send itself, also after

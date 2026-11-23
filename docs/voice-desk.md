@@ -145,7 +145,8 @@ retention.
   `delivery in progress`): a socket write only means the channel has the
   event, and it stays in progress until that connection reports `delivered`
   (written to Claude's stdin) or `undeliverable`, or answers. Those reports,
-  and an event that was never written (no connection left to write to),
+  and an event that was never written (no connection left to write to, or
+  a voice handoff refused after its lock was written; see "A voice send"),
   are the evidence. Without them (the connection went away first: a
   disconnect, a failed recheck, or the 45 s idle timeout of a channel
   blocked writing to Claude, which can't answer heartbeats; the hub's event
@@ -814,11 +815,17 @@ that ended never resumes when the link returns.
   switched off, between `begin_send` and the handoff refuses it (the request
   expires; nothing was written). The grant is checked once more after the
   target lock is on disk and before handed_off is recorded, since a slow
-  write can outlast it: then the handoff is refused the same way and the
-  lock just written is removed. If that removal fails, the lock stays and
-  the lock store counts as failed, as after any failed write (every send is
-  refused until the hub restarts); in that run it clears without a channel
-  check, since nothing reached the channel. An omitted `confirm` is a tap, exactly as
+  write can outlast it: then the handoff is refused the same way (409
+  `conversation grant not current`, the request expired, nothing sent), and
+  the lock just written stays. Removing it there would be a second store
+  write while the state's lock and the hub's policy and file locks are
+  held, so a write slow enough to cross expiry could stall state reads,
+  beats and revokes twice over. The target therefore shows **Busy** with
+  that lock, its request expired, until Jacob clears it (the page's Clear or
+  `desk clear`): in that hub run the clear needs no channel check, since
+  nothing reached the channel; a failed clear fails closed like any other.
+  After a hub restart it is an earlier run's lock and gets the process
+  check. An omitted `confirm` is a tap, exactly as
   before. Tickets, one outstanding request per target, the target lock,
   reply acceptance and channel identity are the same as for a tap. Logs
   record the mode, never content.

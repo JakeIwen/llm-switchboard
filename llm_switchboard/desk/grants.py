@@ -26,7 +26,7 @@ from dataclasses import dataclass
 import hmac
 import re
 
-from .model import MAX_VOICE_TEXT_BYTES, ConfirmMode, DeskError, LockStoreError, RequestState
+from .model import MAX_VOICE_TEXT_BYTES, ConfirmMode, DeskError, RequestState
 from ..session_id import is_session_id
 
 GRANT_TTL_SECONDS = 15
@@ -165,22 +165,20 @@ class ConversationGrants:
     def _recheck_voice_after_lock(self, request, lock) -> None:
         """At `hand_off`, after the durable lock write and before handed_off
         is recorded: that write can be slow (an SD card), and the grant can
-        expire while it runs. Nothing has reached the channel yet, so the
-        prompt provably was not handed off and the lock just written is
-        released. If it can't be removed it stays, fail-closed as after any
-        failed lock-store write: the store refuses every send, and the lock
-        is marked as never written, so a clear needs no process check."""
+        expire while it runs. Then the handoff is refused with in-memory work
+        only, since a second store write here would hold the state's lock
+        (and the hub's policy and file locks around it) through another slow
+        write. The lock just written stays, in memory as on disk, so the
+        target stays busy; nothing has reached the channel, so it is marked
+        never written and a clear (the page's Clear or `desk clear`) releases
+        it with no channel-process check."""
         if request.confirm is not ConfirmMode.VOICE:
             return
         try:
             self._check_voice_handoff(request)
         except DeskError:
-            try:
-                self._lock_store.remove(lock.lock_id)
-            except LockStoreError as exc:
-                self._lock_error = str(exc.args[0] if exc.args else "lock store error")
-                self._locks[lock.lock_id] = lock
-                self._writer_done.add(request.request_id)
+            self._locks[lock.lock_id] = lock
+            self._writer_done.add(request.request_id)
             self._finish(request, RequestState.EXPIRED)
             self._bump()
             raise
