@@ -24,12 +24,16 @@ and the state it guards can't drift apart. The voice gate it reads
 
 from dataclasses import dataclass
 import hmac
+import re
 
 from .model import MAX_VOICE_TEXT_BYTES, ConfirmMode, DeskError, LockStoreError, RequestState
 from ..session_id import is_session_id
 
 GRANT_TTL_SECONDS = 15
 GRANT_ID_BYTES = 16
+# The shape `grant_conversation` issues; anything else is refused before the
+# constant-time comparison, which raises on non-ASCII text.
+_GRANT_ID = re.compile(f"[0-9a-f]{{{GRANT_ID_BYTES * 2}}}")
 
 GRANT_NOT_CURRENT = "conversation grant not current"
 GRANT_WRONG_TARGET = "conversation grant not for this target"
@@ -80,8 +84,8 @@ class ConversationGrants:
 
     def _current_grant(self, grant_id, token_hash) -> Grant:
         grant = self._live_grant()
-        if (grant is None or not isinstance(grant_id, str) or grant.token_hash != token_hash
-                or not hmac.compare_digest(grant.grant_id, grant_id)):
+        if (grant is None or not isinstance(grant_id, str) or not _GRANT_ID.fullmatch(grant_id)
+                or grant.token_hash != token_hash or not hmac.compare_digest(grant.grant_id, grant_id)):
             raise DeskError(409, GRANT_NOT_CURRENT)
         return grant
 

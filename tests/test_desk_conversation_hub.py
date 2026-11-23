@@ -147,6 +147,33 @@ class GrantTest(GrantStateCase):
         self.assertEqual(self.state.end_grant(self.token, new), {"ended": True})
         self.refused(409, GRANT_NOT_CURRENT, self.state.beat_grant, self.token, new)
 
+    def test_a_grant_id_not_in_the_hub_s_shape_is_refused_as_not_current(self):
+        grant = self.grant()
+        for bad in ("\u00e9" * 32, "\u00ff" + grant[1:], grant[:-1], grant + "0", grant.upper(), "", 7, True,
+                    None, [grant], {"grant": grant}):
+            with self.subTest(bad=bad):
+                self.refused(409, GRANT_NOT_CURRENT, self.state.beat_grant, self.token, bad)
+                self.refused(409, GRANT_NOT_CURRENT, self.state.end_grant, self.token, bad)
+                self.refused(409, GRANT_NOT_CURRENT, self.voice_send, bad)
+        self.assertEqual(self.state.beat_grant(self.token, grant)["grant"], grant)
+
+    def test_a_grant_request_with_hostile_fields_is_a_bad_request(self):
+        for session_id, generation, epoch in (
+                ("\u00e9" * 36, self.gen_a, self.state.epoch), (None, self.gen_a, self.state.epoch),
+                ([SESSION_A], self.gen_a, self.state.epoch), (SESSION_A + "\n", self.gen_a, self.state.epoch),
+                (SESSION_A, None, self.state.epoch), (SESSION_A, True, self.state.epoch),
+                (SESSION_A, float(self.gen_a), self.state.epoch), (SESSION_A, str(self.gen_a), self.state.epoch),
+                (SESSION_A, self.gen_a, None), (SESSION_A, self.gen_a, 0)):
+            with self.subTest(session_id=session_id, generation=generation, epoch=epoch):
+                with self.assertRaises(DeskError) as caught:
+                    self.state.grant_conversation(self.token, session_id, generation, epoch)
+                self.assertEqual(caught.exception.status, 400)
+        self.refused(409, "stale epoch", self.grant_with_epoch, "\u00e9" * 32)
+        self.refused(409, "stale generation", self.grant, generation=10 ** 40)
+
+    def grant_with_epoch(self, epoch):
+        return self.state.grant_conversation(self.token, SESSION_A, self.gen_a, epoch)
+
     def test_a_beat_after_the_target_reconnected_ends_the_grant(self):
         grant = self.grant()
         self.state.drop_registration(1)
@@ -382,6 +409,8 @@ class ConversationHubTest(HubCase):
         self.assertEqual(status, 200, granted)
         self.assertEqual(granted["expires_in"], GRANT_TTL_SECONDS)
         self.assertEqual(self.post("/desk/api/conversation/beat", {"grant": granted["grant"]}, token)[0], 200)
+        self.assertEqual(self.post("/desk/api/conversation/beat", {"grant": "\u00e9" * 32}, token),
+                         (409, {"error": GRANT_NOT_CURRENT}))
         self.assertEqual(self.post("/desk/api/conversation/end", {"grant": granted["grant"]}, token),
                          (200, {"ended": True}))
         self.assertEqual(self.post("/desk/api/conversation/end", {"grant": granted["grant"]}, token),
