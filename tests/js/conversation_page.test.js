@@ -1,6 +1,5 @@
 // The tablet page's conversation wiring: the real index.html ids, the real
-// scripts in index.html's order (text_rule, desk_logic, conversation_logic,
-// conversation, conversation_view, startup, app) in one window, with a small
+// scripts index.html loads, in its order, in one window, with a small
 // fake DOM, fetch, timers, recognition, speech and wake lock. Asserts through
 // what the page shows and what it sends. Run by
 // tests/test_desk_conversation_js.py with `node --test`.
@@ -15,9 +14,8 @@ const STATIC = path.join(__dirname, "..", "..", "llm_switchboard", "desk", "stat
 const L = require(path.join(STATIC, "conversation_logic.js"));
 const { PATH } = require(path.join(STATIC, "conversation.js"));
 const { REASON, BLOCKER, CUE } = L;
-const SCRIPTS = ["text_rule.js", "desk_logic.js", "conversation_logic.js", "conversation.js", "conversation_view.js",
-  "startup.js", "app.js"];
 const HTML = fs.readFileSync(path.join(STATIC, "index.html"), "utf8");
+const SCRIPTS = [...HTML.matchAll(/<script src="\/desk\/([^"]+)"><\/script>/g)].map((m) => m[1]);
 const POLL = PATH.STATE + "?after=";
 
 const settle = async () => { for (let i = 0; i < 6; i++) await new Promise((r) => setImmediate(r)); };

@@ -16,9 +16,6 @@
   var session = 0; // bumps on every (re)pairing so stale loops stop
   var state = null; // last good /state body
   var selectedId = null;
-  var primed = false; // first state load must not speak old replies
-  var spoken = new Set();
-  var recognition = null;
   var clearFrozen = null; // {session_id, lock_id, request_id} while the confirmation is open
   var sentRequestId = null; // request whose "waiting" result is on screen
   var pollSeq = 0; // counts state requests as they start
@@ -27,6 +24,7 @@
   var compose = freshCompose();
   var startup = null; // startup.js's blocked-session view, created in wire()
   var conv = null, convView = null; // conversation.js's controller and conversation_view.js, created in wire()
+  var audio = null; // page_audio.js: reply speech, Play and one-shot Dictate, created in wire()
 
   function $(id) { return document.getElementById(id); }
 
@@ -96,13 +94,12 @@
     session++;
     conv.unpaired();
     voidCompose(null);
-    stopSpeaking();
+    audio.stopSpeaking();
     // A new pairing starts clean: no old draft, target, result or settings.
     selectedId = null;
     clearFrozen = null;
     sentRequestId = null;
-    primed = false;
-    spoken.clear();
+    audio.forgetReplies();
     $("draft").value = "";
     $("interim").textContent = "";
     hideResult();
@@ -168,7 +165,7 @@
           token = r.data.token;
           $("pairing").hidden = true;
           $("desk").hidden = false;
-          primed = false;
+          audio.forgetReplies();
           startStateLoop();
           startup.start();
         } else if (r.status === 409 && r.data && r.data.error === "not confirmed") {
@@ -241,9 +238,9 @@
     if (selectedId !== null && !findTarget(selectedId)) selectedId = null;
     if (epochChanged) voidCompose("The hub restarted: the review was discarded.");
     else validateCompose();
-    speakNewReplies(next);
+    audio.repliesArrived(next, selectedId);
     conv.snapshot(next);
-    Logic.pruneIds(spoken, next.requests);
+    audio.pruneReplies(next.requests);
     expireWaitingResult(next, startSeq);
     if (clearFrozen && !Logic.clearStillValid(clearFrozen, findTarget(clearFrozen.session_id))) clearFrozen = null;
     render();
@@ -320,8 +317,8 @@
   function selectTarget(id) {
     if (id === selectedId) return;
     conv.targetSelected(id);
-    stopRecognition();
-    stopSpeaking();
+    audio.stopDictation();
+    audio.stopSpeaking();
     voidCompose(null);
     $("draft").value = "";
     $("interim").textContent = "";
@@ -362,8 +359,8 @@
     $("dictate").disabled = !composable || busy;
     $("test-btn").disabled = !composable || busy;
     $("review-btn").disabled = !composable || busy;
-    $("dictate").textContent = recognition ? "Stop" : "Dictate";
-    $("dictate").hidden = !speechInputAvailable();
+    $("dictate").textContent = audio.dictating() ? "Stop" : "Dictate";
+    $("dictate").hidden = !audio.speechInputAvailable();
     var noteNode = $("compose-note");
     if (t.lock) {
       if (!noteNode.textContent) noteNode.textContent = BUSY_NOTE;
@@ -383,10 +380,6 @@
 
   // ---- Compose / review ---------------------------------------------------
 
-  function speechInputAvailable() {
-    return typeof window.webkitSpeechRecognition === "function" || typeof window.SpeechRecognition === "function";
-  }
-
   function setNote(text) { $("compose-note").textContent = text || ""; }
 
   function hideResult() {
@@ -405,7 +398,7 @@
   // Drops the frozen destination and ticket. Keeps the draft text so it can
   // be reviewed again against a fresh destination.
   function voidCompose(reason) {
-    stopRecognition();
+    audio.stopDictation();
     compose = freshCompose();
     $("review").hidden = true;
     setNote(reason || "");
@@ -451,7 +444,7 @@
 
   function startReview(text) {
     // Dictation after this point would change the draft but not the review.
-    stopRecognition();
+    audio.stopDictation();
     if (!freezeDestination()) return;
     compose.phase = "review";
     compose.text = Rule.normalizeText(text);
@@ -520,7 +513,7 @@
 
   // Shows exactly what the hub said. Unknown is never retried.
   function settleSend(result) {
-    stopRecognition();
+    audio.stopDictation();
     if (result.outcome === "handed_off") { sentRequestId = result.request_id; sentAckVersion = null; sentAckSeq = pollSeq; refreshAfterSend(result.request_id); }
     if (result.outcome === "handed_off" || result.outcome === "answered") $("draft").value = "";
     if (result.outcome === "unknown") {
@@ -551,92 +544,15 @@
 
   // ---- Dictation ----------------------------------------------------------
 
-  function stopRecognition() {
-    if (!recognition) return;
-    var r = recognition;
-    recognition = null;
-    r.onresult = r.onend = r.onerror = null;
-    try { r.abort(); } catch (e) { /* already stopped */ }
-    $("interim").textContent = "";
-    $("dictate").textContent = "Dictate";
-  }
-
   function toggleDictation() {
-    if (recognition) { stopRecognition(); return; }
+    if (audio.dictating()) { audio.stopDictation(); return; }
     resetAfterResult();
     if (compose.phase === "review") { compose.phase = "edit"; $("review").hidden = true; }
     if (!freezeDestination()) { setNote("This target is not available for sends."); return; }
-    var Ctor = window.SpeechRecognition || window.webkitSpeechRecognition;
-    var rec = new Ctor();
-    rec.lang = "en-US";
-    rec.interimResults = true;
-    rec.continuous = false;
-    rec.onresult = function (e) {
-      var finalText = "";
-      var interim = "";
-      for (var i = e.resultIndex; i < e.results.length; i++) {
-        var piece = e.results[i][0].transcript;
-        if (e.results[i].isFinal) finalText += piece; else interim += piece;
-      }
-      if (finalText) {
-        var draft = $("draft");
-        var sep = draft.value && !/\s$/.test(draft.value) ? " " : "";
-        draft.value += sep + finalText.trim();
-      }
-      $("interim").textContent = interim;
-    };
-    rec.onerror = function (e) {
-      if (rec !== recognition) return;
-      setNote("Dictation stopped (" + (e && e.error ? e.error : "error") + "). You can type instead.");
-    };
-    rec.onend = function () {
-      if (rec !== recognition) return;
-      recognition = null;
-      $("interim").textContent = "";
-      $("dictate").textContent = "Dictate";
-    };
-    recognition = rec;
-    try {
-      rec.start();
-    } catch (e) {
-      recognition = null;
-      setNote("Dictation could not start. You can type instead.");
-    }
-    $("dictate").textContent = "Stop";
+    audio.startDictation();
   }
 
-  // ---- Speech output ------------------------------------------------------
-
-  function voiceAvailable() {
-    return "speechSynthesis" in window && window.speechSynthesis.getVoices().length > 0;
-  }
-
-  // A conversation's own speech is the controller's to stop: it marks a cut-off utterance first.
-  function stopSpeaking() {
-    if ("speechSynthesis" in window && !conv.holds()) window.speechSynthesis.cancel();
-  }
-
-  // Tracked, so the page's own speech counts toward Start's quiet rule.
-  function speak(text) {
-    if (!voiceAvailable() || !text || conv.holds()) return;
-    window.speechSynthesis.cancel();
-    var u = new SpeechSynthesisUtterance(text);
-    u.lang = "en-US";
-    conv.track(u);
-    window.speechSynthesis.speak(u);
-  }
-
-  // Speaks a reply only when it newly arrives for the target on screen; while conv.holds() it is only marked spoken.
-  function speakNewReplies(next) {
-    next.requests.forEach(function (rq) {
-      if (!rq.reply || spoken.has(rq.request_id)) return;
-      spoken.add(rq.request_id);
-      if (primed && rq.session_id === selectedId && document.visibilityState === "visible") {
-        speak(rq.reply.spoken);
-      }
-    });
-    primed = true;
-  }
+  // ---- Replies ------------------------------------------------------------
 
   function renderReplies(t) {
     var list = $("replies");
@@ -656,9 +572,9 @@
         li.appendChild(el("div", { "class": "reply-text", "data-testid": "reply-text", text: rq.reply.text }));
         var play = el("button", { type: "button", "class": "btn quiet", "data-testid": "play", text: "Play" });
         play.disabled = conv.holds();
-        play.addEventListener("click", function () { speak(rq.reply.spoken); });
+        play.addEventListener("click", function () { audio.speak(rq.reply.spoken); });
         var row = el("div", { "class": "row" }, [play]);
-        if (!voiceAvailable()) row.appendChild(el("span", { "class": "note", text: "No speech voice on this device" }));
+        if (!audio.voiceAvailable()) row.appendChild(el("span", { "class": "note", text: "No speech voice on this device" }));
         li.appendChild(row);
       }
       list.appendChild(li);
@@ -672,8 +588,8 @@
   // ---- Conversation -------------------------------------------------------
 
   function startBlocker() {
-    return window.DeskConversationLogic.startBlocker(state, selectedId, { recognizer: speechInputAvailable(),
-      voice: voiceAvailable(), tapSending: compose.phase === "sending", canStart: conv.canStart() });
+    return window.DeskConversationLogic.startBlocker(state, selectedId, { recognizer: audio.speechInputAvailable(),
+      voice: audio.voiceAvailable(), tapSending: compose.phase === "sending", canStart: conv.canStart() });
   }
 
   // A started conversation owns the target: the tap flow's review, ticket and dictation go.
@@ -730,7 +646,8 @@
   function wire() {
     conv = window.DeskConversation.create({ api: api, env: window.DeskConversation.browserEnv(window), deps: {
       selectedId: function () { return selectedId; }, visible: function () { return document.visibilityState === "visible"; },
-      voiceAvailable: voiceAvailable, onChange: render } });
+      voiceAvailable: function () { return audio.voiceAvailable(); }, onChange: render } });
+    audio = window.DeskPageAudio.create({ win: window, $: $, conv: conv, note: setNote });
     convView = window.DeskConversationView.create(document, { start: startConversation, end: conv.endTap });
     startup = window.DeskStartup.create({
       api: api,
@@ -780,8 +697,8 @@
     document.addEventListener("visibilitychange", function () {
       if (document.visibilityState !== "hidden") return;
       conv.hidden();
-      stopRecognition();
-      stopSpeaking();
+      audio.stopDictation();
+      audio.stopSpeaking();
       if (compose.phase === "edit" || compose.phase === "review") {
         voidCompose("The page was hidden: the review and ticket were discarded.");
         render();
@@ -790,7 +707,7 @@
     if ("speechSynthesis" in window) {
       window.speechSynthesis.addEventListener("voiceschanged", function () { if (state) render(); });
     }
-    function leave() { conv.hidden(); stopSpeaking(); }
+    function leave() { conv.hidden(); audio.stopSpeaking(); }
     document.addEventListener("freeze", leave);
     window.addEventListener("pagehide", leave);
   }
