@@ -298,6 +298,14 @@ class VoiceSendTest(GrantStateCase):
         self.state.clear_lock(SESSION_A, lock["lock_id"])
         self.assertIsNone(self.target_lock())
 
+    def test_the_snapshot_lists_how_each_request_was_confirmed(self):
+        # The page never voices a reply to a voice send itself, also after
+        # its conversation ended or when the send's answer never reached it.
+        voice = self.voice_send(self.grant())
+        tap = self.state.begin_send(self.ticket(SESSION_B, self.gen_b), "hello there", self.token)
+        confirms = {r["request_id"]: r["confirm"] for r in self.state.snapshot()["requests"]}
+        self.assertEqual(confirms, {voice.request_id: "voice", tap.request_id: "tap"})
+
     def test_a_tap_send_does_not_depend_on_the_grant_or_the_gate(self):
         request = self.state.begin_send(self.ticket(), "hello there", self.token, "tap")
         self.state.set_voice_enabled(False)

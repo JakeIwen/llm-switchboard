@@ -256,7 +256,7 @@ class SendHttpTest(HttpCase):
         _, _, view = self.call("GET", "/desk/api/state", token=token)
         [request] = view["requests"]
         self.assertEqual(request, {"request_id": sent["request_id"], "session_id": SESSION_A, "state": "answered",
-                                   "text": "how is the build?", "created": request["created"],
+                                   "text": "how is the build?", "created": request["created"], "confirm": "tap",
                                    "reply": {"text": "Green.", "spoken": "It is green."}})
         duplicate = self.call("POST", "/desk/api/send", {"ticket": ticket, "text": "how is the build?"}, token=token)
         self.assertEqual(duplicate[::2], (409, {"error": "ticket already used"}))

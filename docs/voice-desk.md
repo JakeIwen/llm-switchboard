@@ -268,7 +268,10 @@ while its request was in flight changes nothing):
   channel). Targets
   are the enrolled
   sessions plus any live registration. `Request = {request_id, session_id,
-  state, text, created, reply: {text, spoken} | null}` for the last 20.
+  state, text, created, confirm: "tap"|"voice", reply: {text, spoken} |
+  null}` for the last 20; `confirm` is how the send was confirmed, and the
+  page never voices a reply to a `"voice"` request on its own (a
+  conversation speaks it once; Play still can).
 - `POST /desk/api/ticket {session_id, generation, epoch}` -> `{ticket, expires_at}`.
 - `POST /desk/api/send {ticket, text, confirm?, grant?}` -> `{request_id,
   state}`. `confirm` is `"tap"` (the default when omitted) or `"voice"`; a

@@ -744,6 +744,7 @@ class HubState(ConversationGrants):
         reply = self._replies.get(request.request_id)
         return {"request_id": request.request_id, "session_id": request.session_id,
                 "state": request.state.value, "text": request.text, "created": request.created,
+                "confirm": request.confirm.value,
                 "reply": {"text": reply.text, "spoken": reply.spoken} if reply else None}
 
     def status(self) -> dict:
