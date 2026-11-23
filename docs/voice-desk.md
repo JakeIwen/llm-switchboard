@@ -7,9 +7,14 @@ runs one MCP **channel server** that connects to the **hub** over a Unix
 socket; the hub pushes desk events into the session and the session answers
 through the channel's `reply` tool.
 
+Beside the reviewed tap, the page offers **conversation mode** (below): one
+tap starts a hands-free conversation with one session, sent on a spoken
+"send it" and answered aloud.
+
 Phase 2 (the Mac relay) and phase 3 (a "prime" orchestrator) are not built.
 Production sends are off (`desk sends off`, the default) until a live tablet
-round trip passes.
+round trip passes, and conversations are off (`desk voice off`, the default)
+until the voice readiness check (in "Conversation mode") passes.
 
 ## Modules
 
@@ -21,7 +26,9 @@ round trip passes.
 | `desk/model.py` | model | `RequestState`, `Registration`, request/ticket/token/pairing records, limits |
 | `desk/hub_state.py` | rules | The hub's in-memory state machine; clock and randomness injected, no I/O |
 | `desk/locks.py` | adapter | The target lock file (fsync before handoff; refuses on unreadable, oversize, malformed or full) |
-| `desk/enrollment.py` | adapter | `enrolled.json` and `desk-settings.json` (`sends_enabled`): read through `bounded_read`, written and locked through `JsonFile` |
+| `desk/enrollment.py` | adapter | `enrolled.json` and `desk-settings.json` (`sends_enabled`, `voice_confirm_enabled`): read through `bounded_read`, written and locked through `JsonFile` |
+| `desk/grants.py` | rules | Conversation grants (a `HubState` mixin): the one-page rule, grant, beat and end, the voice-send checks at `begin_send` and `hand_off`, the voice gate's in-memory copy; refusal reasons |
+| `desk/page_build.py` | adapter | `PageFiles`: the page files read once at hub start and served from memory, and their build id (`<meta name="desk-build">`), which a pairing claim must match |
 | `desk/bounded_read.py` | adapter | `read_bounded`: one non-blocking open, no link followed, a regular file only, at most N bytes (absent vs. unreadable); shared by enrollment and `startup_registry` |
 | `desk/labels.py` | adapter | Target labels from a bounded, cached read of each transcript's head and tail |
 | `desk/peer.py` | rules + adapter | Channel identity: peer PID from the socket, `/proc` walk, session-file check and recheck; `process_presence` (whether a pid and start time still run), shared with locks and the startup acknowledgement |
@@ -31,12 +38,12 @@ round trip passes.
 | `desk/channel.py` | runtime | The channel server: MCP over stdio plus the hub socket client |
 | `desk/hub.py` | runtime | Wires the state, the channel socket, the operator socket and HTTPS |
 | `desk/http_server.py` | adapter | HTTPS (stdlib `ssl` + `ThreadingHTTPServer`), Host/Origin/token guards, long-poll |
-| `desk/operator.py` | adapter | The 0600 operator socket and its client (`pair`, `revoke`, `sends`, `status`, `clear`, `enroll`, `unenroll`, `startup_view`, `startup_ack`) |
-| `desk/cli.py` | entry | `llm-switchboard desk serve|pair|revoke|status|enroll|unenroll|sends|ack|flags|install-config` |
+| `desk/operator.py` | adapter | The 0600 operator socket and its client (`pair`, `revoke`, `sends`, `voice`, `status`, `clear`, `enroll`, `unenroll`, `startup_view`, `startup_ack`) |
+| `desk/cli.py` | entry | `llm-switchboard desk serve|pair|revoke|status|enroll|unenroll|sends|voice|ack|flags|install-config` |
 | `launcher.py`, `supervisor.py` | runtime | Start a kept Pi session through `claudepd`, adding desk flags only if enrolled at launch |
 | `screen.py`, `supervisor_state.py` | rules | Identify the complete development-channel dialog and its selected option, and report `startup_blocked` without restarting the session |
 | `tmux.py` | adapter | `Tmux.panes()` (pane id, pid, copy mode, by `@car_session`; raises when tmux fails rather than reading as no panes), `capture(..., check=True)`, and `send_enter_if(pane_id, PaneGuard)`, the server-side guarded Enter the acknowledgement uses |
-| `desk/static/` | page | The tablet page: plain HTML/CSS/JS, no build step, Chrome 119; `startup.js` is the startup-blocked view |
+| `desk/static/` | page | The tablet page: plain HTML/CSS/JS, no build step, Chrome 119. Scripts, in load order: `text_rule.js` (the text rule's mirror), `desk_logic.js` (the tap flow's pure decisions), `conversation_logic.js` (conversation mode's pure reducer and its vocabulary: phases, commands, cues, end reasons, limits, `startBlocker`), `conversation.js` (the conversation controller: every mic, sound and send effect, no DOM), `conversation_view.js` (the Start control and the overlay; renders only), `startup.js` (the startup-blocked view), `app.js` (wiring and the tap flow). Node tests in `tests/js/` |
 | `bin/desk-channel` | entry | Pinned channel server entry (`.venv/bin/python -I -B bin/desk-channel`) |
 | `bin/desk-adb-link` | entry | The USB reverse-forward loop for one tablet serial |
 | `systemd/llm-switchboard-desk.service`, `systemd/llm-switchboard-desk-adb.service` | unit | Hub and adb link user units (templated by `install.sh`) |
@@ -53,7 +60,7 @@ All 0600 in 0700 directories.
 | Path (`DeskConfig`) | Content | Bound |
 | --- | --- | --- |
 | `config_dir/enrolled.json` | `{"sessions": {<session id>: {"since": <unix s>}}}` and nothing else; an unreadable file (anything but a regular file, such as a FIFO or a link, or over 64 KiB, counts as unreadable and is never waited on), or any key or record of another shape (a `null` record, an extra field), makes the whole file malformed: it reads as nobody enrolled, the supervisor launches without desk flags, the startup acknowledgement and enroll/unenroll refuse (503) | 64 sessions, 64 KiB |
-| `config_dir/desk-settings.json` | `{"sends_enabled": false}`; read the same bounded way, and anything unreadable reads as sends off | fixed, 64 KiB |
+| `config_dir/desk-settings.json` | `{"sends_enabled": false, "voice_confirm_enabled": false}`, both switches off by default; read the same bounded way, and anything unreadable reads as both off. `desk sends` and `desk voice` each change one key in one locked read-modify-write that keeps the other (a file holding only one key keeps it; a broken file is replaced, and the other switch then reads as off); any other key is dropped | fixed, 64 KiB |
 | `config_dir/mcp.json` | The pinned MCP config (`desk install-config` writes it) | fixed |
 | `config_dir/tls/leaf.pem`, `leaf.key` | The hub's TLS leaf (from `scripts/desk-ca.sh`) | fixed |
 | `state_dir/locks.json` | Target locks, no prompt or reply content | 64 entries, 64 KiB |
@@ -230,10 +237,15 @@ may have typed the key; every other error means nothing was typed.
 
 Unauthenticated:
 - `GET /desk`, `/desk/app.js`, `/desk/app.css`, `/desk/text_rule.js`,
-  `/desk/desk_logic.js`, `/desk/text_rule_cases.json`: the page.
+  `/desk/desk_logic.js`, `/desk/conversation_logic.js`,
+  `/desk/conversation.js`, `/desk/conversation_view.js`, `/desk/startup.js`,
+  `/desk/text_rule_cases.json`: the page (`STATIC_ROUTES`), read once at hub
+  start and served from memory; `/desk` carries the build id.
 - `POST /desk/pair/start {secret_hash}` -> `{pair_id, code, expires_in}`.
-- `POST /desk/pair/claim {pair_id, secret}` -> `{token, expires_at}`; 409
-  `{"error": "not confirmed"}` while waiting (the page polls every 2 s).
+- `POST /desk/pair/claim {pair_id, secret, build}` -> `{token, expires_at}`; 409
+  `{"error": "not confirmed"}` while waiting (the page polls every 2 s); 403
+  `page out of date; reload it` when `build` isn't this hub's page build; 409
+  `a conversation is in progress` while a conversation grant is live.
 
 Protected (`Authorization: Bearer <token>`; checked before the body is read
 and again inside the state's lock with each mutation, so a token revoked
@@ -241,7 +253,7 @@ while its request was in flight changes nothing):
 - `GET /desk/api/state?after=<version>`: returns at once when the state
   version differs from `after` (or `after` is absent), else holds up to 25 s
   and returns the unchanged state. Body:
-  `{version, epoch, sends_enabled, lock_store_error, targets: [Target], requests: [Request]}`.
+  `{version, epoch, sends_enabled, voice_confirm_enabled, lock_store_error, targets: [Target], requests: [Request]}`.
   `Target = {host: "pi", session_id, label, cwd, enrolled, registration:
   "replied"|"registered"|"none"|"ambiguous", generation, lock: {lock_id,
   request_id, since, earlier_run} | null}`. `label` is the session's title
@@ -257,7 +269,13 @@ while its request was in flight changes nothing):
   sessions plus any live registration. `Request = {request_id, session_id,
   state, text, created, reply: {text, spoken} | null}` for the last 20.
 - `POST /desk/api/ticket {session_id, generation, epoch}` -> `{ticket, expires_at}`.
-- `POST /desk/api/send {ticket, text}` -> `{request_id, state}`.
+- `POST /desk/api/send {ticket, text, confirm?, grant?}` -> `{request_id,
+  state}`. `confirm` is `"tap"` (the default when omitted) or `"voice"`; a
+  voice send needs `grant` (see "Conversation mode").
+- `POST /desk/api/conversation {session_id, generation, epoch}` -> `{grant,
+  expires_in}`, `POST /desk/api/conversation/beat {grant}` -> `{grant,
+  expires_in}`, `POST /desk/api/conversation/end {grant}` -> `{ended: true}`:
+  the conversation grant (see "Conversation mode").
 - `POST /desk/api/clear {session_id, lock_id}` -> `{cleared: true}`.
 - `POST /desk/api/enroll {session_id}`, `POST /desk/api/unenroll {session_id}`.
 - `GET /desk/api/startup` -> `{sessions: [Blocked]}`: the enrolled sessions
@@ -303,10 +321,12 @@ response `{ok, ...}`): `pair <code>`, `revoke [--token <id>]` (all tokens when
 no id; exits 4 with **revoked for new requests; an acknowledgement is still
 in progress** when its bounded wait for one ran out, and running it again
 waits again), `status` (epoch, registrations, locks, token ids and expiry, sends
-flag), `clear <session id> <lock id>`, `sends on|off` (persisted in
-`desk-settings.json`), `enroll|unenroll <session id>` (the hub edits
-`enrolled.json` and publishes it under its policy lock; unenroll drops the
-session's registrations at once). `sends`, `enroll` and `unenroll` edit their
+flag, voice flag, and the live conversation's session, generation and
+token id or `null`), `clear <session id> <lock id>`, `sends on|off` and `voice
+on|off` (persisted in `desk-settings.json`), `enroll|unenroll <session id>`
+(the hub edits `enrolled.json` and publishes it under its policy lock;
+unenroll drops the session's registrations at once). `sends`, `voice`,
+`enroll` and `unenroll` edit their
 file directly only when the connect proves no hub listens (no socket file,
 or nothing accepting on it), and the hub reads it at its next recheck or
 start. Once connected, a missing, reset, timed-out or garbled answer (or
@@ -532,3 +552,268 @@ reasons only, never screen content.
 Hand-started sessions still use `claudepd $(llm-switchboard desk flags)
 --resume <session id>` (default Pi paths); they are not adopted into a
 supervisor tmux window. Acknowledge in the terminal that launched them.
+
+## Conversation mode
+
+A second way to send, for use without touching the tablet each turn. One tap
+on **Start conversation** on the selected session starts a conversation with
+that one session; it then runs hands-free until it ends. Jacob dictates a
+prompt and says "send it"; the session's `spoken` reply is read aloud; the
+mic opens again for the next turn. Nothing listens before the tap. The tap
+flow (Review, then Send) is unchanged and stays the default. The hub offers
+conversations only while the voice gate is on (`desk voice on`, off by
+default). Its sound output is an operating condition (below); other outputs
+(Sonos over the network, a line-in cable) are a later stage with their own
+plan review.
+
+### What a conversation gives up
+
+The tap flow's purpose was that Jacob read the exact destination and text
+before it ran with full tool authority in a bypass-permissions session. The
+hub has never been able to tell a tap from any other request by a paired
+page (the page's script holds the token); the ticket, identity and lock rules
+settle where a prompt goes and that it goes once, not who spoke, what was
+meant or whether the speaker had finished. A conversation has no reader, so
+the residual risk Jacob accepts by using one is:
+
+- The recognizer can't tell voices apart. Anyone or anything audible at the
+  tablet (a passenger, the radio, a video) can add to the draft and can say
+  the confirm.
+- Misheard words can change a prompt's meaning.
+- The voice notice the hub appends to every voice send asks the session to
+  check before acting on anything destructive, irreversible or
+  outward-facing, but it is advice to a model, not a gate: nothing in the
+  desk prevents such an action. A session's question followed by a misheard
+  "yes" is the same risk one turn later.
+- **A misheard command is draft text.** A command counts only when the whole
+  recognition result is the phrase; anything else ("sent it", "scratch
+  dat") lands in the draft as words. A repeated "send it" then sends the
+  draft with those stray words in it. "Read it back" before "send it" is the
+  check: it speaks the exact text that would be sent.
+
+What narrows it: the send command counts only as an isolated, final
+recognition result; read-back speaks the draft unaltered; a voice draft is
+at most 1,024 bytes; the target is frozen at the tap and any change ends the
+conversation; every way a conversation becomes uncertain ends it with the
+mic closed, and nothing re-arms it.
+
+The desk must not hear itself: a reply's `spoken` text comes from a model
+that may have read hostile content, so reply audio reaching an open mic
+would be a draft the agent wrote for its own session. The one control is
+the completion rule: after any desk sound the mic opens only on the `end`
+event of that exact utterance, plus a 500 ms guard. No estimate, timeout or
+flag opens it, and spoken text is never rewritten to make up for a leak.
+
+### Operating conditions the page can't check
+
+- **Output: the tablet's own speaker only.** For the whole of every
+  conversation the tablet's Bluetooth is switched off, because a paired
+  headset that is merely disconnected can reconnect mid-conversation and
+  take the sound; nothing is plugged into the headphone jack or a USB audio
+  adapter; and no cast or mirroring session is active. This is an operating
+  condition the page cannot check: `speechSynthesis` neither chooses nor
+  reports the route, and the completion rule holds only where sound stops
+  when the tablet's `end` says it has. Loudness is the tablet's volume.
+- **Rhythm: pause for the start tone.** The recognizer's own start tone marks
+  the mic opening. Pause for it before each thought: a recognition session
+  that opens while Jacob is already speaking hears nothing of those words,
+  and they are dropped silently. Say each command on its own, after a pause.
+- **One page.** When moving to a new page (after an install, a reload or a
+  second tab), close the previous desk page, hear that it is quiet, and
+  revoke its token if `desk status` still lists it, before starting a
+  conversation. The hub's one-page rule (below) keeps a second page from
+  holding a token during a conversation, but a token count can't prove
+  quiet: a revoked or disconnected page keeps its last snapshot and can
+  still play a reply locally, an utterance already playing outlives a
+  revoke, and a closed tab's token stays valid for its seven days.
+
+### Commands
+
+Recognition runs `continuous = false`, `interimResults = true`,
+`maxAlternatives = 1`, `en-US`; only a final result is used, and only its
+first alternative. A final result is a command only when the whole result,
+lowercased, with punctuation removed and spaces collapsed, is one of these:
+
+| Say | What happens |
+| --- | --- |
+| "send it" | The draft is sent exactly as it stands. An empty draft gets the cue "Nothing to send."; a draft the text rule refuses gets "Can't send that: <reason>." and stays |
+| "scratch that" | The draft is cleared; cue "Cleared." |
+| "read it back" | The whole draft is spoken, unaltered, with the mic closed ("The draft is empty." when it is), then the mic reopens with the draft intact |
+| "stop listening" | The conversation ends |
+
+Anything else is appended to the draft word for word, and nothing is ever
+removed from it: "…and summarize them send it" in one breath stays in the
+draft as spoken and sends nothing. Commands are heard only while the mic is
+open; during a cue, a read-back, a send, the wait or the reply, the stop is
+the full-screen **End conversation** control and the limits below.
+
+### States
+
+The overlay covers the page for the whole conversation and shows the
+session's label, the state in words, the draft and the words being heard.
+
+| State | Overlay | What happens |
+| --- | --- | --- |
+| `starting` | Starting. The mic is closed. | Fetches a fresh snapshot, takes the screen wake lock, asks for the grant, then checks again that the frozen target is still selected and available with no request outstanding and no lock, that sends and voice confirm are on, that the page is visible and the tablet has a voice. Requests the snapshot already holds for the target are history; any other request on the target, in any state, or a lock not tied to this conversation's request is *foreign activity* from then on |
+| `listening` | Listening. | The only state with an open mic. Recognition restarts on each `end`; `no-speech` restarts it |
+| `reading` | Speaking. The mic is closed. | A read-back or a cue inside a turn |
+| `sending` | Sending. The mic is closed. | A ticket for the frozen identity, then `POST /desk/api/send {ticket, text, confirm: "voice", grant}`. No retry: a refusal ends the conversation with its reason, and a send with no usable answer is unknown |
+| `waiting` | Sent. Waiting for the reply. The mic is closed. | After the "Sent." cue; follows the exact request id the send returned |
+| `speaking` | Reading the reply. The mic is closed. | The reply's `spoken` text exactly as received ("No spoken summary." when it is empty; the full text is on screen). On its `end` and the guard, `listening` with an empty draft and a new turn |
+| `ended` | Conversation ended: <reason>. | Mic and speech stopped, draft discarded, wake lock released. The overlay stays, with **Close**, until tapped; only a new tap starts another conversation |
+
+While a conversation runs or its closing cue plays, Dictate, Review, Send,
+Test and Play are disabled and the page doesn't speak new replies itself: a
+reply is spoken once, by the conversation, and is never spoken again after
+it ends. Nothing in a conversation clears a lock, retries a request,
+acknowledges a startup warning, changes the target or enrolls anything;
+those stay touch-only, as does starting one.
+
+**Start conversation** is enabled only when the snapshot has sends and voice
+confirm on and no lock-store error, the selected session is available with
+no lock and no outstanding request, the tablet has speech recognition and a
+voice, no tapped send is in flight, no utterance of this page is queued or
+playing, and sound isn't uncertain (below). Otherwise it is disabled and
+the reason is written under it: "Start conversation is unavailable:
+<reason>." with one of: the hub has not answered yet; sends are off; voice
+confirm is off; the hub's lock store failed; the session is not available
+for sends; the session is busy; this tablet has no speech recognition; this
+tablet has no voice; a tapped send is still in progress; the desk may still
+be speaking; wait until it is quiet.
+
+### Limits
+
+- The guard: 500 ms after any desk sound ends before a mic opens.
+- An utterance gets twice its estimated duration (1 s plus 0.4 s a word) to
+  report `end`; past that, or on an error, the page cancels speech and the
+  conversation ends with the voice failed.
+- A recognizer that hasn't reported audio 5 s after `start()`, any
+  recognition error but `no-speech`, a failed `start()`, or three restarts
+  in a row that each end within a second end the conversation.
+- Idle: three minutes without a final result. Turn: five minutes from the
+  turn's first mic opening, which nothing resets or pauses (read-backs and
+  cues count); it is disarmed for the send and the wait and starts again at
+  the next turn.
+- A final result that would take the draft past 1,024 UTF-8 bytes clears the
+  whole draft with the cue "Too long. The draft was cleared.", so no shorter
+  prefix can be sent unnoticed.
+- After the send is acknowledged, the request must appear in a snapshot
+  within 30 s, and its reply must come within ten minutes.
+- Each start step (the snapshot, the wake lock, the grant) and the ticket
+  get 10 s; the send POST gets 20 s.
+- The grant is beaten every 5 s, one beat at a time, each abandoned after
+  4 s. The page treats it as good until 10 s after the *start* of the last
+  beat that succeeded (the grant request counts as the first), on a
+  monotonic clock, and checks that before every mic opening and before
+  using any result; past it the conversation ends. That is how a pulled USB
+  cable or a dead hub is noticed while the recognizer still works over
+  Wi-Fi.
+
+### Cues and end reasons
+
+Spoken cues: "Sent.", "Nothing to send.", "Cleared.", "The draft is
+empty.", "Too long. The draft was cleared.", "Can't send that: <reason>.",
+"No spoken summary." and "Conversation ended: <reason>.". What can be told
+without looking: the start tone marks the mic opening; "Sent.", the reply
+and the end are spoken; waiting is the silence after "Sent.". When the
+voice itself fails there is no sound: the mic is closed and the screen says
+why.
+
+The end is spoken, and the grant released after it, only when the page is
+visible, has a voice, still holds a fresh grant and cut no utterance off on
+the way. Otherwise the page speaks nothing (a successor may be listening),
+releases any grant it holds at once, and shows the reason only.
+
+**Uncertain sound.** An utterance stopped before its own `end`, by anything
+(End, hiding, a timeout, an error, the end of the conversation, the page's
+own Play cancelled), marks sound uncertain: no cue is spoken to probe for
+silence, and Start stays disabled for twice that text's estimated duration.
+The next conversation takes a tap made when it is audibly quiet; an empty
+synthesis queue is not evidence of quiet.
+
+End reasons, as the overlay and the cue word them: you said stop listening;
+End was tapped; the page was hidden (also frozen or unloading); another
+session was selected; this tablet is no longer paired; the screen wake lock
+was released; the screen can't be kept awake; this tablet has no voice;
+nothing was heard for three minutes; the turn took over five minutes; the
+hub stopped answering; the hub ended the conversation; the hub refused the
+conversation: <reason>; the hub could not be reached; speech recognition
+failed (with the recognizer's error); speech recognition did not start;
+speech recognition keeps stopping; the voice failed; the hub restarted;
+the session changed or went away; sends are off; voice confirm is off; the
+hub's lock store failed; the session is busy; another request reached the
+session; not sent: <reason>; delivery is unknown; check the session; the
+request ended without a reply; no reply came in ten minutes. A conversation
+that ended never resumes when the link returns.
+
+### Hub side
+
+- **The voice gate.** `voice_confirm_enabled` in `desk-settings.json`,
+  switched by `llm-switchboard desk voice on|off` (through the hub when it
+  runs, else the locked file edit, like `desk sends`). The hub reads it fresh
+  from the file with every refresh, including the one just before each
+  handoff, so an unreadable file means off. It is a product gate for honest
+  pages: a page that lied about `confirm` could send as a tap. A
+  conversation that outlives an off-then-on toggle may go on; no voice send
+  is handed off while the gate is off.
+- **One current page.** A pairing claim carries the page's build id
+  (`desk/page_build.py`): the first 16 hex digits of a SHA-256 over every
+  served route and its file, as read at hub start. A claim from another
+  build is refused (403 `page out of date; reload it`), so a tab loaded
+  before an install can't pair. A grant is given only to a token that is the
+  only valid token (409 `another page is paired; revoke its token first`);
+  closing a tab doesn't revoke its token. While a grant is live, pairing
+  claims are refused (409 `a conversation is in progress`).
+- **The grant** (`desk/grants.py`). `POST /desk/api/conversation {session_id,
+  generation, epoch}` returns `{grant, expires_in: 15}`: a random id bound to
+  the token and that target, which expires 15 s after the hub last renewed
+  it. It is refused like a ticket (400 bad input, 409 `stale epoch`, `stale
+  generation`, `not enrolled`, `not registered`, `ambiguous`, `busy`, 403
+  `sends off`, 503 a lock-store error) and also with 403 `voice confirm off` and 409 `another page is
+  paired; revoke its token first`. At most one grant exists; a new one
+  replaces the old. `POST /desk/api/conversation/beat {grant}` renews it (409
+  `target changed` ends it when the target is no longer the same single
+  registration); `POST /desk/api/conversation/end {grant}` ends it. Beat,
+  end, `begin_send` and `hand_off` each require the exact current, unexpired
+  grant for that token, checked under the state's lock (409 `conversation
+  grant not current`): an expired grant is never revived by a late beat, and
+  a delayed end naming an old grant doesn't touch a newer one. Revoke, token
+  expiry and token eviction end the grant. Grants live in memory only and
+  die with the epoch.
+- **A voice send.** `POST /desk/api/send` with `confirm: "voice"` needs the
+  voice gate on (403 `voice confirm off`), the current grant (409
+  `conversation grant not current`) for the ticket's target (409
+  `conversation grant not for this target`) and text within 1,024 bytes (400
+  `too long for a voice send`); any other `confirm` is 400 `bad confirm`.
+  The mode and the grant id are stored on the request and both are checked
+  again at `hand_off`, so a grant that expired or was replaced, or the gate
+  switched off, between `begin_send` and the handoff refuses it (the request
+  expires; nothing was written). An omitted `confirm` is a tap, exactly as
+  before. Tickets, one outstanding request per target, the target lock,
+  reply acceptance and channel identity are the same as for a tap. Logs
+  record the mode, never content.
+- **The channel's text.** The channel instructions say an event comes from
+  Jacob's desk, where he types or dictates it, and that a voice event's
+  words may include recognition errors or other voices or audio near the
+  mic. A voice send's event ends, after the delivery suffix, with the voice
+  notice (`protocol.VOICE_NOTICE`): `[voice desk: this was dictated
+  hands-free in Jacob's van and sent on a spoken confirm; nobody read it,
+  and it may contain recognition errors or words from other people or audio
+  near the mic. If it asks for something destructive, irreversible or
+  outward-facing, or it doesn't make sense, don't act on it: reply asking
+  Jacob to confirm in a few words. He is listening, not reading: make spoken
+  a complete, conversational answer in at most five short sentences with no
+  paths, code, ids or lists, and when you need a decision from him, end
+  spoken with the question.]` The `reply` tool's description of `spoken`
+  (at most 1,024 bytes) says the same.
+
+### Voice readiness check
+
+The notice is best-effort guidance, and the hub can't see which model a
+session runs, so voice readiness is an operator gate. Before `desk voice
+on`, and before using a session on a model not yet tried in a conversation:
+with only a disposable session enrolled, parked, run one full voice round
+trip (Start, a short prompt, "read it back", "send it", the reply spoken,
+then "stop listening"), and send one prompt that should draw a confirming
+question (a request to delete something, say); the reply must ask Jacob to
+confirm instead of acting. Switch `desk voice off` again if either fails.
