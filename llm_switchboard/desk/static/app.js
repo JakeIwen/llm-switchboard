@@ -144,6 +144,12 @@
     });
   }
 
+  // The hub refuses a claim from a page of another build (a tab from before an install).
+  function pageBuild() {
+    var meta = document.querySelector('meta[name="desk-build"]');
+    return meta ? meta.getAttribute("content") : "";
+  }
+
   function pairProblem(message) {
     $("pair-status").textContent = message;
     $("pair-new").hidden = false;
@@ -153,7 +159,8 @@
     setTimeout(function () {
       if (mySession !== session) return;
       if (Date.now() > deadline + 5000) { pairProblem("The code expired."); return; }
-      api("POST", "/desk/pair/claim", { pair_id: pairId, secret: secret }, { auth: false }).then(function (r) {
+      var claim = { pair_id: pairId, secret: secret, build: pageBuild() };
+      api("POST", "/desk/pair/claim", claim, { auth: false }).then(function (r) {
         if (mySession !== session) return;
         if (r.status === 200 && r.data && r.data.token) {
           token = r.data.token;
@@ -162,7 +169,7 @@
           primed = false;
           startStateLoop();
           startup.start();
-        } else if (r.status === 409) {
+        } else if (r.status === 409 && r.data && r.data.error === "not confirmed") {
           pollClaim(mySession, pairId, secret, deadline);
         } else {
           pairProblem("The code expired or was refused (" + errorText(r) + ").");

@@ -3,7 +3,7 @@
 A light command (`__main__._LIGHT_COMMANDS`): it never imports the HTTP
 stack. `pair`, `revoke`, `status`, `clear` and `ack` talk to the running hub
 over the operator socket (`ack` only through the hub, which sends its one
-Enter). `sends`, `enroll` and `unenroll` go through the hub
+Enter). `sends`, `voice`, `enroll` and `unenroll` go through the hub
 when it runs (so its sends see the change in order) and edit the file
 directly only when the connect proved no hub listens; once connected, a
 missing answer is reported as unknown and nothing is written. `flags` and
@@ -47,6 +47,8 @@ def main(argv=None) -> int:
     clear.add_argument("lock_id")
     sends = commands.add_parser("sends", help="turn sends on or off (persisted)")
     sends.add_argument("value", choices=("on", "off"))
+    voice = commands.add_parser("voice", help="allow or refuse sends confirmed by voice in a conversation (persisted)")
+    voice.add_argument("value", choices=("on", "off"))
     for name, text in (("enroll", "let the desk route to a session"), ("unenroll", "stop routing to a session")):
         commands.add_parser(name, help=text).add_argument("session_id")
     ack = commands.add_parser("ack", help="show a session's startup warning, then press Enter once to accept it")
@@ -116,14 +118,24 @@ def _clear(args, config):
     return _operator(config, OperatorOp.CLEAR, session_id=args.session_id, lock_id=args.lock_id)
 
 
-def _sends(args, config):
+def _switch(args, config, op: OperatorOp, write) -> int:
+    """A `desk-settings.json` switch: through the hub, else (no hub, proved at
+    connect) one locked read-modify-write of the file that keeps the other key."""
     enabled = args.value == "on"
     try:
-        return _operator(config, OperatorOp.SENDS, enabled=enabled)
+        return _operator(config, op, enabled=enabled)
     except HubAbsent:
-        DeskSettings(config.settings_file).set_sends_enabled(enabled)
-        print(f"sends {args.value} (saved; the hub is not running and reads it at start)")
+        write(DeskSettings(config.settings_file), enabled)
+        print(f"{op.value} {args.value} (saved; the hub is not running and reads it at start)")
         return 0
+
+
+def _sends(args, config):
+    return _switch(args, config, OperatorOp.SENDS, DeskSettings.set_sends_enabled)
+
+
+def _voice(args, config):
+    return _switch(args, config, OperatorOp.VOICE, DeskSettings.set_voice_confirm_enabled)
 
 
 def _enrollment_change(config: DeskConfig, op: OperatorOp, session_id: str, edit_file) -> bool | None:
@@ -216,6 +228,6 @@ def _install_config(args, config):
 
 _COMMANDS = {
     "serve": _serve, "pair": _pair, "revoke": _revoke, "status": _status, "clear": _clear,
-    "sends": _sends, "enroll": _enroll, "unenroll": _unenroll, "ack": _ack, "flags": _flags,
+    "sends": _sends, "voice": _voice, "enroll": _enroll, "unenroll": _unenroll, "ack": _ack, "flags": _flags,
     "install-config": _install_config,
 }

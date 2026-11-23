@@ -14,7 +14,12 @@ acknowledgement's strict read skips that cache and opens the file every
 time, since a permission change alters none of the three. Editing is stricter: an
 enroll or unenroll over an unreadable or malformed `enrolled.json` is
 refused (503) rather than overwriting the sessions it may still hold.
-`desk sends` rewrites its whole one-key file, so it replaces a broken one.
+`desk-settings.json` holds two switches, `sends_enabled` and
+`voice_confirm_enabled`, each written by `desk sends|voice` through one
+read-modify-write that keeps the other key (a broken file is replaced, and
+then the other switch reads as off). Anything else in the file is dropped,
+so it stays at most two boolean keys. The voice gate is always read fresh,
+never from the cache: an unreadable file means voice off at the handoff.
 
 Every edit, the CLI's offline one included, holds the file's cross-process
 lock (the `<name>.lock` flock `JsonFile.locked` takes) for its whole
@@ -234,6 +239,11 @@ class Enrollment:
             return True
 
 
+SENDS_KEY = "sends_enabled"
+VOICE_KEY = "voice_confirm_enabled"
+SETTING_KEYS = (SENDS_KEY, VOICE_KEY)
+
+
 class DeskSettings:
     def __init__(self, path: Path):
         self._json = _CachedJson(path)
@@ -243,12 +253,27 @@ class DeskSettings:
         return self._json.lock.held()
 
     def sends_enabled(self) -> bool:
-        return self._json.read().get("sends_enabled") is True
+        return self._json.read().get(SENDS_KEY) is True
+
+    def voice_confirm_enabled(self) -> bool:
+        """Read fresh every time: a permission change alters nothing the cache
+        is keyed on, and the gate must read as off when the file can't be read."""
+        data, unreadable = self._json.read_fresh()
+        return not unreadable and data.get(VOICE_KEY) is True
 
     def set_sends_enabled(self, enabled: bool) -> None:
+        self._set(SENDS_KEY, enabled)
+
+    def set_voice_confirm_enabled(self, enabled: bool) -> None:
+        self._set(VOICE_KEY, enabled)
+
+    def _set(self, key: str, enabled: bool) -> None:
+        """One locked read-modify-write that keeps the other switch."""
         with self._json.updating(replace_unreadable=True) as data:
+            kept = {k: data[k] for k in SETTING_KEYS if k != key and isinstance(data.get(k), bool)}
             data.clear()
-            data["sends_enabled"] = bool(enabled)
+            data.update(kept)
+            data[key] = bool(enabled)
 
 
 def _check_session_id(session_id) -> None:

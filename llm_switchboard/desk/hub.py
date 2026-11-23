@@ -12,6 +12,11 @@ one from an earlier hub run) is cleared only once the channel process it
 records is gone (`peer.process_presence`, from `config.proc_dir`). Peer verification is injected
 (`peer=`) so tests run without /proc; production imports `desk.peer` at start.
 
+Conversation mode (`grants.py`): the page asks for a grant, beats it every
+5 s and ends it; a send confirmed by voice names it. The voice gate is read
+fresh from `desk-settings.json` with every file refresh, including the one
+just before each handoff, under the same locks as `sends`.
+
 The startup acknowledgement (`startup_ack.py`) reads the dedicated tmux
 server (`tmux=`, the supervisor's socket by default) and sends its one
 Enter there; it takes only the enrollment file's lock and never the state's
@@ -39,6 +44,7 @@ from .config import DeskConfig
 from .enrollment import DeskSettings, Enrollment, ensure_private_dir
 from .hub_state import HubState
 from .http_server import DeskHttpServer, make_tls_context
+from .page_build import PAGE_OUT_OF_DATE
 from .labels import SessionLabels, encodable
 from .locks import LockStore
 from .model import (
@@ -135,7 +141,7 @@ class Hub:
         self._operator_ops = {
             OperatorOp.PAIR: self._op_pair, OperatorOp.REVOKE: self._op_revoke,
             OperatorOp.STATUS: self._op_status, OperatorOp.CLEAR: self._op_clear,
-            OperatorOp.SENDS: self._op_sends, OperatorOp.ENROLL: self._op_enroll,
+            OperatorOp.SENDS: self._op_sends, OperatorOp.VOICE: self._op_voice, OperatorOp.ENROLL: self._op_enroll,
             OperatorOp.UNENROLL: self._op_unenroll, OperatorOp.STARTUP_VIEW: self._op_startup_view,
             OperatorOp.STARTUP_ACK: self._op_startup_ack,
         }
@@ -216,6 +222,7 @@ class Hub:
         with self._policy_files(), self._policy_lock:
             self.state.set_enrolled(self.enrollment.sessions())
             self.state.set_sends_enabled(self.settings.sends_enabled())
+            self.state.set_voice_enabled(self.settings.voice_confirm_enabled())
 
     def refresh_labels(self) -> None:
         """Every target's label and folder, from bounded, cached transcript
@@ -433,6 +440,9 @@ class Hub:
         return self.state.pair_start(body.get("secret_hash"))
 
     def pair_claim(self, body: dict) -> dict:
+        # A tab loaded before an install can't pair: its build isn't ours.
+        if body.get("build") != self.http.page_build:
+            raise DeskError(403, PAGE_OUT_OF_DATE)
         return self.state.pair_claim(body.get("pair_id"), body.get("secret"))
 
     def ticket(self, body: dict, token: str) -> dict:
@@ -440,7 +450,8 @@ class Hub:
             return self.state.issue_ticket(body.get("session_id"), body.get("generation"), body.get("epoch"))
 
     def send(self, body: dict, token: str) -> dict:
-        request = self.state.begin_send(body.get("ticket"), body.get("text"), token)
+        request = self.state.begin_send(body.get("ticket"), body.get("text"), token,
+                                        body.get("confirm"), body.get("grant"))
         try:
             conn_id, content = self._prepare_handoff(request)
         except BaseException:
@@ -458,7 +469,8 @@ class Hub:
             self.state.finish_write(request.request_id, written, attempted=attempted)
         if not written:
             self._drop_connection(conn_id, "event write failed")
-        log.info("desk: request %s handed off to session %s", request.request_id, request.session_id[:8])
+        log.info("desk: request %s (%s) handed off to session %s", request.request_id, request.confirm.value,
+                 request.session_id[:8])
         return {"request_id": request.request_id, "state": self.state.request_state(request.request_id)}
 
     def _prepare_handoff(self, request) -> tuple[int, str]:
@@ -474,6 +486,20 @@ class Hub:
         with self._policy_files(), self._policy_lock:
             self.refresh_files()
             return self.state.hand_off(request.request_id)
+
+    def conversation(self, body: dict, token: str) -> dict:
+        grant = self.state.grant_conversation(token, body.get("session_id"), body.get("generation"),
+                                              body.get("epoch"))
+        log.info("desk: conversation granted for session %s", body["session_id"][:8])
+        return grant
+
+    def conversation_beat(self, body: dict, token: str) -> dict:
+        return self.state.beat_grant(token, body.get("grant"))
+
+    def conversation_end(self, body: dict, token: str) -> dict:
+        ended = self.state.end_grant(token, body.get("grant"))
+        log.info("desk: conversation ended by the page")
+        return ended
 
     def clear(self, body: dict, token: str) -> dict:
         with self.state.authorized(token):
@@ -587,3 +613,12 @@ class Hub:
             self.settings.set_sends_enabled(enabled)
             self.state.set_sends_enabled(enabled)
         return {"sends_enabled": enabled}
+
+    def _op_voice(self, message: dict) -> dict:
+        enabled = message.get("enabled")
+        if not isinstance(enabled, bool):
+            raise DeskError(400, "enabled must be true or false")
+        with self._policy_files(), self._policy_lock:
+            self.settings.set_voice_confirm_enabled(enabled)
+            self.state.set_voice_enabled(self.settings.voice_confirm_enabled())
+        return {"voice_confirm_enabled": enabled}

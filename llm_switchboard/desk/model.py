@@ -135,6 +135,18 @@ class RequestState(str, Enum):
 OUTSTANDING_STATES = frozenset({RequestState.PENDING, RequestState.HANDED_OFF})
 
 
+class ConfirmMode(str, Enum):
+    """How a send was confirmed: a tap on the reviewed text (the default), or a
+    spoken "send it" inside a conversation (desk/grants.py). The page mirrors
+    these in static/conversation_logic.js."""
+    TAP = "tap"
+    VOICE = "voice"
+
+
+# A voice send's text limit (the page's draft limit too): spoken drafts stay short.
+MAX_VOICE_TEXT_BYTES = 1024
+
+
 class RegistrationState(str, Enum):
     # A desk reply was received on this connection at some point. Historical:
     # the hub can't see Claude's current model or readiness.
@@ -196,6 +208,10 @@ class Request:
     lock_id: str | None = None
     # When it left the outstanding states; history ages out from here.
     finished: float | None = None
+    # A voice send names the conversation grant it was sent under; both are
+    # checked again at handoff.
+    confirm: ConfirmMode = ConfirmMode.TAP
+    grant_id: str | None = None
 
 
 @dataclass(frozen=True)

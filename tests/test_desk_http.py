@@ -209,7 +209,7 @@ class PairingHttpTest(HttpCase):
     def test_claim_waits_for_the_operator_and_hands_out_the_token_once(self):
         secret = secrets.token_hex(32)
         _, _, started = self.call("POST", "/desk/pair/start", {"secret_hash": hashlib.sha256(secret.encode()).hexdigest()})
-        claim = {"pair_id": started["pair_id"], "secret": secret}
+        claim = {"pair_id": started["pair_id"], "secret": secret, "build": self.hub.http.page_build}
         self.assertEqual(self.call("POST", "/desk/pair/claim", claim)[::2], (409, {"error": "not confirmed"}))
         self.hub.handle_operator({"op": "pair", "code": started["code"]})
         status, _, claimed = self.call("POST", "/desk/pair/claim", claim)
@@ -218,7 +218,8 @@ class PairingHttpTest(HttpCase):
         self.assertEqual(self.call("POST", "/desk/pair/claim", claim)[0], 404)
         status, _, view = self.call("GET", "/desk/api/state", token=claimed["token"])
         self.assertEqual(status, 200)
-        self.assertEqual(set(view), {"version", "epoch", "sends_enabled", "lock_store_error", "targets", "requests"})
+        self.assertEqual(set(view), {"version", "epoch", "sends_enabled", "voice_confirm_enabled", "lock_store_error",
+                                     "targets", "requests"})
 
 
 class SendHttpTest(HttpCase):

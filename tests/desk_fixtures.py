@@ -303,7 +303,8 @@ class HubCase(unittest.TestCase):
         self.assertEqual(status, 200, started)
         confirmed = operator_request(self.config.operator_socket, OperatorOp.PAIR, code=started["code"])
         self.assertTrue(confirmed["ok"], confirmed)
-        status, _, claimed = self.call("POST", "/desk/pair/claim", {"pair_id": started["pair_id"], "secret": secret})
+        status, _, claimed = self.call("POST", "/desk/pair/claim", {"pair_id": started["pair_id"], "secret": secret,
+                                                                   "build": self.hub.http.page_build})
         self.assertEqual(status, 200, claimed)
         return claimed["token"]
 

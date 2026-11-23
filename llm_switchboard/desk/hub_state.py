@@ -48,6 +48,8 @@ from .model import (
     ChannelProcess, Registration, RegistrationState, Reply, Request, RequestState, Revoked, Ticket, Token,
     valid_channel_identity,
 )
+from .grants import ConversationGrants
+from .model import ConfirmMode
 from .protocol import MAX_REPLY_TEXT_BYTES, MAX_SPOKEN_BYTES, event_content
 from .text_rule import check_text
 from ..session_id import is_session_id
@@ -72,7 +74,7 @@ def _is_int(value) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
-class HubState:
+class HubState(ConversationGrants):
     def __init__(self, lock_store, *, now: Callable[[], float], token_bytes: Callable[[int], bytes],
                  epoch: str | None = None):
         # Re-entrant so `authorized()` can hold it around a method that takes it too.
@@ -250,9 +252,10 @@ class HubState:
             self._tickets[record.ticket_hash] = record
             return {"ticket": ticket, "expires_at": record.expires_at}
 
-    def begin_send(self, ticket, text, token) -> Request:
+    def begin_send(self, ticket, text, token, confirm=None, grant=None) -> Request:
         """Validate and consume the ticket; the request starts pending and
-        remembers which token sent it."""
+        remembers which token sent it, and how it was confirmed (`confirm`
+        omitted is a tap; a voice send names its `grant`, desk/grants.py)."""
         token_hash = self.token_hash(token)
         with self._mutex:
             if not self._token_valid(token_hash):
@@ -265,6 +268,7 @@ class HubState:
             if reason:
                 raise DeskError(400, reason)
             record = self._ticket_for_send(ticket)
+            mode, grant_id = self._admit_send_mode(confirm, grant, token_hash, record, text)
             self._check_routing(record.session_id, sending=True)
             registration = self._routable(record.session_id)
             if registration.generation != record.generation:
@@ -277,7 +281,7 @@ class HubState:
                 request_id=f"{self.epoch}.{self._token_bytes(REQUEST_ID_RANDOM_BYTES).hex()}",
                 session_id=record.session_id, generation=record.generation,
                 conn_id=registration.conn_id, text=text, created=self._now(),
-                ticket_hash=record.ticket_hash, token_hash=token_hash)
+                ticket_hash=record.ticket_hash, token_hash=token_hash, confirm=mode, grant_id=grant_id)
             self._requests[request.request_id] = request
             self._bump()
             return Request(**vars(request))
@@ -357,7 +361,8 @@ class HubState:
             request.state = RequestState.HANDED_OFF
             self._in_delivery[request.request_id] = request.conn_id
             self._bump()
-            return request.conn_id, event_content(request.text, request.request_id)
+            return request.conn_id, event_content(request.text, request.request_id,
+                                                  voice=request.confirm is ConfirmMode.VOICE)
 
     def _check_handoff(self, request: Request) -> None:
         if not self._token_valid(request.token_hash):
@@ -371,6 +376,7 @@ class HubState:
         identity = current.identity
         if not valid_channel_identity(getattr(identity, "channel_pid", None), getattr(identity, "channel_start", None)):
             raise DeskError(409, "channel identity unusable; not sent")
+        self._check_voice_handoff(request)
 
     def finish_write(self, request_id: str, written: bool, *, attempted: bool = True) -> None:
         """The caller's socket write is over. A failed write makes the request
@@ -592,6 +598,8 @@ class HubState:
                 raise DeskError(403, "wrong secret")
             if not pairing.confirmed:
                 raise DeskError(409, "not confirmed")
+            # No second page may hold a token while a conversation runs.
+            self._refuse_claim_during_grant()
             del self._pairings[pair_id]
             return self._issue_token(now)
 
@@ -705,6 +713,7 @@ class HubState:
             targets = [self._target(session_id) for session_id in sorted(self._target_ids())]
             requests = [self._request_view(r) for r in reversed(self._requests.values())]
             return {"version": self._version, "epoch": self.epoch, "sends_enabled": self._sends_enabled,
+                    "voice_confirm_enabled": self._voice_enabled,
                     "lock_store_error": self._store_error(), "targets": targets, "requests": requests}
 
     def _target(self, session_id: str) -> dict:
@@ -753,4 +762,5 @@ class HubState:
                            for t in sorted(self._tokens.values(), key=lambda t: t.created)
                            if now < t.expires_at],
                 "pending_pairings": len(self._pairings),
+                **self._conversation_status(),
             }

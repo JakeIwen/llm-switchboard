@@ -28,6 +28,7 @@ from .config import DeskConfig
 from .model import (
     HTTP_REQUEST_TIMEOUT_SECONDS, LONG_POLL_SECONDS, MAX_BODY_BYTES, MAX_HTTP_CONNECTIONS, DeskError,
 )
+from .page_build import PageFiles
 
 log = logging.getLogger("llm_switchboard.desk")
 
@@ -62,6 +63,9 @@ POST_ROUTES = {
     "/desk/api/enroll": ("enroll", True),
     "/desk/api/unenroll": ("unenroll", True),
     "/desk/api/startup/ack": ("startup_ack", True),
+    "/desk/api/conversation": ("conversation", True),
+    "/desk/api/conversation/beat": ("conversation_beat", True),
+    "/desk/api/conversation/end": ("conversation_end", True),
 }
 STATE_PATH = "/desk/api/state"
 STARTUP_PATH = "/desk/api/startup"
@@ -143,12 +147,18 @@ class DeskHttpServer:
         self.api = api
         self.max_connections = max_connections
         self.long_poll_seconds = long_poll_seconds
+        # The page as this hub serves it for its whole run, and its build id.
+        self.page = PageFiles(STATIC_ROUTES)
         self._server: _TlsThreadingServer | None = None
         self._thread: threading.Thread | None = None
 
     @property
     def port(self) -> int:
         return self.config.port
+
+    @property
+    def page_build(self) -> str:
+        return self.page.build
 
     def start(self) -> None:
         tls = make_tls_context(self.config)
@@ -221,12 +231,10 @@ class _DeskHandler(BaseHTTPRequestHandler):
 
     def _get(self, path: str) -> None:
         if path in STATIC_ROUTES:
-            file, content_type = STATIC_ROUTES[path]
-            try:
-                data = file.read_bytes()
-            except OSError:
-                raise DeskError(404, "not found") from None
-            self._respond(200, data, content_type)
+            served = self.desk.page.get(path)
+            if served is None:
+                raise DeskError(404, "not found")
+            self._respond(200, *served)
         elif path == STATE_PATH:
             self._state()
         elif path == STARTUP_PATH:

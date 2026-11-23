@@ -47,7 +47,7 @@ REPLY_TOOL_SCHEMA = {
         "properties": {
             "request_id": {"type": "string", "description": "request_id from the channel tag"},
             "text": {"type": "string", "description": "your full answer"},
-            "spoken": {"type": "string", "description": "one or two plain sentences summarizing the answer, to be read aloud"},
+            "spoken": {"type": "string", "description": protocol.SPOKEN_DESCRIPTION},
         },
         "required": ["request_id", "text", "spoken"],
     },
