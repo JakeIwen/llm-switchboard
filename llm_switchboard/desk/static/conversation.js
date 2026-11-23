@@ -43,8 +43,22 @@
 //   track(utterance)  Before the page speaks any utterance of its own (Play,
 //                     the legacy reply speech), so its end, error or cancel
 //                     counts toward the guard and Start's quiet rule.
+//   soundClear()      For the page's one-shot Dictate, before it starts its
+//                     own recognizer: true only when no utterance of this
+//                     page is queued or playing, LIMITS.GUARD_MS has passed
+//                     since the last real end, error or cancel of any of
+//                     them, and no uncertain-sound period is running.
+//                     deps.onChange fires when it turns true (the guard and
+//                     the quiet period end on a timer). It says nothing about
+//                     a conversation: Dictate also needs !holds().
+//   sentByConversation(id) Whether a conversation of this page sent that
+//                     request id, even after it ended (the POST's answer is
+//                     recorded when it comes, late included): the tap flow
+//                     never voices such a reply. Remembers the newest
+//                     LIMITS.OWNED_REQUESTS ids. A voice send whose POST
+//                     never answered has no id the page knows.
 //   view()            {phase, active, dest, draft, interim, reason, lost,
-//                     speaking, canStart}: everything the view shows.
+//                     speaking, canStart, soundClear}: everything the view shows.
 //   holds()           A conversation is active or its closing cue plays: the
 //                     page disables Dictate, Review, Send, Test, Play and its
 //                     own reply speech, and leaves speech to the controller.
@@ -99,6 +113,7 @@
     var cutOff = false;      // this conversation stopped an utterance before its end
     var quietHandle = null;  // tells the page when the quiet rules have passed
     var sounding = [];       // submitted utterances with no terminal event yet
+    var sent = [];           // request ids conversations sent, newest last (LIMITS.OWNED_REQUESTS)
     var interim = "";
 
     function nextId() { return ++seq; }
@@ -405,10 +420,12 @@
       setTimer(TIMER.SEND_ABORT, LIMITS.SEND_DEADLINE_MS);
       var body = { ticket: ticket, text: text, confirm: L.CONFIRM.VOICE, grant: grant };
       api("POST", PATH.SEND, body, signal(FETCH.SEND)).then(function (r) {
+        var k = D.classifySend(r);
+        // Ours even when the answer comes after the end: its reply is never the tap flow's.
+        if (k.request_id) remember(k.request_id);
         if (!settle(FETCH.SEND, id)) return;
         clearTimer(TIMER.SEND_ABORT);
         if (unauthorized(r)) return;
-        var k = D.classifySend(r);
         var type = SEND_EVENT[k.outcome] || EV.SEND_UNKNOWN;
         dispatch({ type: type, request_id: k.request_id, state: r.data && r.data.state, reason: detail(r) });
       }, function () {
@@ -416,6 +433,12 @@
         clearTimer(TIMER.SEND_ABORT);
         dispatch({ type: EV.SEND_UNKNOWN });
       });
+    }
+
+    function remember(requestId) {
+      if (sent.indexOf(requestId) !== -1) return;
+      sent.push(requestId);
+      if (sent.length > LIMITS.OWNED_REQUESTS) sent.shift();
     }
 
     // ---- recognition ------------------------------------------------------
@@ -708,6 +731,18 @@
 
     function holds() { return active() || !!utt; }
 
+    // For the page's own one-shot Dictate: no utterance of this page queued
+    // or playing, the guard after the last real end, error or cancel passed,
+    // and no uncertain-sound period running.
+    function soundClear() {
+      if (utt || sounding.length) return false;
+      var now = env.now();
+      if (now < uncertainUntil || now - quietAt < LIMITS.GUARD_MS) return false;
+      return !(env.synth && (env.synth.speaking || env.synth.pending));
+    }
+
+    function sentByConversation(requestId) { return sent.indexOf(requestId) !== -1; }
+
     // Why canStart() is false, for the view: a BLOCKER, or null when it is true.
     function blocker() {
       if (active()) return L.BLOCKER.IN_PROGRESS;
@@ -718,12 +753,13 @@
     function view() {
       return {
         phase: c.phase, active: active(), dest: c.dest, draft: c.draft, interim: interim,
-        reason: c.reason, lost: c.lost, speaking: !!utt, canStart: canStart()
+        reason: c.reason, lost: c.lost, speaking: !!utt, canStart: canStart(), soundClear: soundClear()
       };
     }
 
     return {
       start: start, canStart: canStart, blocker: blocker, snapshot: snapshot, track: track, view: view, holds: holds,
+      soundClear: soundClear, sentByConversation: sentByConversation,
       endTap: function () { endIfActive(REASON.END_TAPPED); },
       hidden: function () { endIfActive(REASON.HIDDEN); },
       unpaired: function () { endIfActive(REASON.UNPAIRED, true); },

@@ -29,7 +29,7 @@ function rq(id, state, spoken) {
 function harness() {
   const h = {
     t: 1000, timers: [], handle: 0, recs: [], said: [], calls: [], selected: "s1", visible: true, voice: true,
-    autoAudio: true, honorAbort: true, recThrows: false, sentinels: [], wakeFails: false
+    autoAudio: true, honorAbort: true, recThrows: false, sentinels: [], wakeFails: false, changes: []
   };
   class FakeRecognition {
     constructor() { this.starts = 0; this.aborts = 0; h.recs.push(this); }
@@ -90,7 +90,7 @@ function harness() {
   h.Utterance = FakeUtterance;
   h.ctl = C.create({
     api, env,
-    deps: { selectedId: () => h.selected, visible: () => h.visible, voiceAvailable: () => h.voice, onChange: () => {} }
+    deps: { selectedId: () => h.selected, visible: () => h.visible, voiceAvailable: () => h.voice, onChange: (v) => { h.changes.push(v); } }
   });
   h.view = () => h.ctl.view();
   h.phase = () => h.ctl.view().phase;
@@ -746,6 +746,75 @@ test("a conversation utterance's error cancels the voice as cleanup and holds St
   assert.equal(h.ctl.canStart(), false);
   await h.advance(L.estimateMs("one two") * L.SPEECH_DEADLINE_FACTOR);
   assert.equal(h.ctl.canStart(), true);
+});
+
+test("Dictate's sound check waits for every utterance, the guard after its end and any uncertain period", async () => {
+  const h = harness();
+  assert.equal(h.ctl.soundClear(), true);
+  const u = new h.Utterance("Play this reply.");
+  h.ctl.track(u);
+  assert.equal(h.ctl.soundClear(), false);
+  h.t += 2000;
+  u.fire("end");
+  assert.equal(h.ctl.soundClear(), false);
+  h.changes.length = 0;
+  await h.advance(LIMITS.GUARD_MS - 1);
+  assert.equal(h.ctl.soundClear(), false);
+  await h.advance(1);
+  assert.equal(h.ctl.soundClear(), true);
+  // The page is told when it turned true.
+  assert.equal(h.changes[h.changes.length - 1].soundClear, true);
+
+  // A cut-off conversation cue: closed until its quiet period is over.
+  const g = await listening(harness());
+  await g.hear("stop listening");
+  assert.equal(g.ctl.soundClear(), false);
+  g.ctl.endTap();
+  assert.equal(g.ctl.holds(), false);
+  assert.equal(g.ctl.soundClear(), false);
+  const quiet = L.estimateMs(texts(g)[0]) * L.SPEECH_DEADLINE_FACTOR;
+  await g.advance(quiet - 1);
+  assert.equal(g.ctl.soundClear(), false);
+  await g.advance(1);
+  assert.equal(g.ctl.soundClear(), true);
+  assert.equal(g.changes[g.changes.length - 1].soundClear, true);
+});
+
+test("a conversation's request ids stay known after it ends, its late POST answer included", async () => {
+  const h = await listening(harness());
+  await sent(h, "r1");
+  h.ctl.endTap();
+  assert.equal(h.ctl.sentByConversation("r1"), true);
+  assert.equal(h.ctl.sentByConversation("r9"), false);
+
+  // Ended while the POST was unresolved; its answer comes afterwards.
+  const l = harness();
+  l.honorAbort = false;
+  await listening(l);
+  await l.hear("x");
+  await l.hear("send it");
+  await l.answer(PATH.TICKET, 200, { ticket: "t" });
+  l.ctl.endTap();
+  await l.answer(PATH.SEND, 200, { request_id: "r2", state: "handed_off" });
+  assert.equal(l.ctl.sentByConversation("r2"), true);
+});
+
+test("the conversation's request ids are bounded, newest kept", async () => {
+  const h = await listening(harness());
+  const n = LIMITS.OWNED_REQUESTS + 1;
+  for (let i = 0; i < n; i++) {
+    const id = "r" + i;
+    await sent(h, id, "question " + i);
+    await h.finish();
+    h.ctl.snapshot(snap({ requests: [rq(id, "answered", "Reply.")] }));
+    await flush();
+    await h.finish();
+    await h.alive(LIMITS.GUARD_MS);
+    assert.equal(h.phase(), PHASE.LISTENING, id);
+  }
+  assert.equal(h.ctl.sentByConversation("r0"), false);
+  assert.equal(h.ctl.sentByConversation("r1"), true);
+  assert.equal(h.ctl.sentByConversation("r" + (n - 1)), true);
 });
 
 test("the wake lock released by the system ends it", async () => {
