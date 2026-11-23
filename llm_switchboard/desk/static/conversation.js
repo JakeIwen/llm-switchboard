@@ -66,8 +66,8 @@
 //                     deps.onChange fires when it turns true (the guard and
 //                     the quiet period end on a timer). It says nothing about
 //                     a conversation: Dictate also needs !holds().
-//   view()            {phase, active, dest, label, draft, interim, reason, lost,
-//                     speaking, canStart, soundClear, reply}: everything the
+//   view()            {phase, active, serial, dest, label, draft, interim, reason,
+//                     lost, speaking, canStart, soundClear, reply}: everything the
 //                     view shows; `reply` is {text, spoken} of the current
 //                     request once a snapshot holds it, else null.
 //   holds()           A conversation is active or its closing cue plays: the
@@ -755,7 +755,8 @@
 
     function view() {
       return {
-        phase: c.phase, active: active(), dest: c.dest, label: c.label, draft: c.draft, interim: interim,
+        phase: c.phase, active: active(), serial: c.serial, dest: c.dest, label: c.label, draft: c.draft,
+        interim: interim,
         reason: c.reason, lost: c.lost, speaking: !!utt, canStart: canStart(), soundClear: soundClear(),
         reply: L.currentReply(c)
       };

@@ -186,6 +186,8 @@
   function initial() {
     return {
       phase: PHASE.OFF, dest: null, label: "", draft: "", frozenText: null,
+      // Which start this is, counted per page: a forget() replaces the dest, not the conversation.
+      serial: 0,
       // Request ids the start's snapshot held for the target (history), and
       // the ids this conversation's sends returned.
       history: {}, historyTaken: false, own: {},
@@ -451,7 +453,8 @@
 
   // The token is gone: what the conversation kept from the hub (the
   // snapshot, and with it the reply; the request ids; the draft; the
-  // session's label) goes with it. The phase and the end reason stay.
+  // session's label, also in its frozen dest) goes with it. The phase and
+  // the end reason stay.
   function forget(c) {
     var next = copy(c);
     next.snap = null;
@@ -463,6 +466,7 @@
     next.own = {};
     next.evidence = null;
     next.label = "";
+    if (next.dest) next.dest = Object.freeze(Object.assign({}, next.dest, { label: "" }));
     return next;
   }
 
@@ -746,6 +750,7 @@
       if (active(prev)) return { c: prev, fx: [] }; // a second tap is ignored
       var c0 = initial();
       c0.phase = PHASE.STARTING;
+      c0.serial = (prev.serial || 0) + 1;
       c0.dest = ev.dest;
       c0.label = ev.dest.label;
       return { c: c0, fx: [{ fx: FX.SNAPSHOT }] };

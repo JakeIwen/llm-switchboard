@@ -26,7 +26,7 @@
   function create(doc, taps) {
     function $(id) { return doc.getElementById(id); }
     var last = null;      // the last render's arguments, for the Close tap
-    var closed = null;    // the frozen dest of an ended conversation whose overlay was closed
+    var closed = null;    // the serial of the ended conversation whose overlay was closed
     var open = false;     // whether the overlay is up
     var invoker = null;   // the control whose tap brought it up
 
@@ -37,8 +37,8 @@
       taps.start();
     });
     $("conv-end").addEventListener("click", function () {
-      // Close hides an ended conversation's overlay; a new Start brings a new dest.
-      if (last && !last.v.active) closed = last.v.dest;
+      // Close hides an ended conversation's overlay; a new Start brings a new serial.
+      if (last && !last.v.active) closed = last.v.serial;
       taps.end();
       if (last) render(last.v, last.blocker);
     });
@@ -52,22 +52,24 @@
       why.hidden = !blocker;
       why.textContent = blocker ? "Start conversation is unavailable: " + blocker + "." : "";
 
-      var shown = v.phase !== PHASE.OFF && v.dest !== closed;
+      var shown = v.phase !== PHASE.OFF && v.serial !== closed;
       $("conv-overlay").hidden = !shown;
       modal(shown);
+      // What came from the hub is written hidden or not, so what the
+      // controller forgets (a dropped token) leaves the closed overlay too.
+      $("conv-dest").textContent = v.label || "";
+      $("conv-draft").textContent = v.draft || "";
+      $("conv-interim").textContent = v.interim || "";
+      // The full reply, the spoken summary's source, as text.
+      $("conv-reply-area").hidden = !v.reply;
+      $("conv-reply").textContent = v.reply ? v.reply.text : "";
       if (!shown) return;
       var ended = v.phase === PHASE.ENDED;
-      $("conv-dest").textContent = v.label;
       var state = $("conv-state");
       state.textContent = ended ? L.CUE.ENDED + ": " + v.reason + "." : STATE_TEXT[v.phase];
       state.setAttribute("data-phase", v.phase);
       $("conv-commands").hidden = ended;
       $("conv-draft-area").hidden = ended;
-      $("conv-draft").textContent = v.draft;
-      $("conv-interim").textContent = v.interim;
-      // The full reply, the spoken summary's source, as text.
-      $("conv-reply-area").hidden = !v.reply;
-      $("conv-reply").textContent = v.reply ? v.reply.text : "";
       $("conv-end").textContent = ended ? END_LABEL.ended : END_LABEL.active;
     }
 

@@ -131,6 +131,28 @@ test("a dropped token leaves no reply, draft or label on screen, only the end re
   }
 });
 
+test("a dropped token after Close empties the hidden overlay too", async () => {
+  const h = await paired();
+  await converse(h);
+  await voiceSend(h, "check the logs");
+  await h.answer(PATH.SEND, 200, { request_id: "r1", state: "handed_off" });
+  h.utt().fire("end");
+  await settle();
+  await h.answer(POLL, 200, snap({ requests: [voiceRq("r1", "answered", "All good.")] }));
+  h.$("conv-end").click();
+  await settle();
+  h.utt().fire("end");
+  await settle();
+  h.$("conv-end").click();
+  assert.equal(h.$("conv-overlay").hidden, true);
+  assert.equal(h.$("conv-reply").textContent, "full");
+  assert.equal(h.$("conv-dest").textContent, "label s1");
+  await h.answer(POLL, 401, { error: "unauthorized" });
+  assert.equal(h.$("conv-overlay").hidden, true, "Close still holds");
+  for (const id of ["conv-reply", "conv-draft", "conv-interim", "conv-dest"]) assert.equal(h.$(id).textContent, "", id);
+  assert.equal(h.$("conv-reply-area").hidden, true);
+});
+
 test("the tap flow's controls are disabled while a conversation holds the voice, and return after", async () => {
   const s = () => snap({ requests: [rq("old", "answered", "Earlier reply.")] });
   const h = await paired(s());

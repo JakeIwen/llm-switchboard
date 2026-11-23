@@ -115,6 +115,21 @@ test("a start takes a snapshot, the wake lock and the grant, then opens the mic 
   assert.equal(m.c().dest.session_id, "s1");
 });
 
+test("forgetting drops the session's label, in the frozen dest too, and keeps which start it was", () => {
+  const m = machine();
+  m.ev(EV.START, { dest: DEST });
+  m.ev(EV.END, { reason: REASON.END_TAPPED });
+  m.ev(EV.START, { dest: DEST });
+  const before = m.c();
+  assert.equal(before.serial, 2);
+  const after = L.forget(before);
+  assert.equal(after.label, "");
+  assert.equal(after.dest.label, "");
+  assert.equal(after.dest.session_id, "s1");
+  assert.equal(after.serial, 2);
+  assert.equal(before.dest.label, "one", "forget changed the state it was given");
+});
+
 test("a start ends when the target is not free or the switches are off", () => {
   const cases = [
     [snap({ targets: [target({ lock: { lock_id: "L", request_id: "x" } })] }), REASON.BUSY],

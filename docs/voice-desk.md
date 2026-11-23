@@ -664,7 +664,8 @@ is modal: focus moves to its End control, and the page behind it is inert
 to the session's heading while Start is disabled. When the token goes (a
 401, a revoke, expiry), the overlay keeps only the end reason: the reply,
 the draft and the session's label are dropped with the snapshot they came
-from, and the page behind keeps nothing the hub sent.
+from, also from an overlay already closed, and the page behind keeps
+nothing the hub sent.
 
 | State | Overlay | What happens |
 | --- | --- | --- |
