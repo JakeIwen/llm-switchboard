@@ -22,6 +22,9 @@
   var sentAckSeq = null; // pollSeq when the send was acknowledged
   var sentAckVersion = null; // version of the fresh snapshot fetched after the send ack
   var compose = freshCompose();
+  // Tapped send POSTs not yet settled, counted apart from `compose`, which a
+  // target change replaces while the POST is still out: Start waits for them.
+  var tapSends = 0;
   var startup = null; // startup.js's blocked-session view, created in wire()
   var conv = null, convView = null; // conversation.js's controller and conversation_view.js, created in wire()
   var audio = null; // page_audio.js: reply speech, Play and one-shot Dictate, created in wire()
@@ -539,15 +542,15 @@
     render();
     var ctl = new AbortController();
     var timer = setTimeout(function () { ctl.abort(); }, SEND_DEADLINE_MS);
-    api("POST", "/desk/api/send", { ticket: ticket, text: text }, { signal: ctl.signal }).then(function (r) {
+    tapSends++;
+    function settled(r) {
       clearTimeout(timer);
-      if (seq !== compose.seq || compose.phase !== "sending") return;
+      tapSends--;
+      if (seq !== compose.seq || compose.phase !== "sending") return render();
       settleSend(Logic.classifySend(r));
-    }, function () {
-      clearTimeout(timer);
-      if (seq !== compose.seq || compose.phase !== "sending") return;
-      settleSend(Logic.classifySend(null));
-    });
+    }
+    api("POST", "/desk/api/send", { ticket: ticket, text: text }, { signal: ctl.signal })
+      .then(settled, function () { settled(null); });
   }
 
   // A fresh snapshot (no `after`) so a request evicted before this tab's next
@@ -642,7 +645,7 @@
 
   function startBlocker() {
     return window.DeskConversationLogic.startBlocker(state, selectedId, { recognizer: audio.speechInputAvailable(),
-      voice: audio.voiceAvailable(), tapSending: compose.phase === "sending", canStart: conv.canStart() });
+      voice: audio.voiceAvailable(), tapSending: tapSends > 0, canStart: conv.canStart() });
   }
 
   // A started conversation owns the target: the tap flow's review, ticket and dictation go.

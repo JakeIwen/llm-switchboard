@@ -523,3 +523,22 @@ test("a tapped send's reply is still spoken on arrival", async () => {
   await h.answer(POLL, 200, snap({ requests: [rq("r0", "answered", "Done.")] }));
   assert.equal(h.utt().text, "Done.");
 });
+
+test("Start stays refused while a tapped send is in flight, whatever target is selected", async () => {
+  const two = () => snap({ targets: [target("s1"), target("s2")] });
+  const h = await paired(two());
+  h.target("s1").click();
+  h.$("draft").value = "hello";
+  h.$("draft").dispatch("input");
+  await h.answer(PATH.TICKET, 200, { ticket: "tap-ticket" });
+  h.$("review-btn").click();
+  h.$("send-btn").click();
+  await settle();
+  assert.equal(h.pending(PATH.SEND).length, 1);
+  h.target("s2").click();
+  await settle();
+  assert.equal(h.$("conv-start").disabled, true);
+  assert.equal(h.$("conv-why").textContent, "Start conversation is unavailable: " + BLOCKER.TAP_SEND + ".");
+  await h.answer(PATH.SEND, 200, { request_id: "r1", state: "handed_off" });
+  assert.equal(h.$("conv-start").disabled, false);
+});
