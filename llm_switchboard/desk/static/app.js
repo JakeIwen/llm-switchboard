@@ -403,7 +403,11 @@
     var editing = compose.phase === "edit";
     var busy = compose.phase === "sending" || conv.holds();
     $("draft").disabled = !composable || busy;
-    $("dictate").disabled = !composable || busy;
+    // A running dictation keeps its Stop; one that can't start says why.
+    var unheard = audio.dictating() ? null : audio.dictateBlocker();
+    $("dictate").disabled = !composable || busy || !!unheard;
+    $("dictate-why").hidden = !unheard || !composable || !audio.speechInputAvailable();
+    $("dictate-why").textContent = unheard ? "Dictate is unavailable: " + unheard + "." : "";
     $("test-btn").disabled = !composable || busy;
     $("review-btn").disabled = !composable || busy;
     $("dictate").textContent = audio.dictating() ? "Stop" : "Dictate";
@@ -593,6 +597,8 @@
 
   function toggleDictation() {
     if (audio.dictating()) { audio.stopDictation(); return; }
+    // Checked again at the tap: the render may predate the latest sound.
+    if (audio.dictateBlocker()) { render(); return; }
     resetAfterResult();
     if (compose.phase === "review") { compose.phase = "edit"; $("review").hidden = true; }
     if (!freezeDestination()) { setNote("This target is not available for sends."); return; }

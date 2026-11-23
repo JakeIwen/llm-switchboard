@@ -287,8 +287,12 @@ test("the tap flow's controls are disabled while a conversation holds the voice,
   assert.ok(controls().every((c) => c.disabled));
   h.utt().fire("end");
   await settle();
-  assert.ok(controls().slice(0, 4).every((c) => !c.disabled));
+  assert.ok(controls().slice(1, 4).every((c) => !c.disabled));
   assert.ok(h.plays().every((c) => !c.disabled));
+  // Dictate opens a mic, so it also waits out the guard after the cue.
+  assert.equal(h.$("dictate").disabled, true);
+  await h.advance(L.LIMITS.GUARD_MS);
+  assert.equal(h.$("dictate").disabled, false);
   h.$("conv-end").click();
   assert.equal(h.$("conv-overlay").hidden, true);
 });
@@ -405,4 +409,47 @@ test("a fault while applying one snapshot is shown, still reaches the conversati
   await h.answer(POLL, 200, snap());
   assert.equal(h.$("conn").textContent, "Connected");
   assert.equal(h.pending(POLL).length, 1);
+});
+
+const dictateWhy = (reason) => "Dictate is unavailable: " + reason + ".";
+
+test("Dictate stays shut while a cut-off conversation utterance may still sound", async () => {
+  const h = await paired();
+  await converse(h);
+  h.rec().hear("open the hatch");
+  h.rec().hear("read it back");
+  await settle();
+  h.$("conv-end").click();
+  await settle();
+  h.$("conv-end").click();
+  assert.equal(h.$("conv-overlay").hidden, true);
+  const recs = h.recs.length, tickets = h.all(PATH.TICKET).length;
+  assert.equal(h.$("dictate").disabled, true);
+  assert.equal(h.$("dictate-why").hidden, false);
+  assert.equal(h.$("dictate-why").textContent, dictateWhy(BLOCKER.NOT_QUIET));
+  h.$("dictate").dispatch("click");
+  await settle();
+  assert.equal(h.recs.length, recs, "a recognizer opened while sound was uncertain");
+  assert.equal(h.all(PATH.TICKET).length, tickets);
+  await h.advance(L.estimateMs("open the hatch") * L.SPEECH_DEADLINE_FACTOR);
+  assert.equal(h.$("dictate").disabled, false);
+  assert.equal(h.$("dictate-why").hidden, true);
+  h.$("dictate").click();
+  await settle();
+  assert.equal(h.recs.length, recs + 1);
+  assert.equal(h.rec().starts, 1);
+});
+
+test("Dictate waits for Play's end and the guard after it", async () => {
+  const h = await paired(snap({ requests: [rq("old", "answered", "Earlier reply.")] }));
+  h.plays()[0].click();
+  await settle();
+  assert.equal(h.$("dictate").disabled, true);
+  assert.equal(h.$("dictate-why").textContent, dictateWhy(BLOCKER.NOT_QUIET));
+  h.utt().fire("end");
+  await settle();
+  assert.equal(h.$("dictate").disabled, true, "the guard after the end has not passed");
+  await h.advance(L.LIMITS.GUARD_MS);
+  assert.equal(h.$("dictate").disabled, false);
+  assert.equal(h.$("dictate-why").hidden, true);
 });

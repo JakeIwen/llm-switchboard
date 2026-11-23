@@ -8,6 +8,7 @@
   "use strict";
 
   var Logic = root.DeskLogic || require("./desk_logic.js");
+  var L = root.DeskConversationLogic || require("./conversation_logic.js");
 
   // opts: {win: the page's window, $(id) -> element, conv: the controller,
   // note(text): the compose note, for dictation errors}.
@@ -61,6 +62,16 @@
     function pruneReplies(requests) { Logic.pruneIds(spoken, requests); }
 
     function dictating() { return !!recognition; }
+
+    // Why one-shot Dictate may not open the mic now, or null. The mic opens
+    // only when no desk sound may still be playing (the completion rule's
+    // guard and quiet period, conv.soundClear()) and no conversation holds
+    // the voice; the controller's onChange re-renders when that changes.
+    function dictateBlocker() {
+      if (!conv.soundClear()) return L.BLOCKER.NOT_QUIET;
+      if (conv.holds()) return L.BLOCKER.IN_PROGRESS;
+      return null;
+    }
 
     function stopDictation() {
       if (!recognition) return;
@@ -116,7 +127,7 @@
     return {
       voiceAvailable: voiceAvailable, speechInputAvailable: speechInputAvailable, stopSpeaking: stopSpeaking,
       speak: speak, repliesArrived: repliesArrived, forgetReplies: forgetReplies, pruneReplies: pruneReplies,
-      dictating: dictating, startDictation: startDictation, stopDictation: stopDictation
+      dictating: dictating, dictateBlocker: dictateBlocker, startDictation: startDictation, stopDictation: stopDictation
     };
   }
 

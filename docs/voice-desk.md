@@ -670,6 +670,15 @@ it ends. Nothing in a conversation clears a lock, retries a request,
 acknowledges a startup warning, changes the target or enrolls anything;
 those stay touch-only, as does starting one.
 
+One-shot **Dictate** opens a mic too, so it follows the same completion
+rule: it starts only when no utterance of this page is queued or playing,
+the 500 ms guard after the last one's end, error or cancel has passed, sound
+isn't uncertain, and no conversation holds the voice. Otherwise it is
+disabled with "Dictate is unavailable: <reason>." (the desk may still be
+speaking; wait until it is quiet, or a conversation is in progress), and it
+comes back on its own when that passes. A dictation already running keeps
+its Stop.
+
 **Start conversation** is enabled only when the snapshot has sends and voice
 confirm on and no lock-store error, the selected session is available with
 no lock and no outstanding request, the tablet has speech recognition and a
