@@ -343,6 +343,13 @@
     runAll([renderTargets, renderDetail, renderSettings, function () { convView.render(conv.view(), startBlocker()); }]);
   }
 
+  // The controller's onChange: a fault in the page's render is the page's,
+  // shown like a snapshot fault, and never thrown into the controller's own
+  // steps (track() before a speak(), a fetch's answer).
+  function renderForController() {
+    try { render(); } catch (e) { pageFault(e); }
+  }
+
   function renderTargets() {
     var list = $("targets");
     clear(list);
@@ -651,8 +658,9 @@
 
   // A started conversation owns the target: the tap flow's review, ticket and dictation go.
   function startConversation() {
-    if (!startBlocker() && conv.start(Logic.destinationOf(findTarget(selectedId), state.epoch))) voidCompose(null);
-    render();
+    batch(function () {
+      if (!startBlocker() && conv.start(Logic.destinationOf(findTarget(selectedId), state.epoch))) voidCompose(null);
+    });
   }
 
   // ---- Clear, enroll ------------------------------------------------------
@@ -703,7 +711,7 @@
   function wire() {
     conv = window.DeskConversation.create({ api: api, env: window.DeskConversation.browserEnv(window), deps: {
       selectedId: function () { return selectedId; }, visible: function () { return document.visibilityState === "visible"; },
-      voiceAvailable: function () { return audio.voiceAvailable(); }, onChange: render } });
+      voiceAvailable: function () { return audio.voiceAvailable(); }, onChange: renderForController } });
     audio = window.DeskPageAudio.create({ win: window, $: $, conv: conv, note: setNote });
     convView = window.DeskConversationView.create(document, { start: startConversation, end: conv.endTap });
     startup = window.DeskStartup.create({

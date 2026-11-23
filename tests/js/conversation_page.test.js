@@ -627,3 +627,16 @@ test("closing the overlay while Start is disabled returns focus to the session's
   assert.equal(h.$("page").inert, false);
   assert.equal(h.document.activeElement, h.$("detail-title"));
 });
+
+test("a render fault during the page's own speech is shown and the speech still plays", async () => {
+  const h = await paired(snap({ requests: [rq("old", "answered", "Earlier reply.")] }));
+  const title = h.$("detail-title");
+  let faults = 1;
+  Object.defineProperty(title, "textContent", { configurable: true, get: () => "", set: () => {
+    if (faults-- > 0) throw new Error("render fault");
+  } });
+  h.plays()[0].click();
+  await settle();
+  assert.equal(h.utt().text, "Earlier reply.");
+  assert.equal(h.$("conn").getAttribute("data-state"), "fault");
+});
