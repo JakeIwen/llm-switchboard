@@ -30,8 +30,9 @@
 //   blocker()         Why canStart() is false, as a BLOCKER (IN_PROGRESS,
 //                     LETTING_GO, NOT_QUIET), or null; pass it to
 //                     startBlocker as `page.blocker` for the view's reason.
-//   snapshot(state)   Every state the page's poll receives (ignored when no
-//                     conversation is active).
+//   snapshot(state)   Every state the page's poll receives, whether or not
+//                     a conversation is active (a closing cue and an
+//                     abandoned grant request use it too).
 //   endTap()          The full-screen End conversation control; also stops
 //                     the closing cue.
 //   hidden()          The page was hidden (visibilitychange to hidden).
@@ -42,7 +43,11 @@
 //   unpaired()        The token was dropped (401, revoke, expiry).
 //   track(utterance)  Before the page speaks any utterance of its own (Play,
 //                     the legacy reply speech), so its end, error or cancel
-//                     counts toward the guard and Start's quiet rule.
+//                     counts toward the guard and Start's quiet rule. One not
+//                     ended within twice its estimate is cancelled (the
+//                     controller calls speechSynthesis.cancel()) and makes
+//                     sound uncertain; its real end or error, whenever it
+//                     comes, still restarts the guard.
 //   soundClear()      For the page's one-shot Dictate, before it starts its
 //                     own recognizer: true only when no utterance of this
 //                     page is queued or playing, LIMITS.GUARD_MS has passed
