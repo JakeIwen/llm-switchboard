@@ -468,6 +468,20 @@ test("the draft and Test come back when dictation ends, by every route", async (
   assert.equal(h.$("test-btn").disabled, false);
 });
 
+test("after a late sound, Start and Dictate come back once the renewed quiet period passes, with no other render", async () => {
+  const h = await paired(snap({ requests: [rq("a", "answered", "Short.")] }));
+  const play = await writtenOffPlay(h);
+  h.$("dictate").click();
+  await settle();
+  play.fire("end");
+  await settle();
+  assert.equal(h.$("dictate").disabled, true);
+  assert.equal(h.$("conv-start").disabled, true);
+  await h.advance(L.estimateMs("Short.") * L.SPEECH_DEADLINE_FACTOR);
+  assert.equal(h.$("dictate").disabled, false);
+  assert.equal(h.$("conv-start").disabled, false);
+});
+
 test("the hub's handoff refusal for a changed target ends the conversation silently", async () => {
   const h = await paired();
   await converse(h);

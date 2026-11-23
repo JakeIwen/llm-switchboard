@@ -82,8 +82,10 @@
           entry.offAt = quietAt;
           if (error) markUncertain(estimate);
         }
-        soundChanged();
         if (i < 0 && opts.onLate) opts.onLate(entry);
+        // After the late-event decision, which may renew the uncertain
+        // period: the page is told when that one has passed too.
+        soundChanged();
       };
     }
 

@@ -810,7 +810,8 @@ stops and the draft goes back to what it was when the dictation started,
 which removes only the words it added (nothing else could change the draft
 meanwhile), with the note "Dictation stopped: the desk may have heard its
 own speech. Its words were discarded.". Either way sound is uncertain again
-for twice that utterance's estimate. Otherwise the late event only moves the guard.
+for twice that utterance's estimate, and Start and Dictate come back on
+their own once that has passed. Otherwise the late event only moves the guard.
 
 End reasons, as the overlay and the cue word them: you said stop listening;
 End was tapped; the page was hidden; the page was closed or frozen (on
