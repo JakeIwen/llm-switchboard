@@ -53,13 +53,7 @@
     STEP_MS: 10000,
     SEND_DEADLINE_MS: 20000,
     // Mirrors model.MAX_VOICE_TEXT_BYTES.
-    MAX_DRAFT_BYTES: 1024,
-    // How many request ids sent by conversations the controller remembers,
-    // across conversations, so the tap flow never voices their replies. The
-    // hub lists at most model.MAX_REQUESTS (20), so an id falls out only after
-    // this many later conversation sends, while it is still listed only if
-    // it stayed outstanding through all of them.
-    OWNED_REQUESTS: 64
+    MAX_DRAFT_BYTES: 1024
   });
 
   // An utterance gets twice the time estimated from its text before it counts

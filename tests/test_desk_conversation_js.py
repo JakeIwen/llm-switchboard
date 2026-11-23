@@ -10,7 +10,7 @@ from pathlib import Path
 
 from llm_switchboard.desk import grants
 from llm_switchboard.desk.http_server import POST_ROUTES, STATE_PATH
-from llm_switchboard.desk.model import MAX_REQUESTS, MAX_VOICE_TEXT_BYTES, ConfirmMode, RegistrationState, RequestState
+from llm_switchboard.desk.model import MAX_VOICE_TEXT_BYTES, ConfirmMode, RegistrationState, RequestState
 
 ROOT = Path(__file__).resolve().parents[1]
 STATIC = ROOT / "llm_switchboard" / "desk" / "static"
@@ -67,9 +67,6 @@ class ConversationMirrorTests(unittest.TestCase):
         self.assertLess(limits["FRESH_MS"], grants.GRANT_TTL_SECONDS * 1000)
         self.assertLess(limits["BEAT_ABORT_MS"], limits["BEAT_MS"])
         self.assertLess(limits["BEAT_MS"], limits["FRESH_MS"])
-
-    def test_the_page_remembers_more_conversation_requests_than_the_hub_lists(self):
-        self.assertGreater(self.js["limits"]["OWNED_REQUESTS"], MAX_REQUESTS)
 
     def test_the_controller_calls_routes_the_hub_serves(self):
         paths = dict(self.js["paths"])

@@ -780,43 +780,6 @@ test("Dictate's sound check waits for every utterance, the guard after its end a
   assert.equal(g.changes[g.changes.length - 1].soundClear, true);
 });
 
-test("a conversation's request ids stay known after it ends, its late POST answer included", async () => {
-  const h = await listening(harness());
-  await sent(h, "r1");
-  h.ctl.endTap();
-  assert.equal(h.ctl.sentByConversation("r1"), true);
-  assert.equal(h.ctl.sentByConversation("r9"), false);
-
-  // Ended while the POST was unresolved; its answer comes afterwards.
-  const l = harness();
-  l.honorAbort = false;
-  await listening(l);
-  await l.hear("x");
-  await l.hear("send it");
-  await l.answer(PATH.TICKET, 200, { ticket: "t" });
-  l.ctl.endTap();
-  await l.answer(PATH.SEND, 200, { request_id: "r2", state: "handed_off" });
-  assert.equal(l.ctl.sentByConversation("r2"), true);
-});
-
-test("the conversation's request ids are bounded, newest kept", async () => {
-  const h = await listening(harness());
-  const n = LIMITS.OWNED_REQUESTS + 1;
-  for (let i = 0; i < n; i++) {
-    const id = "r" + i;
-    await sent(h, id, "question " + i);
-    await h.finish();
-    h.ctl.snapshot(snap({ requests: [rq(id, "answered", "Reply.")] }));
-    await flush();
-    await h.finish();
-    await h.alive(LIMITS.GUARD_MS);
-    assert.equal(h.phase(), PHASE.LISTENING, id);
-  }
-  assert.equal(h.ctl.sentByConversation("r0"), false);
-  assert.equal(h.ctl.sentByConversation("r1"), true);
-  assert.equal(h.ctl.sentByConversation("r" + (n - 1)), true);
-});
-
 test("the wake lock released by the system ends it", async () => {
   const h = await listening(harness());
   h.sentinels[0].listeners.forEach((fn) => fn());

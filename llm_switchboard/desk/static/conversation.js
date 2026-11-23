@@ -56,12 +56,6 @@
 //                     deps.onChange fires when it turns true (the guard and
 //                     the quiet period end on a timer). It says nothing about
 //                     a conversation: Dictate also needs !holds().
-//   sentByConversation(id) Whether a conversation of this page sent that
-//                     request id, even after it ended (the POST's answer is
-//                     recorded when it comes, late included): the tap flow
-//                     never voices such a reply. Remembers the newest
-//                     LIMITS.OWNED_REQUESTS ids. A voice send whose POST
-//                     never answered has no id the page knows.
 //   view()            {phase, active, dest, draft, interim, reason, lost,
 //                     speaking, canStart, soundClear}: everything the view shows.
 //   holds()           A conversation is active or its closing cue plays: the
@@ -118,7 +112,6 @@
     var cutOff = false;      // this conversation stopped an utterance before its end
     var quietHandle = null;  // tells the page when the quiet rules have passed
     var sounding = [];       // submitted utterances with no terminal event yet
-    var sent = [];           // request ids conversations sent, newest last (LIMITS.OWNED_REQUESTS)
     var interim = "";
 
     function nextId() { return ++seq; }
@@ -425,12 +418,10 @@
       setTimer(TIMER.SEND_ABORT, LIMITS.SEND_DEADLINE_MS);
       var body = { ticket: ticket, text: text, confirm: L.CONFIRM.VOICE, grant: grant };
       api("POST", PATH.SEND, body, signal(FETCH.SEND)).then(function (r) {
-        var k = D.classifySend(r);
-        // Ours even when the answer comes after the end: its reply is never the tap flow's.
-        if (k.request_id) remember(k.request_id);
         if (!settle(FETCH.SEND, id)) return;
         clearTimer(TIMER.SEND_ABORT);
         if (unauthorized(r)) return;
+        var k = D.classifySend(r);
         var type = SEND_EVENT[k.outcome] || EV.SEND_UNKNOWN;
         dispatch({ type: type, request_id: k.request_id, state: r.data && r.data.state, reason: detail(r) });
       }, function () {
@@ -438,12 +429,6 @@
         clearTimer(TIMER.SEND_ABORT);
         dispatch({ type: EV.SEND_UNKNOWN });
       });
-    }
-
-    function remember(requestId) {
-      if (sent.indexOf(requestId) !== -1) return;
-      sent.push(requestId);
-      if (sent.length > LIMITS.OWNED_REQUESTS) sent.shift();
     }
 
     // ---- recognition ------------------------------------------------------
@@ -746,8 +731,6 @@
       return !(env.synth && (env.synth.speaking || env.synth.pending));
     }
 
-    function sentByConversation(requestId) { return sent.indexOf(requestId) !== -1; }
-
     // Why canStart() is false, for the view: a BLOCKER, or null when it is true.
     function blocker() {
       if (active()) return L.BLOCKER.IN_PROGRESS;
@@ -764,7 +747,7 @@
 
     return {
       start: start, canStart: canStart, blocker: blocker, snapshot: snapshot, track: track, view: view, holds: holds,
-      soundClear: soundClear, sentByConversation: sentByConversation,
+      soundClear: soundClear,
       endTap: function () { endIfActive(REASON.END_TAPPED); },
       hidden: function () { endIfActive(REASON.HIDDEN); },
       unpaired: function () { endIfActive(REASON.UNPAIRED, true); },

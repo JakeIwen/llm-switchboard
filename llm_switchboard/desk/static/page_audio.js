@@ -41,11 +41,16 @@
       win.speechSynthesis.speak(u);
     }
 
-    // Speaks a reply only when it newly arrives for the target on screen; while conv.holds() it is only marked spoken.
+    // Speaks a reply only when it newly arrives for the target on screen;
+    // while conv.holds() it is only marked spoken. A reply to a voice send is
+    // the conversation's, by the hub's own record of the request, so it is
+    // never voiced here: not after its conversation ended, and not when the
+    // send's answer never reached the page. Play still speaks it.
     function repliesArrived(next, selectedId) {
       next.requests.forEach(function (rq) {
         if (!rq.reply || spoken.has(rq.request_id)) return;
         spoken.add(rq.request_id);
+        if (rq.confirm === L.CONFIRM.VOICE) return;
         if (primed && rq.session_id === selectedId && win.document.visibilityState === "visible") {
           speak(rq.reply.spoken);
         }

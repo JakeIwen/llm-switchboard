@@ -165,10 +165,11 @@ function target(id, over) {
   return Object.assign({ host: "pi", session_id: id, label: "label " + id, cwd: "/w", enrolled: true,
     registration: "replied", generation: 3, lock: null }, over);
 }
-function rq(id, state, spoken) {
-  return { request_id: id, session_id: "s1", state, text: "asked", created: 1,
+function rq(id, state, spoken, confirm) {
+  return { request_id: id, session_id: "s1", state, text: "asked", created: 1, confirm: confirm || "tap",
     reply: spoken === undefined ? null : { text: "full", spoken } };
 }
+const voiceRq = (id, state, spoken) => rq(id, state, spoken, L.CONFIRM.VOICE);
 
 // Pairs the page and delivers its first snapshot.
 async function paired(first, opts) {
@@ -329,15 +330,15 @@ test("a reply that arrives during a conversation is spoken once, by the controll
   h.utt().fire("end");
   await settle();
   const lock = { lock_id: "L1", request_id: "r1", since: 1, earlier_run: false };
-  await h.answer(POLL, 200, snap({ targets: [target("s1", { lock })], requests: [rq("r1", "handed_off")] }));
-  await h.answer(POLL, 200, snap({ requests: [rq("r1", "answered", "All good.")] }));
+  await h.answer(POLL, 200, snap({ targets: [target("s1", { lock })], requests: [voiceRq("r1", "handed_off")] }));
+  await h.answer(POLL, 200, snap({ requests: [voiceRq("r1", "answered", "All good.")] }));
   assert.equal(h.utt().text, "All good.");
   assert.equal(h.state(), "Reading the reply. The mic is closed.");
   h.$("conv-end").click();
   await settle();
   h.utt().fire("end");
   await settle();
-  await h.answer(POLL, 200, snap({ requests: [rq("r1", "answered", "All good.")] }));
+  await h.answer(POLL, 200, snap({ requests: [voiceRq("r1", "answered", "All good.")] }));
   assert.equal(h.said.filter((u) => u.text === "All good.").length, 1);
 });
 
@@ -471,4 +472,54 @@ test("Dictate waits for Play's end and the guard after it", async () => {
   await h.advance(L.LIMITS.GUARD_MS);
   assert.equal(h.$("dictate").disabled, false);
   assert.equal(h.$("dictate-why").hidden, true);
+});
+
+// Through "send it" to the voice send's POST, left pending.
+async function voiceSend(h, words) {
+  h.rec().hear(words);
+  h.rec().hear("send it");
+  await settle();
+  await h.answer(PATH.TICKET, 200, { ticket: "t1" });
+  assert.equal(h.pending(PATH.SEND).length, 1);
+}
+
+test("a stopped conversation's late reply is never voiced by the tap flow, and Play still works", async () => {
+  const h = await paired();
+  await converse(h);
+  await voiceSend(h, "check the logs");
+  await h.answer(PATH.SEND, 200, { request_id: "r1", state: "handed_off" });
+  h.utt().fire("end");
+  await settle();
+  h.$("conv-end").click();
+  await settle();
+  h.utt().fire("end");
+  await settle();
+  h.$("conv-end").click();
+  assert.equal(h.$("conv-overlay").hidden, true);
+  const said = h.said.length;
+  await h.answer(POLL, 200, snap({ requests: [voiceRq("r1", "answered", "All good.")] }));
+  assert.equal(h.said.length, said, "the tap flow spoke a conversation's reply");
+  const play = h.plays()[0];
+  assert.equal(play.disabled, false);
+  play.click();
+  await settle();
+  assert.equal(h.utt().text, "All good.");
+});
+
+test("a voice send whose POST never answered is not voiced by the tap flow either", async () => {
+  const h = await paired();
+  await converse(h);
+  await voiceSend(h, "check the logs");
+  h.$("conv-end").click();
+  await settle();
+  h.$("conv-end").click();
+  const said = h.said.length;
+  await h.answer(POLL, 200, snap({ requests: [voiceRq("r1", "answered", "All good.")] }));
+  assert.equal(h.said.length, said, "the tap flow spoke a conversation's reply");
+});
+
+test("a tapped send's reply is still spoken on arrival", async () => {
+  const h = await paired(snap({ requests: [rq("r0", "handed_off")] }));
+  await h.answer(POLL, 200, snap({ requests: [rq("r0", "answered", "Done.")] }));
+  assert.equal(h.utt().text, "Done.");
 });
