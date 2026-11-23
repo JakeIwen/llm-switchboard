@@ -253,14 +253,21 @@ test("a new Start never races an abandoned grant acquisition", async () => {
   assert.deepEqual(releases(h), ["old"]);
 });
 
-test("an abandoned grant request with no response holds Start until the hub's epoch changes", async () => {
-  for (const ending of ["never answers", "fails without a response"]) {
+test("an abandoned or failed grant request with no response holds Start until the hub's epoch changes", async () => {
+  for (const ending of ["never answers", "fails without a response", "fails while still current"]) {
     const h = harness();
     h.ctl.start(DEST);
     await flush();
     await h.answer(PATH.STATE, 200, snap());
     const stuck = h.pending(PATH.GRANT)[0];
-    h.ctl.endTap();
+    if (ending === "fails while still current") {
+      // A transport failure is no proof the hub never read it.
+      stuck.fail();
+      await flush();
+      assert.equal(h.view().reason, REASON.HUB_UNREACHABLE, ending);
+    } else {
+      h.ctl.endTap();
+    }
     if (ending === "fails without a response") { stuck.fail(); await flush(); }
     // No page-side timer lets it go: the hub may still read and run it.
     await h.advance(LIMITS.STEP_MS * 10);

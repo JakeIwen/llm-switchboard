@@ -692,8 +692,10 @@ its Stop.
 confirm on and no lock-store error, the selected session is available with
 no lock and no outstanding request, the tablet has speech recognition and a
 voice, no tapped send is in flight (on any target), no conversation is in
-progress, no grant request a past conversation gave up on is still
-unanswered (nor the release of a grant it brought), no utterance of this
+progress, no grant request a past conversation gave up on, or that failed
+with no response (a transport failure doesn't prove the hub never read it),
+is still unanswered (nor the release of a grant it brought; only its answer
+or a snapshot from a new hub epoch lets it go), no utterance of this
 page is queued or playing, and sound isn't uncertain (below). Otherwise it
 is disabled and the reason is written under it: "Start conversation is
 unavailable: <reason>." with one of: the hub has not answered yet; sends

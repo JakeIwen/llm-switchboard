@@ -26,9 +26,10 @@
 //                     label, epoch} frozen from the tapped control. False
 //                     (and nothing happens) unless canStart().
 //   canStart()        No conversation, no utterance of this page queued or
-//                     playing, no uncertain sound, and no abandoned grant
-//                     request the hub may still act on (see abandonGrant):
-//                     the Start control's enabled state.
+//                     playing, no uncertain sound, and no grant request the
+//                     hub may still act on (given up on, or failed with no
+//                     response; see abandonGrant): the Start control's
+//                     enabled state.
 //   blocker()         Why canStart() is false, as a BLOCKER (IN_PROGRESS,
 //                     LETTING_GO, NOT_QUIET), or null; pass it to
 //                     startBlocker as `page.blocker` for the view's reason.
@@ -331,9 +332,12 @@
         dispatch({ type: EV.GRANT_OK, startedAt: startedAt,
           ctx: { selectedId: deps.selectedId(), visible: deps.visible() } });
       }, function () {
-        // No response: an abandoned request stays a straggler.
-        if (!settle(FETCH.GRANT, id)) return;
+        // No response is no proof the hub never read the request: the
+        // acquisition is unknown, like one the page gave up on, so it
+        // stays a straggler whether this or the step deadline came first.
+        if (!fetches[FETCH.GRANT] || fetches[FETCH.GRANT].id !== id) return;
         clearTimer(TIMER.STEP);
+        abandonGrant();
         dispatch({ type: EV.FAIL, reason: REASON.HUB_UNREACHABLE });
       });
     }
@@ -345,8 +349,9 @@
     // still do so, so Start waits until one of two things does: its response
     // arrives (and a grant in it is released), or a poll shows a new hub
     // epoch (the request named the old one, and its connection died with
-    // that hub process). A request that fails with no response leaves Start
-    // refused until either happens, or the page is reloaded.
+    // that hub process). A request that fails with no response, before or
+    // after the page gave up on it, leaves Start refused until the epoch
+    // changes or the page is reloaded.
     function abandonGrant() {
       var f = fetches[FETCH.GRANT];
       if (!f) return false;
