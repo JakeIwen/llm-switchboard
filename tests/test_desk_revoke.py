@@ -21,7 +21,7 @@ from llm_switchboard.desk.model import REVOKE_IN_PROGRESS, Revoked
 class StateRevokeTest(unittest.TestCase):
     def setUp(self):
         config = desk_config(make_home(self))
-        self.state = HubState(LockStore(config.lock_file), now=Clock(), token_bytes=secrets.token_bytes)
+        self.state = HubState(LockStore(config.lock_file), now=Clock(), elapsed=Clock(), token_bytes=secrets.token_bytes)
         self.token = self.new_token()
 
     def new_token(self) -> str:

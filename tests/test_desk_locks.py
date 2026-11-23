@@ -163,7 +163,7 @@ class LockStoreTest(unittest.TestCase):
     def test_a_hub_over_a_corrupt_lock_file_refuses_sends_and_reports_it(self):
         self.path.parent.mkdir(parents=True)
         self.path.write_text("garbage")
-        state = HubState(LockStore(self.path), now=Clock(), token_bytes=secrets.token_bytes)
+        state = HubState(LockStore(self.path), now=Clock(), elapsed=Clock(), token_bytes=secrets.token_bytes)
         state.set_sends_enabled(True)
         generation = state.register(1, SESSION_A, FakeIdentity(1, "1", 2, "2", SESSION_A))
         self.assertIn("corrupt", state.snapshot()["lock_store_error"])

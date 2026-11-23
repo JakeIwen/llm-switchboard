@@ -107,6 +107,7 @@ class ChannelConnection:
 
 class Hub:
     def __init__(self, config: DeskConfig, *, peer=None, now: Callable[[], float] = time.time,
+                 elapsed: Callable[[], float] = time.monotonic,
                  token_bytes: Callable[[int], bytes] = secrets.token_bytes, lock_store=None,
                  recheck_seconds: float = RECHECK_SECONDS, heartbeat_seconds: float = HEARTBEAT_SECONDS,
                  idle_timeout_seconds: float = IDLE_TIMEOUT_SECONDS, long_poll_seconds: float | None = None,
@@ -121,7 +122,8 @@ class Hub:
         # published over a newer change. Lock order, everywhere: the files'
         # cross-process locks (`_policy_files`), this lock, the state's.
         self._policy_lock = threading.RLock()
-        self.state = HubState(lock_store or LockStore(config.lock_file), now=now, token_bytes=token_bytes)
+        self.state = HubState(lock_store or LockStore(config.lock_file), now=now, elapsed=elapsed,
+                              token_bytes=token_bytes)
         self.labels = SessionLabels(config)
         self.startup = StartupAck(config, self.enrollment, tmux or Tmux(timeout=STARTUP_TMUX_TIMEOUT_SECONDS),
                                   self.state.epoch, now=now)

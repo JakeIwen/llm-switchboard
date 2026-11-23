@@ -5,7 +5,9 @@ A grant lets the one paired page send prompts confirmed by a spoken "send it"
 (`ConfirmMode.VOICE`) to one frozen target. It is given only to a token that
 is the only valid token, only while the voice gate is on, and only for a
 target that could take a ticket now. It expires `GRANT_TTL_SECONDS` after the
-hub last renewed it; an expired grant is never revived. At most one exists:
+hub last renewed it, measured on the state's `elapsed()` clock so a wall-clock
+correction can neither extend nor cut a lease; an expired grant is never
+revived. At most one exists:
 a new grant replaces the old one, so a delayed end or beat naming the old id
 touches nothing. Beat, end, `begin_send` and `hand_off` all require the exact
 current, unexpired grant for that token (and, for a send, that target). A
@@ -23,7 +25,7 @@ and the state it guards can't drift apart. The voice gate it reads
 from dataclasses import dataclass
 import hmac
 
-from .model import MAX_VOICE_TEXT_BYTES, ConfirmMode, DeskError
+from .model import MAX_VOICE_TEXT_BYTES, ConfirmMode, DeskError, LockStoreError, RequestState
 from ..session_id import is_session_id
 
 GRANT_TTL_SECONDS = 15
@@ -44,7 +46,8 @@ class Grant:
     token_hash: str
     session_id: str
     generation: int
-    # When the hub last created or renewed it; it expires GRANT_TTL_SECONDS later.
+    # When the hub last created or renewed it, on the elapsed-time clock; it
+    # expires GRANT_TTL_SECONDS later.
     renewed: float
 
 
@@ -69,7 +72,7 @@ class ConversationGrants:
 
     def _live_grant(self) -> Grant | None:
         grant = self._grant
-        if grant is not None and (self._now() >= grant.renewed + GRANT_TTL_SECONDS
+        if grant is not None and (self._elapsed() >= grant.renewed + GRANT_TTL_SECONDS
                                   or not self._token_valid(grant.token_hash)):
             self._grant = grant = None
         return grant
@@ -107,7 +110,8 @@ class ConversationGrants:
             if self._busy(session_id):
                 raise DeskError(409, "busy")
             # Replaces any earlier grant. Grants aren't in the snapshot, so no version bump.
-            self._grant = Grant(self._token_bytes(GRANT_ID_BYTES).hex(), token_hash, session_id, generation, now)
+            self._grant = Grant(self._token_bytes(GRANT_ID_BYTES).hex(), token_hash, session_id, generation,
+                                self._elapsed())
             return {"grant": self._grant.grant_id, "expires_in": GRANT_TTL_SECONDS}
 
     def beat_grant(self, token, grant_id) -> dict:
@@ -119,7 +123,7 @@ class ConversationGrants:
             if len(found) != 1 or found[0].generation != grant.generation:
                 self._grant = None
                 raise DeskError(409, TARGET_CHANGED)
-            grant.renewed = self._now()
+            grant.renewed = self._elapsed()
             return {"grant": grant.grant_id, "expires_in": GRANT_TTL_SECONDS}
 
     def end_grant(self, token, grant_id) -> dict:
@@ -152,6 +156,29 @@ class ConversationGrants:
         grant = self._current_grant(request.grant_id, request.token_hash)
         if grant.session_id != request.session_id or grant.generation != request.generation:
             raise DeskError(409, GRANT_WRONG_TARGET)
+
+    def _recheck_voice_after_lock(self, request, lock) -> None:
+        """At `hand_off`, after the durable lock write and before handed_off
+        is recorded: that write can be slow (an SD card), and the grant can
+        expire while it runs. Nothing has reached the channel yet, so the
+        prompt provably was not handed off and the lock just written is
+        released. If it can't be removed it stays, fail-closed as after any
+        failed lock-store write: the store refuses every send, and the lock
+        is marked as never written, so a clear needs no process check."""
+        if request.confirm is not ConfirmMode.VOICE:
+            return
+        try:
+            self._check_voice_handoff(request)
+        except DeskError:
+            try:
+                self._lock_store.remove(lock.lock_id)
+            except LockStoreError as exc:
+                self._lock_error = str(exc.args[0] if exc.args else "lock store error")
+                self._locks[lock.lock_id] = lock
+                self._writer_done.add(request.request_id)
+            self._finish(request, RequestState.EXPIRED)
+            self._bump()
+            raise
 
     def _refuse_claim_during_grant(self) -> None:
         if self._live_grant() is not None:

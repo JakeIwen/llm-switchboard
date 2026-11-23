@@ -59,7 +59,7 @@ class StateCase(unittest.TestCase):
         self.state = self.new_state()
 
     def new_state(self, store=None) -> HubState:
-        state = HubState(store or LockStore(self.config.lock_file), now=self.clock, token_bytes=secrets.token_bytes)
+        state = HubState(store or LockStore(self.config.lock_file), now=self.clock, elapsed=self.clock, token_bytes=secrets.token_bytes)
         state.set_enrolled([SESSION_A, SESSION_B])
         state.set_sends_enabled(True)
         return state

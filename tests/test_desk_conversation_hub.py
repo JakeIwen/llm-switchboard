@@ -21,7 +21,7 @@ from llm_switchboard.desk.grants import (
 )
 from llm_switchboard.desk.hub_state import HubState
 from llm_switchboard.desk.locks import LockStore
-from llm_switchboard.desk.model import MAX_VOICE_TEXT_BYTES, ConfirmMode, DeskError
+from llm_switchboard.desk.model import MAX_VOICE_TEXT_BYTES, ConfirmMode, DeskError, LockStoreError
 from llm_switchboard.desk.operator import OperatorOp, operator_request
 from llm_switchboard.desk.page_build import PAGE_OUT_OF_DATE
 from llm_switchboard.desk.protocol import DELIVERY_SUFFIX, VOICE_NOTICE, MessageType
@@ -38,18 +38,44 @@ def new_token(state: HubState) -> str:
     return state.pair_claim(started["pair_id"], secret)["token"]
 
 
+class TimedLockStore(LockStore):
+    """The real lock file, plus time passing during its durable write and a
+    remove that can fail."""
+
+    after_add = None
+    fail_remove = False
+
+    def add(self, lock):
+        super().add(lock)
+        if self.after_add:
+            self.after_add()
+
+    def remove(self, lock_id):
+        if self.fail_remove:
+            raise LockStoreError("lock file unwritable")
+        super().remove(lock_id)
+
+
 class GrantStateCase(unittest.TestCase):
     def setUp(self):
         self.home = make_home(self)
         self.config = desk_config(self.home)
+        # The wall clock (timestamps, tokens, tickets) and the elapsed-time
+        # clock the grant lease runs on; `wait` moves both, as real time does.
         self.clock = Clock()
-        self.state = HubState(LockStore(self.config.lock_file), now=self.clock, token_bytes=secrets.token_bytes)
+        self.elapsed = Clock(1000.0)
+        self.store = TimedLockStore(self.config.lock_file)
+        self.state = HubState(self.store, now=self.clock, elapsed=self.elapsed, token_bytes=secrets.token_bytes)
         self.state.set_enrolled([SESSION_A, SESSION_B])
         self.state.set_sends_enabled(True)
         self.state.set_voice_enabled(True)
         self.token = token_for(self.state)
         self.gen_a = self.state.register(1, SESSION_A, identity(SESSION_A))
         self.gen_b = self.state.register(2, SESSION_B, identity(SESSION_B, 200))
+
+    def wait(self, seconds):
+        self.clock.advance(seconds)
+        self.elapsed.advance(seconds)
 
     def refused(self, status, reason, call, *args, **kwargs):
         with self.assertRaises(DeskError) as caught:
@@ -93,11 +119,23 @@ class GrantTest(GrantStateCase):
     def test_beats_renew_and_an_expired_grant_is_never_revived(self):
         grant = self.grant()
         for _ in range(3):
-            self.clock.advance(GRANT_TTL_SECONDS - 1)
+            self.wait(GRANT_TTL_SECONDS - 1)
             self.assertEqual(self.state.beat_grant(self.token, grant)["grant"], grant)
-        self.clock.advance(GRANT_TTL_SECONDS)
+        self.wait(GRANT_TTL_SECONDS)
         self.refused(409, GRANT_NOT_CURRENT, self.state.beat_grant, self.token, grant)
         self.refused(409, GRANT_NOT_CURRENT, self.state.end_grant, self.token, grant)
+
+    def test_the_lease_runs_on_elapsed_time_whatever_the_wall_clock_does(self):
+        grant = self.grant()
+        # A wall-clock correction backwards must not extend the 15 s lease ...
+        self.clock.advance(-3600)
+        self.wait(GRANT_TTL_SECONDS)
+        self.refused(409, GRANT_NOT_CURRENT, self.state.beat_grant, self.token, grant)
+        # ... and one forwards must not cut a live grant short.
+        grant = self.grant()
+        self.clock.advance(600)
+        self.wait(GRANT_TTL_SECONDS - 1)
+        self.assertEqual(self.state.beat_grant(self.token, grant)["grant"], grant)
 
     def test_a_delayed_end_naming_an_old_grant_leaves_the_newer_one(self):
         old = self.grant()
@@ -136,7 +174,7 @@ class GrantTest(GrantStateCase):
 
     def test_an_expired_grant_no_longer_blocks_pairing(self):
         self.grant()
-        self.clock.advance(GRANT_TTL_SECONDS)
+        self.wait(GRANT_TTL_SECONDS)
         self.assertTrue(new_token(self.state))
 
 
@@ -192,12 +230,40 @@ class VoiceSendTest(GrantStateCase):
     def test_a_grant_expired_or_ended_between_begin_send_and_hand_off_refuses_it(self):
         grant = self.grant()
         request = self.voice_send(grant)
-        self.clock.advance(GRANT_TTL_SECONDS)
+        self.wait(GRANT_TTL_SECONDS)
         self.assert_handoff_refused(409, GRANT_NOT_CURRENT, request)
         grant = self.grant()
         request = self.voice_send(grant)
         self.state.end_grant(self.token, grant)
         self.assert_handoff_refused(409, GRANT_NOT_CURRENT, request)
+
+    def test_a_grant_that_expires_during_the_durable_lock_write_refuses_the_handoff(self):
+        request = self.voice_send(self.grant())
+        self.wait(GRANT_TTL_SECONDS - 1)
+        self.store.after_add = lambda: self.wait(1)  # a slow SD-card write crosses expiry
+        self.assert_handoff_refused(409, GRANT_NOT_CURRENT, request)
+        # Nothing was handed off, so the lock just written was released.
+        self.assertEqual(LockStore(self.config.lock_file).load(), [])
+        self.assertIsNone(self.state.snapshot()["lock_store_error"])
+        self.store.after_add = None
+        tap = self.state.begin_send(self.ticket(), "hello there", self.token)
+        self.assertEqual(self.state.hand_off(tap.request_id)[0], 1)
+
+    def test_a_lock_that_cannot_be_released_after_that_refusal_stays_and_clears_without_a_channel_check(self):
+        request = self.voice_send(self.grant())
+        self.store.after_add = lambda: self.wait(GRANT_TTL_SECONDS)
+        self.store.fail_remove = True
+        self.refused(409, GRANT_NOT_CURRENT, self.state.hand_off, request.request_id)
+        self.assertEqual(self.state.request_state(request.request_id), "expired")
+        lock = self.target_lock()
+        self.assertEqual(lock["request_id"], request.request_id)
+        # Fail closed: the target stays busy and the store refuses every send.
+        self.assertEqual(self.state.snapshot()["lock_store_error"], "lock file unwritable")
+        self.refused(503, "lock file unwritable", self.state.issue_ticket, SESSION_B, self.gen_b, self.state.epoch)
+        # Nothing reached the channel, so clearing it needs no process check.
+        self.store.fail_remove = False
+        self.state.clear_lock(SESSION_A, lock["lock_id"])
+        self.assertIsNone(self.target_lock())
 
     def test_a_tap_send_does_not_depend_on_the_grant_or_the_gate(self):
         request = self.state.begin_send(self.ticket(), "hello there", self.token, "tap")

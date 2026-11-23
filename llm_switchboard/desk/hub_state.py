@@ -1,7 +1,9 @@
 """The hub's in-memory state machine (docs/voice-desk.md, "Hub state").
 
-No sockets, files, clock or randomness of its own: `now()` and
-`token_bytes(n)` are injected, and the lock store is a collaborator with
+No sockets, files, clock or randomness of its own: `now()` (the wall
+clock, for timestamps and expiries), `elapsed()` (a clock no wall-clock
+correction moves, for the conversation grant's lease) and `token_bytes(n)`
+are injected, and the lock store is a collaborator with
 `load()`, `add(lock)` (fsynced before it returns, raises `LockStoreError`)
 and `remove(lock_id)`. One re-entrant mutex guards everything; a condition
 on it plus the `version` counter lets long-polls sleep until something
@@ -75,12 +77,13 @@ def _is_int(value) -> bool:
 
 
 class HubState(ConversationGrants):
-    def __init__(self, lock_store, *, now: Callable[[], float], token_bytes: Callable[[int], bytes],
-                 epoch: str | None = None):
+    def __init__(self, lock_store, *, now: Callable[[], float], elapsed: Callable[[], float],
+                 token_bytes: Callable[[int], bytes], epoch: str | None = None):
         # Re-entrant so `authorized()` can hold it around a method that takes it too.
         self._mutex = threading.RLock()
         self._changed = threading.Condition(self._mutex)
         self._now = now
+        self._elapsed = elapsed
         self._token_bytes = token_bytes
         self.epoch = epoch or token_bytes(EPOCH_BYTES).hex()
         self._lock_store = lock_store
@@ -356,6 +359,7 @@ class HubState(ConversationGrants):
                     self._lock_error = reason
                 self._bump()
                 raise DeskError(503, reason) from exc
+            self._recheck_voice_after_lock(request, lock)
             self._locks[lock.lock_id] = lock
             request.lock_id = lock.lock_id
             request.state = RequestState.HANDED_OFF
