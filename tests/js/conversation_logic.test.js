@@ -597,6 +597,30 @@ test("the end conditions hold while sending, and refusals end it without a retry
   ended(t, L.withDetail(REASON.NOT_SENT, "too many tickets"));
 });
 
+test("a refusal keeps ownership only when it is on the allow-list, whatever event carries it", () => {
+  assert.equal(L.ownershipLost(DEST, { refusal: "busy" }), false);
+  assert.equal(L.ownershipLost(DEST, { refusal: "never heard of it" }), true);
+  assert.equal(L.ownershipLost(DEST, { refusal: "" }), true);
+  assert.equal(L.ownershipLost(DEST, {}), false);
+  for (const type of [EV.TICKET_FAIL, EV.SEND_REFUSED, EV.SEND_UNKNOWN]) {
+    for (const [fields, lost] of [
+      [{ reason: "busy", refusal: "busy" }, false],
+      [{ reason: "not registered", refusal: "not registered" }, true],
+      [{ reason: "HTTP 502", refusal: "" }, true],
+      // No answer at all carries no refusal.
+      [{ reason: "the hub could not be reached" }, false],
+    ]) {
+      const n = listening();
+      say(n, "x");
+      say(n, "send it");
+      if (type !== EV.TICKET_FAIL) n.ev(EV.TICKET_OK, { ticket: "t" });
+      n.ev(type, fields);
+      assert.equal(n.c().phase, PHASE.ENDED, type);
+      assert.ok(has(n.fx, FX.END, { lost: lost }), type + " " + fields.reason);
+    }
+  }
+});
+
 test("foreign activity seen before the POST is issued ends it, and nothing is posted", () => {
   const m = listening();
   say(m, "x");

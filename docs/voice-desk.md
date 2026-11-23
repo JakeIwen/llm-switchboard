@@ -25,7 +25,7 @@ conversation mode has not been qualified for driving.
 | `desk/protocol.py` | model | Channel socket framing and messages; the delivery suffix and channel instructions |
 | `desk/text_rule.py` | rules | The prompt text rule (`check_text`, `normalize_text`); mirrored by `static/text_rule.js` over `text_rule_cases.json` |
 | `desk/model.py` | model | `RequestState`, `Registration`, request/ticket/token/pairing records, limits |
-| `desk/refusals.py` | model | `Refusal`: every reason the hub's HTTPS API and operator socket refuse with (hub, state, grants, HTTP layer) and the text rule's reasons, declared once; `tests/test_desk_refusals.py` fails on a refusal raised in those modules without it. The startup acknowledgement keeps its own `StartupRefusal` |
+| `desk/refusals.py` | model | `Refusal`: every reason the hub's HTTPS API and operator socket refuse with (hub, state, grants, HTTP layer) and the text rule's reasons, declared once, each with its `Ownership` class (whether the conversation page may speak its closing cue after it) and `OWNERSHIP_KEPT`; `tests/test_desk_refusals.py` fails on a refusal raised in those modules without it. The startup acknowledgement keeps its own `StartupRefusal` |
 | `desk/hub_state.py` | rules | The hub's in-memory state machine; clock and randomness injected, no I/O |
 | `desk/locks.py` | adapter | The target lock file (fsync before handoff; refuses on unreadable, oversize, malformed or full) |
 | `desk/enrollment.py` | adapter | `enrolled.json` and `desk-settings.json` (`sends_enabled`, `voice_confirm_enabled`): read through `bounded_read`, written and locked through `JsonFile` |
@@ -757,13 +757,35 @@ visible and not being closed or frozen, has a voice, still holds a fresh grant a
 the way. Otherwise the page speaks nothing (a successor may be listening),
 releases any grant it holds at once, and shows the reason only.
 
-The page has lost the sound slot, whatever end reason it shows, when a hub
-answer says the grant is gone (conversation grant not current or not for
-this target, stale epoch, stale generation, target changed; not sent) or a
-snapshot shows another hub epoch or the target missing or at another
-generation, even alongside sends or voice confirm turned off. From then on
-nothing is spoken, and a closing cue already playing is cut (sound
-uncertain) and the grant let go.
+**The closing cue after a refusal.** When the hub refuses the turn's ticket
+or send, the page keeps the sound slot only if the refusal is on a short
+allow-list, the `Refusal` members whose `Ownership` is `INTACT` in
+`desk/refusals.py`, which the page's `OWNERSHIP_KEPT` must equal. The hub
+gives each of them only after checking, in the same call, the epoch, the
+target's one registration at the frozen generation and, on a send, the
+grant:
+
+- busy: in `issue_ticket` after the epoch, routing, registration and
+  generation checks; in `begin_send` after those and the grant check;
+- ticket table full: `issue_ticket` only, after its busy check;
+- too many outstanding requests: `begin_send` only, after its busy check.
+
+Every other refusal, one with no words or words the page has never seen
+included, ends the conversation as lost: nothing is spoken. That covers the
+refusals the hub can give before those checks, such as sends off, voice
+confirm off, the text rule's reasons and too long for a voice send. Every
+`Refusal` member states its class, so a new one can't be added without
+being classified, and `tests/test_desk_conversation_js.py` drives a real
+hub into each class on both paths and checks what the page does. A ticket
+or send that got no answer at all proves nothing either way: the closing
+cue then depends on freshness, like any other end. The lock store's own
+messages are on no list, so the page treats them as unknown.
+
+The page has also lost the sound slot, whatever end reason it shows, when a
+refused beat or a 401 says the grant is gone, or a snapshot shows another
+hub epoch or the target missing or at another generation, even alongside
+sends or voice confirm turned off. From then on nothing is spoken, and a
+closing cue already playing is cut (sound uncertain) and the grant let go.
 
 **Uncertain sound.** An utterance stopped before its own `end`, by anything
 (End, hiding, a timeout, an error, the end of the conversation, the page's

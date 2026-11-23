@@ -11,6 +11,8 @@ const { PATH } = C;
 
 const { DEST, flush, target, snap, rq, harness, listening, sent, texts, releases } = require("./controller_harness.js");
 
+function failCall(h, path) { h.pending(path)[0].fail(); }
+
 test("a stale callback inside the current turn is dropped", async () => {
   const h = await listening(harness());
   const first = h.rec();
@@ -359,23 +361,53 @@ test("an end that abandons an unanswered send POST also says delivery is unknown
   assert.equal(r.view().reason, L.withDetail(REASON.NOT_SENT, "busy"));
 });
 
-test("a hub answer that proves the grant gone ends it silently on every call path", async () => {
+test("only a refusal that keeps ownership gets a closing cue; any other ends it silently on both paths", async () => {
   for (const [path, status, error] of [
     [PATH.SEND, 409, "conversation grant not current"],
     [PATH.SEND, 409, "conversation grant not for this target"],
     [PATH.SEND, 409, "stale epoch"],
     [PATH.TICKET, 409, "stale generation"],
+    [PATH.TICKET, 409, "not registered"],
+    [PATH.TICKET, 409, "ambiguous"],
+    [PATH.SEND, 409, "not registered"],
+    [PATH.SEND, 409, "ambiguous"],
+    [PATH.SEND, 403, "sends off"],
+    // Words the page has never seen, on either path.
+    [PATH.TICKET, 409, "a refusal from a newer hub"],
+    [PATH.SEND, 409, "a refusal from a newer hub"],
   ]) {
     const h = await listening(harness());
     await h.hear("x");
     await h.hear("send it");
     if (path === PATH.SEND) await h.answer(PATH.TICKET, 200, { ticket: "t" });
     await h.answer(path, status, { error: error });
-    assert.equal(h.view().reason, L.withDetail(REASON.NOT_SENT, error), error);
     assert.equal(h.view().lost, true, error);
     assert.equal(h.said.length, 0, error);
     assert.deepEqual(releases(h), ["g1"], error);
   }
+  // A refusal with no words at all is as unknown as new words.
+  const w = await listening(harness());
+  await w.hear("x");
+  await w.hear("send it");
+  await w.answer(PATH.TICKET, 502, null);
+  assert.equal(w.view().reason, L.withDetail(REASON.NOT_SENT, "HTTP 502"));
+  assert.equal(w.view().lost, true);
+  assert.equal(w.said.length, 0);
+  // A ticket that got no answer proves nothing either way: freshness decides.
+  const n = await listening(harness());
+  await n.hear("x");
+  await n.hear("send it");
+  failCall(n, PATH.TICKET);
+  await flush();
+  assert.equal(n.view().lost, false);
+  assert.deepEqual(texts(n), [CUE.ENDED + ": " + L.withDetail(REASON.NOT_SENT, "the hub could not be reached") + "."]);
+  // A busy ticket, like a busy send below, keeps ownership.
+  const k = await listening(harness());
+  await k.hear("x");
+  await k.hear("send it");
+  await k.answer(PATH.TICKET, 409, { error: "busy" });
+  assert.equal(k.view().lost, false);
+  assert.deepEqual(texts(k), [CUE.ENDED + ": " + L.withDetail(REASON.NOT_SENT, "busy") + "."]);
   // A poll showing a new epoch or generation: the grant died with it.
   for (const s of [() => snap({ epoch: "e2" }), () => snap({ targets: [target({ generation: 4 })] })]) {
     const h = await listening(harness());
@@ -385,7 +417,7 @@ test("a hub answer that proves the grant gone ends it silently on every call pat
     assert.equal(h.said.length, 0);
     assert.deepEqual(releases(h), ["g1"]);
   }
-  // A refusal that says nothing about the grant still gets its closing cue.
+  // A refusal the hub gives only after checking the grant and registration.
   const b = await listening(harness());
   await b.hear("x");
   await b.hear("send it");

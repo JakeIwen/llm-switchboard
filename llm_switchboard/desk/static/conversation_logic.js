@@ -167,15 +167,14 @@
     return reason === REASON.UNKNOWN ? reason : reason + "; " + REASON.UNKNOWN;
   }
 
-  // Hub refusals that prove this page's grant is gone (grants.py), plus the
-  // refusals for a changed epoch or registration, which the grant is bound
-  // to: the ticket's and send's stale epoch and generation, and the
-  // handoff's own "target changed; not sent". tests/test_desk_conversation_js.py
-  // drives the hub into each and checks its words are here.
-  var GRANT_GONE = Object.freeze([
-    "conversation grant not current", "conversation grant not for this target", "target changed",
-    "stale epoch", "stale generation", "target changed; not sent"
-  ]);
+  // The hub's refusals of a ticket or a send that leave this page's sound
+  // slot intact (refusals.py, Ownership.INTACT): the hub gives each only
+  // after checking, in the same call, the epoch, the target's one
+  // registration at the frozen generation and, on a send, the grant. Any
+  // other refusal, one this page has never seen included, may mean another
+  // page owns the slot now. tests/test_desk_conversation_js.py checks this
+  // equals the hub's set and drives the hub into each class.
+  var OWNERSHIP_KEPT = Object.freeze(["busy", "ticket table full", "too many outstanding requests"]);
 
   var OUTSTANDING = {};
   OUTSTANDING[REQUEST_STATE.PENDING] = true;
@@ -262,15 +261,19 @@
   function problem(reason, lost) { return { reason: reason, lost: !!lost }; }
 
   // Whether this page no longer owns the sound slot for `dest`: its grant
-  // is gone, or bound to a registration that is. `proof` is a hub refusal,
-  // {error}, or a snapshot, {snapshot}: another epoch (the grant died with
-  // that hub process), or the target absent or at another generation (the
-  // hub drops a grant when its registration goes). Decided apart from the
-  // reason shown: a snapshot with voice confirm off and a new generation
-  // loses ownership whatever it says first. A page that lost it never
-  // speaks again: a successor may be listening.
+  // is gone, or bound to a registration that is. `proof` is the hub's
+  // refusal of a ticket or a send, {refusal}, or a snapshot, {snapshot}. A
+  // refusal keeps ownership only when it is in OWNERSHIP_KEPT; a refusal
+  // with no words ("") is unknown, so it loses it too. A snapshot loses it
+  // with another epoch (the grant died with that hub process), or the
+  // target absent or at another generation (the hub drops a grant when its
+  // registration goes). Neither, as when no answer came at all, proves
+  // nothing: freshness decides. Decided apart from the reason shown: a
+  // snapshot with voice confirm off and a new generation loses ownership
+  // whatever it says first. A page that lost it never speaks again: a
+  // successor may be listening.
   function ownershipLost(dest, proof) {
-    if (typeof proof.error === "string") return GRANT_GONE.indexOf(proof.error) !== -1;
+    if (typeof proof.refusal === "string") return OWNERSHIP_KEPT.indexOf(proof.refusal) === -1;
     var snap = proof.snapshot;
     if (!snap) return false;
     if (snap.epoch !== dest.epoch) return true;
@@ -682,23 +685,27 @@
     c.evidence = { requests: {}, locks: {} };
     fx.push({ fx: FX.SEND, ticket: ev.ticket, text: c.frozenText });
   };
-  // A refusal before handoff; one that proves the grant gone ends it as
-  // lost: no closing cue.
-  function refused(c, fx, reason) {
+  // A ticket or send that failed before handoff. `ev.reason` is shown;
+  // `ev.refusal`, the hub's own words when it answered with a refusal, is
+  // judged by ownershipLost: unless it keeps ownership, the conversation
+  // ends as lost, with no closing cue.
+  function refused(c, fx, ev) {
     c.posted = false; // answered: nothing was handed off
-    finish(c, fx, withDetail(REASON.NOT_SENT, reason), ownershipLost(c.dest, { error: reason }));
+    finish(c, fx, withDetail(REASON.NOT_SENT, ev.reason), ownershipLost(c.dest, { refusal: ev.refusal }));
   }
 
   HANDLERS[EV.TICKET_FAIL] = function (c, fx, ev) {
-    if (c.phase === PHASE.SENDING) refused(c, fx, ev.reason);
+    if (c.phase === PHASE.SENDING) refused(c, fx, ev);
   };
   HANDLERS[EV.SEND_OK] = onSendOk;
   // A refusal before handoff ends the conversation; nothing is retried.
   HANDLERS[EV.SEND_REFUSED] = function (c, fx, ev) {
-    if (c.phase === PHASE.SENDING) refused(c, fx, ev.reason);
+    if (c.phase === PHASE.SENDING) refused(c, fx, ev);
   };
-  HANDLERS[EV.SEND_UNKNOWN] = function (c, fx) {
-    if (c.phase === PHASE.SENDING) finish(c, fx, REASON.UNKNOWN);
+  // An answer that leaves delivery open; one carrying a refusal is judged
+  // like any other.
+  HANDLERS[EV.SEND_UNKNOWN] = function (c, fx, ev) {
+    if (c.phase === PHASE.SENDING) finish(c, fx, REASON.UNKNOWN, ownershipLost(c.dest, { refusal: ev.refusal }));
   };
 
   function copy(c) {
@@ -741,7 +748,7 @@
   var api = {
     PHASE: PHASE, CONFIRM: CONFIRM, REQUEST_STATE: REQUEST_STATE, REGISTRATION: REGISTRATION,
     LIMITS: LIMITS, TIMER: TIMER, SAY: SAY, FX: FX, EV: EV, COMMAND: COMMAND, CUE: CUE, REASON: REASON,
-    BLOCKER: BLOCKER, SPEECH_DEADLINE_FACTOR: SPEECH_DEADLINE_FACTOR, GRANT_GONE: GRANT_GONE,
+    BLOCKER: BLOCKER, SPEECH_DEADLINE_FACTOR: SPEECH_DEADLINE_FACTOR, OWNERSHIP_KEPT: OWNERSHIP_KEPT,
     ownershipLost: ownershipLost,
     initial: initial, reduce: reduce, active: active, fresh: fresh, renew: renew, withDetail: withDetail,
     startBlocker: startBlocker, currentReply: currentReply, forget: forget,

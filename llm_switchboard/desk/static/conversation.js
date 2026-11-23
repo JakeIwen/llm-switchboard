@@ -101,6 +101,21 @@
     return r && r.data && typeof r.data.error === "string" ? r.data.error : "HTTP " + (r ? r.status : "?");
   }
 
+  // The hub's refusal in an answer that is not a 200: its words, or "" when
+  // it gave none, which the reducer judges as a refusal it doesn't know.
+  function refusalOf(r) {
+    return r && r.data && typeof r.data.error === "string" ? r.data.error : "";
+  }
+
+  // A send's answer as a reducer event.
+  function sendEvent(r) {
+    var k = D.classifySend(r);
+    var ev = { type: SEND_EVENT[k.outcome] || EV.SEND_UNKNOWN, request_id: k.request_id,
+      state: r.data && r.data.state, reason: detail(r) };
+    if (r.status !== 200) ev.refusal = refusalOf(r);
+    return ev;
+  }
+
   function create(opts) {
     var api = opts.api, env = opts.env, deps = opts.deps;
     var c = L.initial();
@@ -418,7 +433,9 @@
         if (r.status === 200 && r.data && typeof r.data.ticket === "string") {
           dispatch({ type: EV.TICKET_OK, ticket: r.data.ticket });
         } else {
-          dispatch({ type: EV.TICKET_FAIL, reason: detail(r) });
+          var fail = { type: EV.TICKET_FAIL, reason: detail(r) };
+          if (r.status !== 200) fail.refusal = refusalOf(r);
+          dispatch(fail);
         }
       }, function () {
         if (!settle(FETCH.TICKET, id)) return;
@@ -436,9 +453,7 @@
         if (!settle(FETCH.SEND, id)) return;
         clearTimer(TIMER.SEND_ABORT);
         if (unauthorized(r)) return;
-        var k = D.classifySend(r);
-        var type = SEND_EVENT[k.outcome] || EV.SEND_UNKNOWN;
-        dispatch({ type: type, request_id: k.request_id, state: r.data && r.data.state, reason: detail(r) });
+        dispatch(sendEvent(r));
       }, function () {
         if (!settle(FETCH.SEND, id)) return;
         clearTimer(TIMER.SEND_ABORT);
