@@ -23,6 +23,8 @@ from llm_switchboard.http.lifespan import service_lifespan
 
 # A cold start that imports the web framework takes over 10 s on a loaded Pi; the bound only matters on failure.
 SUBPROCESS_FAILURE_BOUND_SECONDS = 60
+# Shutdown comes after readiness, imports done: a slow one is a failure this test exists to catch.
+SHUTDOWN_BOUND_SECONDS = 10
 
 
 class UvicornListenTest(unittest.IsolatedAsyncioTestCase):
@@ -134,7 +136,7 @@ class LifespanTest(unittest.TestCase):
                 else:
                     self.fail("server never became ready")
                 process.terminate()
-                output, errors = process.communicate(timeout=SUBPROCESS_FAILURE_BOUND_SECONDS)
+                output, errors = process.communicate(timeout=SHUTDOWN_BOUND_SECONDS)
                 self.assertEqual(process.returncode, 0, output + errors)
                 self.assertEqual((root / "shutdown").read_text(), "complete")
             finally:
