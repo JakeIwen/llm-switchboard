@@ -48,7 +48,8 @@ from .labels import SessionLabels, encodable
 from .locks import LockStore
 from .model import (
     HELLO_TIMEOUT_SECONDS, MAX_PENDING_CHANNEL_CONNECTIONS, RECHECK_SECONDS,
-    STARTUP_TMUX_TIMEOUT_SECONDS, ChannelProcess, ConfirmMode, DeskError, ReplyRefusal, is_request_id,
+    STARTUP_TMUX_TIMEOUT_SECONDS, ChannelProcess, ConfirmMode, DeskError, ReplyRefusal, WriteOutcome,
+    is_request_id,
 )
 from .operator import OperatorOp, OperatorServer, bind_private_socket
 from .peer import process_presence
@@ -80,6 +81,15 @@ def _logged_channel_reason(value) -> str:
     return value if isinstance(value, str) and _LOGGABLE_REASON.fullmatch(value) else "?"
 
 
+# How each event write outcome reaches the request table: (written, attempted).
+# Only not_begun lets a lock clear without a presence check.
+_FINISH_WRITE = {
+    WriteOutcome.WRITTEN: (True, True),
+    WriteOutcome.NOT_BEGUN: (False, False),
+    WriteOutcome.UNFINISHED: (False, True),
+}
+
+
 class ChannelConnection:
     def __init__(self, conn_id: int, sock: socket.socket, session_id: str):
         self.conn_id = conn_id
@@ -97,6 +107,13 @@ class ChannelConnection:
             return True
         except (OSError, FrameError):
             return False
+
+    def send_event(self, request_id: str, content: str) -> WriteOutcome:
+        """A Pi channel's socket gives no byte counts back from `sendall`, so
+        any failure may have sent part of the frame: unfinished."""
+        if self.send(MessageType.EVENT, request_id=request_id, content=content):
+            return WriteOutcome.WRITTEN
+        return WriteOutcome.UNFINISHED
 
     def close(self) -> None:
         with contextlib.suppress(OSError):
@@ -462,13 +479,17 @@ class Hub:
             # keep the target busy (a no-op once it is no longer pending).
             self.state.expire_request(request.request_id)
             raise
-        written = attempted = False
+        # Until a write has begun, an exception here proves nothing was sent.
+        outcome = WriteOutcome.NOT_BEGUN
         try:
             with self._connections_lock:
                 connection = self._connections.get(conn_id)
-            attempted = connection is not None
-            written = attempted and connection.send(MessageType.EVENT, request_id=request.request_id, content=content)
+            if connection is not None:
+                # Anything raised past this point may follow a partial write.
+                outcome = WriteOutcome.UNFINISHED
+                outcome = connection.send_event(request.request_id, content)
         finally:
+            written, attempted = _FINISH_WRITE[outcome]
             self.state.finish_write(request.request_id, written, attempted=attempted)
         if not written:
             self._drop_connection(conn_id, "event write failed")

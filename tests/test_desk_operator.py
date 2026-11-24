@@ -18,16 +18,18 @@ import unittest
 from unittest import mock
 
 from desk_fixtures import (
-    SESSION_A, SESSION_B, SESSION_C, FakeIdentity, HubCase, desk_config, make_home, run_desk_cli, wait_until,
+    SESSION_A, SESSION_B, SESSION_C, FakeIdentity, HubCase, desk_config, enroll_file, make_home, run_desk_cli,
+    wait_until,
     write_fake_process,
 )
 
 from llm_switchboard.desk.enrollment import Enrollment
-from llm_switchboard.desk.hub import INVALID_ID_MARKER
+from llm_switchboard.desk.hub import INVALID_ID_MARKER, ChannelConnection
 from llm_switchboard.desk.hub_state import CHANNEL_STILL_RUNNING, CHANNEL_UNVERIFIABLE
 from llm_switchboard.desk.labels import SessionLabels
 from llm_switchboard.desk.model import (
     LABEL_HEAD_BYTES, LABEL_TAIL_BYTES, MAX_OPERATOR_CONNECTIONS, MAX_OPERATOR_LINE_BYTES, DeskError,
+    WriteOutcome,
 )
 from llm_switchboard.desk.operator import (
     RESULT_UNKNOWN, HubAbsent, HubResultUnknown, OperatorOp, SocketInUse, bind_private_socket, operator_request,
@@ -168,6 +170,37 @@ class RegistrationTest(ChannelHubCase):
 
 
 class DispatchTest(ChannelHubCase):
+    def test_hub_send_maps_each_write_outcome_to_finish_write(self):
+        # (written, attempted) as phase 1 reported them; only not_begun is unattempted.
+        expected = {WriteOutcome.WRITTEN: (True, True), WriteOutcome.UNFINISHED: (False, True),
+                    WriteOutcome.NOT_BEGUN: (False, False)}
+        sessions = dict(zip(expected, (SESSION_A, SESSION_B, SESSION_C)))
+        enroll_file(self.config, *sessions.values())
+        self.hub.refresh_files()
+        real_finish = self.hub.state.finish_write
+        for outcome, (written, attempted) in expected.items():
+            with self.subTest(outcome=outcome):
+                _, generation = self.registered(sessions[outcome])
+                calls = []
+
+                def finish(request_id, was_written, *, attempted=True):
+                    calls.append((was_written, attempted))
+                    real_finish(request_id, was_written, attempted=attempted)
+                with mock.patch.object(ChannelConnection, "send_event", return_value=outcome), \
+                        mock.patch.object(self.hub.state, "finish_write", side_effect=finish):
+                    sent = self.send(sessions[outcome], generation)
+                self.assertEqual(calls, [(written, attempted)])
+                self.assertEqual(sent["state"], "handed_off" if written else "unknown")
+
+    def test_pi_channel_send_event_is_written_or_unfinished(self):
+        ours, theirs = socket.socketpair()
+        self.addCleanup(theirs.close)
+        connection = ChannelConnection(1, ours, SESSION_A)
+        self.assertIs(connection.send_event("r", "hello"), WriteOutcome.WRITTEN)
+        self.assertEqual(json.loads(theirs.recv(65536))["content"], "hello")
+        connection.close()
+        self.assertIs(connection.send_event("r", "hello"), WriteOutcome.UNFINISHED)
+
     def test_send_writes_the_event_and_the_first_valid_reply_wins(self):
         client, generation = self.registered(SESSION_A)
         other, _ = self.registered(SESSION_B)

@@ -173,6 +173,17 @@ class ReplyRefusal(StrEnum):
     SESSION_CHANGED = "session changed"
 
 
+class WriteOutcome(StrEnum):
+    """What a connection knows about one event frame it was asked to write
+    (docs/voice-desk.md, "Writers: one outcome per frame")."""
+    # No byte reached the kernel, so nothing can emit it.
+    NOT_BEGUN = "not_begun"
+    # The kernel accepted every byte, the final newline included.
+    WRITTEN = "written"
+    # Part, all or none of it may have gone: it counts as attempted.
+    UNFINISHED = "unfinished"
+
+
 class LockStoreError(Exception):
     """The lock file can't be trusted or written; args[0] is a short reason,
     shown as the hub's lock_store_error. Every send is refused while it holds."""
