@@ -74,6 +74,7 @@ Sharing the socket would let its supervisor close the real windows.
 | `llm_switchboard/host_queue.py` | The Mac action queue: enqueue, dispatch, results, expiry (at-most-once delivery) |
 | `llm_switchboard/host_exchange.py`, `host_authorize.py` | The SSH forced command, and installing a host's restricted key in `~/.ssh/authorized_keys` |
 | `llm_switchboard/ssh_authorized_keys.py` | The one edit of `~/.ssh/authorized_keys`: its lock, replacing or removing the line whose final comment is a marker, every other line kept (v1's `host-authorize` and the desk link's commands) |
+| `llm_switchboard/ssh_public_key.py` | The one check of an OpenSSH public key blob against its key type (pure, both machines): v1's `host-authorize` and the desk link's signer and proof checks |
 | `llm_switchboard/host_import.py` | Fork onto the Pi: folder mapping, checks, writing the uploaded transcript as a new not-running session |
 | `llm_switchboard/host_web.py` | The `/api/hosts/<host>/sessions/<id>/<action>` route |
 | `llm_switchboard/host_cli.py` | `host-exchange`, `host-authorize`, `host-agent`, `host-install`, `host-search` (light imports; `__main__` dispatches them before cli.py) |

@@ -1,14 +1,11 @@
 """Install one restricted public key, preserving every unrelated authorized_keys line."""
 
-import base64
 from pathlib import Path
 import shlex
-import struct
 
 from . import ssh_authorized_keys
 from .host_protocol import host_name
-
-KEY_TYPES = {"ssh-ed25519", "ssh-rsa", "ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521"}
+from .ssh_public_key import KEY_TYPES, blob_valid
 
 
 def public_key(raw: bytes) -> tuple[str, str]:
@@ -20,29 +17,8 @@ def public_key(raw: bytes) -> tuple[str, str]:
     parts = line.split()
     if len(parts) < 2 or parts[0] not in KEY_TYPES:
         raise ValueError("unsupported public key or key options supplied")
-    try:
-        blob = base64.b64decode(parts[1], validate=True)
-        fields = []
-        while blob:
-            n = struct.unpack(">I", blob[:4])[0]
-            if n > len(blob) - 4:
-                raise ValueError("truncated key")
-            fields.append(blob[4:4 + n])
-            blob = blob[4 + n:]
-        if not fields or fields[0].decode("ascii") != parts[0]:
-            raise ValueError("key type does not match its blob")
-        if parts[0] == "ssh-ed25519":
-            valid = len(fields) == 2 and len(fields[1]) == 32
-        elif parts[0] == "ssh-rsa":
-            valid = len(fields) == 3 and all(int.from_bytes(f, "big") > 0 for f in fields[1:])
-        else:
-            curve = parts[0].removeprefix("ecdsa-sha2-").encode()
-            point_length = {b"nistp256": 65, b"nistp384": 97, b"nistp521": 133}[curve]
-            valid = len(fields) == 3 and fields[1] == curve and len(fields[2]) == point_length and fields[2][0] == 4
-        if not valid:
-            raise ValueError("invalid public key fields")
-    except (ValueError, UnicodeError, struct.error) as e:
-        raise ValueError("invalid SSH public key blob") from e
+    if not blob_valid(parts[0], parts[1]):
+        raise ValueError("invalid SSH public key blob")
     return parts[0], parts[1]
 
 

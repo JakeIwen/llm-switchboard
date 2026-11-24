@@ -40,6 +40,7 @@ class DependencyBoundaryTest(unittest.TestCase):
             "host_actions_protocol": {"host_protocol", "session_names"},
             "search_records": set(),
             "session_names": set(),
+            "ssh_public_key": set(),
             "supervisor_state": {"screen"},
         }
         for module, expected in allowed.items():
