@@ -4,6 +4,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { G } = require("./grant_ids.js");
 const {
   L, PATH, REASON, BLOCKER, CUE, POLL, settle, paired, converse, snap, target, rq, voiceRq, ended, releases,
   playFor, slowCancel, voiceSend
@@ -50,7 +51,7 @@ test("selecting another target ends the conversation, and its closing cue is not
   assert.deepEqual(releases(h), []);
   h.utt().fire("end");
   await settle();
-  assert.deepEqual(releases(h), ["g1"]);
+  assert.deepEqual(releases(h), [G.g1]);
 });
 
 test("hiding the page ends the conversation without a cue", async () => {
@@ -61,7 +62,7 @@ test("hiding the page ends the conversation without a cue", async () => {
   await h.fire("visibilitychange");
   assert.equal(h.state(), ended(REASON.HIDDEN));
   assert.equal(h.said.length, said);
-  assert.deepEqual(releases(h), ["g1"]);
+  assert.deepEqual(releases(h), [G.g1]);
   assert.equal(h.rec().aborts, 1);
 });
 
@@ -74,7 +75,7 @@ test("the page being frozen or unloaded ends the conversation silently, while st
     await h.fire(event);
     assert.equal(h.state(), ended(REASON.EXITED), event);
     assert.equal(h.said.length, said, event + " spoke a closing cue");
-    assert.deepEqual(releases(h), ["g1"], event);
+    assert.deepEqual(releases(h), [G.g1], event);
   }
 });
 
@@ -89,7 +90,7 @@ test("the page being frozen or unloaded cuts a closing cue short and lets the gr
     const cancels = h.synth.cancels;
     await h.fire(event);
     assert.ok(h.synth.cancels > cancels, event + " left the closing cue playing");
-    assert.deepEqual(releases(h), ["g1"], event);
+    assert.deepEqual(releases(h), [G.g1], event);
   }
 });
 
@@ -101,7 +102,7 @@ test("a dropped token ends the conversation and speaks nothing", async () => {
   assert.equal(h.state(), ended(REASON.UNPAIRED));
   assert.equal(h.said.length, said);
   assert.equal(h.$("pairing").hidden, false);
-  assert.deepEqual(releases(h), ["g1"]);
+  assert.deepEqual(releases(h), [G.g1]);
 });
 
 test("a dropped token leaves no reply, draft or label on screen, only the end reason", async () => {
@@ -519,7 +520,7 @@ test("the hub's handoff refusal for a changed target ends the conversation silen
   await h.answer(PATH.SEND, 409, { error: "target changed; not sent" });
   assert.equal(h.state(), ended(L.withDetail(REASON.NOT_SENT, "target changed; not sent")));
   assert.equal(h.said.length, said, "a page that lost the sound slot spoke");
-  assert.deepEqual(releases(h), ["g1"]);
+  assert.deepEqual(releases(h), [G.g1]);
 });
 
 test("losing the hub with a voice send unanswered shows the cause and that delivery is unknown", async () => {
@@ -616,11 +617,11 @@ test("Start's reason names a conversation in progress, and an abandoned grant re
   h.$("conv-end").click();
   assert.equal(h.$("conv-start").disabled, true);
   assert.equal(h.$("conv-why").textContent, why(BLOCKER.LETTING_GO));
-  await h.answer(PATH.GRANT, 200, { grant: "g2", expires_in: 15 });
-  assert.deepEqual(releases(h), ["g1", "g2"]);
+  await h.answer(PATH.GRANT, 200, { grant: G.g2, expires_in: 15 });
+  assert.deepEqual(releases(h), [G.g1, G.g2]);
   // Start waits for that release to settle too.
   assert.equal(h.$("conv-why").textContent, why(BLOCKER.LETTING_GO));
-  h.pending(PATH.RELEASE).find((c) => c.body.grant === "g2").answer(200, { ended: true });
+  h.pending(PATH.RELEASE).find((c) => c.body.grant === G.g2).answer(200, { ended: true });
   await settle();
   assert.equal(h.$("conv-start").disabled, false);
 });

@@ -4,6 +4,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { G } = require("./grant_ids.js");
 const L = require("../../llm_switchboard/desk/static/conversation_logic.js");
 const C = require("../../llm_switchboard/desk/static/conversation.js");
 const { PHASE, REASON, CUE, LIMITS } = L;
@@ -74,8 +75,8 @@ test("a grant arriving after End during starting is released at once", async () 
   h.ctl.endTap();
   assert.equal(h.phase(), PHASE.ENDED);
   assert.equal(h.sentinels[0].released, 1);
-  await h.answer(PATH.GRANT, 200, { grant: "late-grant" });
-  assert.deepEqual(releases(h), ["late-grant"]);
+  await h.answer(PATH.GRANT, 200, { grant: G.late });
+  assert.deepEqual(releases(h), [G.late]);
   assert.equal(h.recs.length, 0);
   assert.equal(h.said.length, 0);
 });
@@ -92,9 +93,9 @@ test("a new Start never races an abandoned grant acquisition", async () => {
   assert.equal(L.startBlocker(snap(), "s1", page()), L.BLOCKER.LETTING_GO);
   assert.equal(h.ctl.start(DEST), false);
   // The old acquisition reaches the hub and answers; its grant is released.
-  first.answer(200, { grant: "old" });
+  first.answer(200, { grant: G.old });
   await flush();
-  assert.deepEqual(releases(h), ["old"]);
+  assert.deepEqual(releases(h), [G.old]);
   assert.equal(h.ctl.canStart(), false);
   await h.answer(PATH.RELEASE, 409, { error: "conversation grant not current" });
   assert.equal(h.ctl.canStart(), true);
@@ -105,7 +106,7 @@ test("a new Start never races an abandoned grant acquisition", async () => {
   await grantArrives();
   await h.advance(LIMITS.GUARD_MS);
   assert.equal(h.phase(), PHASE.LISTENING);
-  assert.deepEqual(releases(h), ["old"]);
+  assert.deepEqual(releases(h), [G.old]);
 });
 
 test("an abandoned or failed grant request with no response holds Start until the hub's epoch changes", async () => {
@@ -158,14 +159,14 @@ test("a retarget during starting ends it, at the tap or when the grant arrives",
   await flush();
   await g.answer(PATH.STATE, 200, snap());
   g.selected = "s2";
-  await g.answer(PATH.GRANT, 200, { grant: "g1" });
+  await g.answer(PATH.GRANT, 200, { grant: G.g1 });
   assert.equal(g.view().reason, REASON.RETARGET);
   assert.equal(g.recs.length, 0);
   assert.deepEqual(texts(g), [CUE.ENDED + ": " + REASON.RETARGET + "."]);
   assert.deepEqual(releases(g), []);
   assert.equal(g.ctl.canStart(), false);
   await g.finish();
-  assert.deepEqual(releases(g), ["g1"]);
+  assert.deepEqual(releases(g), [G.g1]);
 });
 
 test("a reply during the sent cue waits for the cue's end", async () => {
@@ -204,7 +205,7 @@ test("a late beat success does not renew the grant", async () => {
   const late = h.pending(PATH.BEAT)[0];
   assert.ok(late);
   await h.advance(LIMITS.BEAT_ABORT_MS + 500);
-  late.answer(200, { grant: "g1" });
+  late.answer(200, { grant: G.g1 });
   await flush();
   // Fresh until 10 s after the grant request; the next beat never answers.
   await h.advance(LIMITS.FRESH_MS - LIMITS.BEAT_MS - LIMITS.BEAT_ABORT_MS - 500);
@@ -214,7 +215,7 @@ test("a late beat success does not renew the grant", async () => {
   assert.equal(h.view().lost, true);
   // A page that lost its grant says nothing and still lets go of it.
   assert.equal(h.said.length, 0);
-  assert.deepEqual(releases(h), ["g1"]);
+  assert.deepEqual(releases(h), [G.g1]);
 });
 
 test("a beat success that arrives after the deadline revives nothing", async () => {
@@ -225,7 +226,7 @@ test("a beat success that arrives after the deadline revives nothing", async () 
   const second = h.pending(PATH.BEAT);
   assert.equal(second.length, 1);
   h.t += 100;
-  second[0].answer(200, { grant: "g1", expires_in: 15 });
+  second[0].answer(200, { grant: G.g1, expires_in: 15 });
   await flush();
   assert.equal(h.view().reason, REASON.HUB_LOST);
   assert.equal(h.view().lost, true);
@@ -441,7 +442,7 @@ test("only a refusal that keeps ownership gets a closing cue; any other ends it 
     await h.answer(path, status, { error: error });
     assert.equal(h.view().lost, true, error);
     assert.equal(h.said.length, 0, error);
-    assert.deepEqual(releases(h), ["g1"], error);
+    assert.deepEqual(releases(h), [G.g1], error);
   }
   // A refusal with no words at all is as unknown as new words.
   const w = await listening(harness());
@@ -473,7 +474,7 @@ test("only a refusal that keeps ownership gets a closing cue; any other ends it 
     await flush();
     assert.equal(h.view().lost, true);
     assert.equal(h.said.length, 0);
-    assert.deepEqual(releases(h), ["g1"]);
+    assert.deepEqual(releases(h), [G.g1]);
   }
   // A refusal the hub gives only after checking the grant and registration.
   const b = await listening(harness());
@@ -495,7 +496,7 @@ test("losing the sound slot is decided apart from the reason shown, and nothing 
   assert.equal(r.view().reason, L.withDetail(REASON.NOT_SENT, "target changed; not sent"));
   assert.equal(r.view().lost, true);
   assert.equal(r.said.length, 0);
-  assert.deepEqual(releases(r), ["g1"]);
+  assert.deepEqual(releases(r), [G.g1]);
 
   for (const [name, s, reason] of [
     ["the target gone altogether", () => snap({ targets: [] }), REASON.TARGET],
@@ -510,7 +511,7 @@ test("losing the sound slot is decided apart from the reason shown, and nothing 
     assert.equal(h.view().reason, reason, name);
     assert.equal(h.view().lost, true, name);
     assert.equal(h.said.length, 0, name);
-    assert.deepEqual(releases(h), ["g1"], name);
+    assert.deepEqual(releases(h), [G.g1], name);
 
     // The same snapshot during the closing cue cuts it: uncertain, and let go.
     const g = await listening(harness());
@@ -519,7 +520,7 @@ test("losing the sound slot is decided apart from the reason shown, and nothing 
     g.ctl.snapshot(s());
     await flush();
     assert.equal(g.synth.cancels, 1, name);
-    assert.deepEqual(releases(g), ["g1"], name);
+    assert.deepEqual(releases(g), [G.g1], name);
     assert.equal(g.ctl.canStart(), false, name);
     assert.equal(g.said.length, 1, name);
   }
@@ -543,7 +544,7 @@ test("an utterance that never ends is cancelled, ends it, and holds Start for th
   assert.equal(h.synth.cancels, 1);
   // Cut off: no closing cue; the grant is let go at once.
   assert.equal(h.said.length, 1);
-  assert.deepEqual(releases(h), ["g1"]);
+  assert.deepEqual(releases(h), [G.g1]);
   assert.equal(h.ctl.canStart(), false);
   assert.equal(h.ctl.start(DEST), false);
   await h.advance(deadline - 1);
@@ -595,7 +596,7 @@ test("new foreign activity during a turn ends it, closes the mic and says why", 
   assert.equal(h.rec().aborts, 1);
   assert.deepEqual(texts(h), [CUE.ENDED + ": " + REASON.FOREIGN + "."]);
   await h.finish();
-  assert.deepEqual(releases(h), ["g1"]);
+  assert.deepEqual(releases(h), [G.g1]);
 });
 
 test("hide, return and Start while an utterance is playing is refused until it must be over", async () => {
@@ -609,7 +610,7 @@ test("hide, return and Start while an utterance is playing is refused until it m
   h.ctl.hidden();
   assert.equal(h.view().reason, REASON.HIDDEN);
   assert.equal(h.synth.cancels, 1);
-  assert.deepEqual(releases(h), ["g1"]);
+  assert.deepEqual(releases(h), [G.g1]);
   h.visible = true;
   assert.equal(h.ctl.start(DEST), false);
   assert.equal(h.phase(), PHASE.ENDED);
@@ -657,7 +658,7 @@ test("a recognizer that refuses to start ends it", async () => {
   h.ctl.start(DEST);
   await flush();
   await h.answer(PATH.STATE, 200, snap());
-  await h.answer(PATH.GRANT, 200, { grant: "g1" });
+  await h.answer(PATH.GRANT, 200, { grant: G.g1 });
   assert.equal(h.view().reason, REASON.REC_FAILED);
 });
 
@@ -667,11 +668,11 @@ test("Start right after a completed closing cue waits out the guard", async () =
   assert.deepEqual(texts(h), [CUE.ENDED + ": " + REASON.STOPPED + "."]);
   assert.equal(h.ctl.canStart(), false);
   await h.finish();
-  assert.deepEqual(releases(h), ["g1"]);
+  assert.deepEqual(releases(h), [G.g1]);
   assert.equal(h.ctl.start(DEST), true);
   await flush();
   await h.answer(PATH.STATE, 200, snap());
-  await h.answer(PATH.GRANT, 200, { grant: "g2" });
+  await h.answer(PATH.GRANT, 200, { grant: G.g2 });
   assert.equal(h.phase(), PHASE.STARTING);
   assert.equal(h.recs.length, 1);
   await h.advance(LIMITS.GUARD_MS - 1);
@@ -691,7 +692,7 @@ test("the page's own utterances hold Start and set the guard", async () => {
   h.ctl.start(DEST);
   await flush();
   await h.answer(PATH.STATE, 200, snap());
-  await h.answer(PATH.GRANT, 200, { grant: "g1" });
+  await h.answer(PATH.GRANT, 200, { grant: G.g1 });
   assert.equal(h.recs.length, 0);
   await h.advance(LIMITS.GUARD_MS);
   assert.equal(h.recs.length, 1);
@@ -712,7 +713,7 @@ async function startUntilGrant(h, grantId) {
   await flush();
   await h.answer(PATH.STATE, 200, snap());
   assert.equal(h.pending(PATH.GRANT).length, 1);
-  return async () => h.answer(PATH.GRANT, 200, { grant: grantId || "g1" });
+  return async () => h.answer(PATH.GRANT, 200, { grant: grantId || G.g1 });
 }
 
 test("a Play that outlives its deadline is cancelled, and its real end still holds the next mic for the guard", async () => {
@@ -783,7 +784,7 @@ test("a late end of written-off speech ends the conversation silently and its dr
     assert.equal(h.view().draft, "", late);
     assert.equal(mic.aborts, 1, late);
     assert.equal(h.said.length, 0, late);
-    assert.deepEqual(releases(h), ["g1"], late);
+    assert.deepEqual(releases(h), [G.g1], late);
     // The desk may still have been speaking: Start waits out a new quiet period.
     assert.equal(h.ctl.canStart(), false, late);
     mic.result("send it");
@@ -826,7 +827,7 @@ test("the voice list emptying during the start's guard keeps the mic closed", as
   await h.advance(LIMITS.GUARD_MS);
   assert.equal(h.recs.length, 0);
   assert.equal(h.view().reason, REASON.NO_VOICE);
-  assert.deepEqual(releases(h), ["g1"]);
+  assert.deepEqual(releases(h), [G.g1]);
 });
 
 test("a conversation utterance's real end after its cut still holds the next mic for the guard", async () => {
@@ -839,7 +840,7 @@ test("a conversation utterance's real end after its cut still holds the next mic
   assert.equal(h.view().reason, REASON.SPEECH);
   await h.advance(deadline);
   assert.equal(h.ctl.canStart(), true);
-  const grantArrives = await startUntilGrant(h, "g2");
+  const grantArrives = await startUntilGrant(h, G.g2);
   readback.fire("end");
   await grantArrives();
   assert.equal(h.recs.length, 1);
@@ -857,7 +858,7 @@ test("a conversation utterance's error cancels the voice as cleanup and holds St
   await flush();
   assert.equal(h.view().reason, REASON.SPEECH);
   assert.equal(h.synth.cancels, 1);
-  assert.deepEqual(releases(h), ["g1"]);
+  assert.deepEqual(releases(h), [G.g1]);
   assert.equal(h.ctl.canStart(), false);
   await h.advance(L.estimateMs("one two") * L.SPEECH_DEADLINE_FACTOR);
   assert.equal(h.ctl.canStart(), true);
@@ -928,8 +929,8 @@ test("a hung start step fails, and its late grant is still released", async () =
   await h.answer(PATH.STATE, 200, snap());
   await h.advance(LIMITS.STEP_MS);
   assert.equal(h.view().reason, REASON.HUB_UNREACHABLE);
-  await h.answer(PATH.GRANT, 200, { grant: "slow" });
-  assert.deepEqual(releases(h), ["slow"]);
+  await h.answer(PATH.GRANT, 200, { grant: G.slow });
+  assert.deepEqual(releases(h), [G.slow]);
 });
 
 test("leaving the page ends it silently whatever visibilityState says, and still releases the grant", async () => {
@@ -939,7 +940,7 @@ test("leaving the page ends it silently whatever visibilityState says, and still
   h.ctl.pageExit();
   assert.equal(h.view().reason, REASON.EXITED);
   assert.equal(h.said.length, 0);
-  assert.deepEqual(releases(h), ["g1"]);
+  assert.deepEqual(releases(h), [G.g1]);
   assert.equal(h.ctl.holds(), false);
 
   // Leaving during the closing cue cuts it and lets the grant go.
@@ -949,7 +950,7 @@ test("leaving the page ends it silently whatever visibilityState says, and still
   assert.deepEqual(releases(g), []);
   g.ctl.pageExit();
   assert.equal(g.synth.cancels, 1);
-  assert.deepEqual(releases(g), ["g1"]);
+  assert.deepEqual(releases(g), [G.g1]);
   assert.equal(g.ctl.holds(), false);
   assert.equal(g.ctl.canStart(), false);
 });
@@ -966,7 +967,7 @@ test("the closing cue is beaten while it plays and never outlives the grant", as
   assert.equal(h.synth.cancels, 0);
   assert.deepEqual(releases(h), []);
   await h.finish();
-  assert.deepEqual(releases(h), ["g1"]);
+  assert.deepEqual(releases(h), [G.g1]);
   const after = h.all(PATH.BEAT).length;
   await h.advance(LIMITS.BEAT_MS * 2);
   assert.equal(h.all(PATH.BEAT).length, after);
@@ -978,7 +979,7 @@ test("the closing cue is beaten while it plays and never outlives the grant", as
   assert.equal(q.said.length, 1);
   await q.advance(LIMITS.FRESH_MS - 6000 + LIMITS.TICK_MS);
   assert.equal(q.synth.cancels, 1);
-  assert.deepEqual(releases(q), ["g1"]);
+  assert.deepEqual(releases(q), [G.g1]);
   assert.equal(q.ctl.holds(), false);
   assert.equal(q.ctl.canStart(), false);
 
@@ -988,14 +989,14 @@ test("the closing cue is beaten while it plays and never outlives the grant", as
   await r.advance(LIMITS.BEAT_MS);
   await r.answer(PATH.BEAT, 409, { error: "conversation grant not current" });
   assert.equal(r.synth.cancels, 1);
-  assert.deepEqual(releases(r), ["g1"]);
+  assert.deepEqual(releases(r), [G.g1]);
 
   // A poll showing the hub restarted: the cue is cut at once.
   const e = await listening(harness());
   await e.hear("stop listening");
   e.ctl.snapshot(snap({ epoch: "e2" }));
   assert.equal(e.synth.cancels, 1);
-  assert.deepEqual(releases(e), ["g1"]);
+  assert.deepEqual(releases(e), [G.g1]);
 });
 
 test("unpairing ends it as a lost grant, with no closing cue", async () => {

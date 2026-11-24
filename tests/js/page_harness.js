@@ -4,6 +4,7 @@
 // share (pairing, a Start through to the open mic, a voice send).
 "use strict";
 const assert = require("node:assert/strict");
+const { G } = require("./grant_ids.js");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
@@ -203,7 +204,7 @@ async function converse(h, s) {
   await settle();
   assert.equal(h.$("conv-overlay").hidden, false);
   await h.answer(PATH.STATE, 200, s || snap());
-  await h.answer(PATH.GRANT, 200, { grant: "g1", expires_in: 15 });
+  await h.answer(PATH.GRANT, 200, { grant: G.g1, expires_in: 15 });
   assert.equal(h.state(), "Listening.");
 }
 

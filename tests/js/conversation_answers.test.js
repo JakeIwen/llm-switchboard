@@ -6,6 +6,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { G } = require("./grant_ids.js");
 const L = require("../../llm_switchboard/desk/static/conversation_logic.js");
 const C = require("../../llm_switchboard/desk/static/conversation.js");
 const { REASON, CUE, LIMITS } = L;
@@ -30,7 +31,7 @@ test("a 200 ticket answer without a ticket ends the conversation as lost, with n
     assert.equal(h.view().reason, L.withDetail(REASON.NOT_SENT, "HTTP 200"), JSON.stringify(data));
     assert.equal(h.view().lost, true, JSON.stringify(data));
     assert.equal(h.said.length, 0, JSON.stringify(data));
-    assert.deepEqual(releases(h), ["g1"], JSON.stringify(data));
+    assert.deepEqual(releases(h), [G.g1], JSON.stringify(data));
   }
 });
 
@@ -41,7 +42,7 @@ test("a 200 send answer the page can't use ends the conversation as lost, with n
     assert.equal(h.view().reason, REASON.UNKNOWN, JSON.stringify(data));
     assert.equal(h.view().lost, true, JSON.stringify(data));
     assert.equal(h.said.length, 0, JSON.stringify(data));
-    assert.deepEqual(releases(h), ["g1"], JSON.stringify(data));
+    assert.deepEqual(releases(h), [G.g1], JSON.stringify(data));
   }
 });
 

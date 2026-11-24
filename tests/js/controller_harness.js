@@ -3,6 +3,7 @@
 // tests/test_desk_conversation_js.py drives with the hub's own refusals.
 "use strict";
 const assert = require("node:assert/strict");
+const { G } = require("./grant_ids.js");
 const L = require("../../llm_switchboard/desk/static/conversation_logic.js");
 const C = require("../../llm_switchboard/desk/static/conversation.js");
 const { PHASE, CUE } = L;
@@ -122,7 +123,7 @@ function harness() {
   h.alive = async (ms) => {
     for (let left = ms; left > 0; left -= 500) {
       await h.advance(Math.min(500, left));
-      for (const call of h.pending(PATH.BEAT)) { call.answer(200, { grant: "g1", expires_in: 15 }); await flush(); }
+      for (const call of h.pending(PATH.BEAT)) { call.answer(200, { grant: G.g1, expires_in: 15 }); await flush(); }
     }
   };
   // The current utterance plays to its end.
@@ -135,7 +136,7 @@ async function listening(h, s) {
   assert.equal(h.ctl.start(DEST), true);
   await flush();
   await h.answer(PATH.STATE, 200, s || snap());
-  await h.answer(PATH.GRANT, 200, { grant: "g1", expires_in: 15 });
+  await h.answer(PATH.GRANT, 200, { grant: G.g1, expires_in: 15 });
   assert.equal(h.phase(), PHASE.LISTENING);
   assert.equal(h.rec().starts, 1);
   return h;
@@ -149,7 +150,7 @@ async function sent(h, id, text) {
   const ticket = await h.answer(PATH.TICKET, 200, { ticket: "t-" + id });
   assert.deepEqual(ticket.body, { session_id: "s1", generation: 3, epoch: "e1" });
   const post = await h.answer(PATH.SEND, 200, { request_id: id, state: "handed_off" });
-  assert.deepEqual(post.body, { ticket: "t-" + id, text: text || "check the logs", confirm: "voice", grant: "g1" });
+  assert.deepEqual(post.body, { ticket: "t-" + id, text: text || "check the logs", confirm: "voice", grant: G.g1 });
   assert.equal(h.phase(), PHASE.WAITING);
   assert.equal(h.utt().text, CUE.SENT);
 }
