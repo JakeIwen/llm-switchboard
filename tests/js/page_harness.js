@@ -41,7 +41,9 @@ class El {
 
 function page(opts) {
   opts = opts || {};
-  const h = { t: 0, handle: 0, timers: [], calls: [], said: [], recs: [], sentinels: [] };
+  // honorAbort false: an abort the page issues is lost, as when the answer
+  // was already on its way, and the call stays open for the test to answer.
+  const h = { t: 0, handle: 0, timers: [], calls: [], said: [], recs: [], sentinels: [], honorAbort: true };
   const byId = {};
   for (const m of HTML.matchAll(/<(\w+)\s([^>]*?)\bid="([^"]+)"([^>]*)>/g)) {
     const el = new El(m[1]);
@@ -99,16 +101,25 @@ function page(opts) {
         call.done = true;
         resolve({ status, text: () => Promise.resolve(data === undefined ? "" : JSON.stringify(data)) });
       };
-      // The status line arrives; the body read waits until `lose()` makes it
-      // fail, as on a connection cut mid-response.
+      // The status line arrives; the body read waits until `arrive(data)`
+      // delivers the body, or `lose()` makes it fail, as on a connection cut
+      // mid-response, or an abort does, as in a browser.
       call.headers = (status) => {
         call.done = true;
-        let lose;
-        const body = new Promise((_, reject) => { lose = () => reject(new Error("connection reset")); });
+        let lose, arrive;
+        const body = new Promise((res, rej) => {
+          lose = () => rej(new Error("connection reset"));
+          arrive = (data) => res(data === undefined ? "" : JSON.stringify(data));
+        });
+        call.loseBody = lose;
         resolve({ status, text: () => body });
-        return { lose: async () => { lose(); await settle(); } };
+        return { lose: async () => { lose(); await settle(); }, arrive: async (data) => { arrive(data); await settle(); } };
       };
-      if (init.signal) init.signal.addEventListener("abort", () => { if (!call.done) { call.done = true; reject(new Error("abort")); } });
+      if (init.signal) init.signal.addEventListener("abort", () => {
+        if (!h.honorAbort) return;
+        call.aborted = true;
+        if (!call.done) { call.done = true; reject(new Error("abort")); } else if (call.loseBody) call.loseBody();
+      });
       h.calls.push(call);
       if (url === "/desk/pair/start") call.answer(200, { pair_id: "p1", code: "ABC-DEF", expires_in: 300 });
       if (url === "/desk/pair/claim") call.answer(200, { token: "tok" });
@@ -142,9 +153,10 @@ function page(opts) {
     await settle();
     return call;
   };
+  // `p` is a path, or the call itself when several are open on one path.
   h.headers = async (p, status) => {
-    const call = h.pending(p)[0];
-    assert.ok(call, "no pending call to " + p);
+    const call = typeof p === "string" ? h.pending(p)[0] : p;
+    assert.ok(call && !call.done, "no pending call to " + (call ? call.path : p));
     const body = call.headers(status);
     await settle();
     return body;

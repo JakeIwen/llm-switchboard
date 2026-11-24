@@ -67,7 +67,10 @@
       reason: null,
       // After an end that left a send POST unanswered: the end's own cause,
       // and whether the POST's answer may still settle what the reason says.
-      cause: null, deliveryOpen: false
+      cause: null, deliveryOpen: false,
+      // After an end at a status line of the conversation's own call: the
+      // conversation as it was then, which that call's answer is replayed on.
+      replay: null
     };
   }
 
@@ -222,7 +225,7 @@
   // reason, the only ends the controller may speak.
   // An end that abandons a send POST issued and never answered says so
   // after its cause, the prompt may have been delivered, until that POST's
-  // own answer settles it (settleDelivery).
+  // own answer settles it (settleLate).
   function finish(c, fx, reason, detail) {
     var shown = withDetail(reason, detail);
     c.cause = shown;
@@ -325,6 +328,7 @@
     next.own = {};
     next.evidence = null;
     next.label = "";
+    next.replay = null;
     if (next.dest) next.dest = Object.freeze(Object.assign({}, next.dest, { label: "" }));
     return next;
   }
@@ -573,15 +577,46 @@
     if (c.phase === PHASE.SENDING) finish(c, fx, REASON.UNKNOWN);
   };
 
+  // The gate (conversation.js, hubStatus): a status other than 200 ends
+  // the conversation silently at the status line, a 401 as unpaired (it
+  // needs no body), any other with the status as its provisional cause.
+  // When it is a status of the conversation's own call (`ev.own`), the
+  // conversation as it was is kept, so that call's answer, once its body
+  // arrives, settles the cause to what it would have shown (settleLate).
+  HANDLERS[EV.HUB_STATUS] = function (c, fx, ev) {
+    var before = ev.own && ev.status !== 401 ? copy(c) : null;
+    if (ev.status === 401) finish(c, fx, REASON.UNPAIRED);
+    else finish(c, fx, REASON.CALL_FAILED, "HTTP " + ev.status);
+    c.replay = before;
+    settleLate(c, ev);
+  };
+
   var SEND_ANSWER = {};
   SEND_ANSWER[EV.SEND_OK] = true;
   SEND_ANSWER[EV.SEND_REFUSED] = true;
   SEND_ANSWER[EV.SEND_UNKNOWN] = true;
 
-  // The answer to the send POST an end left open: what it establishes
-  // replaces "delivery is unknown" after the end's cause. It changes only
-  // the reason shown: the conversation stays ended and nothing is spoken.
-  function settleDelivery(c, ev) {
+  // Whether an ended conversation still takes event `ev` (settleLate).
+  function lateEvent(c, ev) {
+    return ev.type === EV.HUB_STATUS || (!!ev.settles && !!c.replay) || (c.deliveryOpen && !!SEND_ANSWER[ev.type]);
+  }
+
+  // What an ended conversation still learns from the answers its end left
+  // open. It changes only the reason shown: the conversation stays ended
+  // and nothing is spoken. A 401 to the open send proves, at its status
+  // line, that the prompt was not sent. The answer of the call whose status
+  // ended the conversation (`ev.settles`) is replayed on the conversation
+  // as it was then, and the end that replay reaches replaces the
+  // provisional one. Otherwise the open send's answer replaces "delivery is
+  // unknown" after the end's cause.
+  function settleLate(c, ev) {
+    if (ev.type === EV.HUB_STATUS) {
+      if (ev.status === 401 && ev.send && c.deliveryOpen) {
+        c.reason = c.cause + "; " + withDetail(REASON.NOT_SENT, "HTTP " + ev.status);
+      }
+      return;
+    }
+    if (ev.settles && c.replay) return replay(c, ev);
     if (!c.deliveryOpen || !SEND_ANSWER[ev.type]) return;
     c.deliveryOpen = false;
     if (ev.type === EV.SEND_OK && ACCEPTED[ev.state] && typeof ev.request_id === "string") {
@@ -589,6 +624,17 @@
     } else if (ev.type === EV.SEND_REFUSED) {
       c.reason = c.cause + "; " + withDetail(REASON.NOT_SENT, ev.reason);
     }
+  }
+
+  function replay(c, ev) {
+    var then = copy(c.replay);
+    c.replay = null;
+    var handler = HANDLERS[ev.type];
+    if (handler) handler(then, [], ev);
+    if (then.phase !== PHASE.ENDED) return;
+    c.cause = then.cause;
+    c.reason = then.reason;
+    c.deliveryOpen = then.deliveryOpen;
   }
 
   function copy(c) {
@@ -613,9 +659,9 @@
       return { c: c0, fx: [{ fx: FX.SNAPSHOT }] };
     }
     var handler = HANDLERS[ev.type];
-    if (!active(prev) && prev.deliveryOpen && SEND_ANSWER[ev.type]) {
+    if (!active(prev) && lateEvent(prev, ev)) {
       var ended = copy(prev);
-      settleDelivery(ended, ev);
+      settleLate(ended, ev);
       return { c: ended, fx: [] };
     }
     if (!active(prev) || !handler) return { c: prev, fx: [] };
@@ -628,7 +674,7 @@
       // The send's own answer, come too late to act on, still says what
       // became of the prompt.
       finish(c, fx, REASON.HUB_LOST);
-      settleDelivery(c, ev);
+      settleLate(c, ev);
       fx.forEach(function (f) { if (f.fx === FX.END) f.reason = c.reason; });
     } else {
       handler(c, fx, ev);

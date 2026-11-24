@@ -57,9 +57,13 @@
     token: function () { return token; }, session: function () { return session; }, onStatus: statusArrived
   });
 
-  // A 401 on any protected request drops the token and returns to pairing
-  // at the headers, unless the page has paired again since the call began.
+  // Every status line the hub sends, on any call, the moment it arrives:
+  // first the conversation's gate (conversation.js, hubStatus), whichever
+  // call it answers and whether or not its caller still wants it; then a
+  // 401 on any protected request drops the token and returns to pairing,
+  // unless the page has paired again since the call began.
   function statusArrived(status, opts, startedIn) {
+    try { conv.hubStatus(status, opts.call); } catch (e) { pageFault(e); }
     if (status === 401 && opts.auth !== false && startedIn === session) {
       dropToken("The hub no longer accepts this tablet.");
     }
@@ -201,7 +205,8 @@
           try { applyState(r.data, startSeq); } catch (e) { pageFault(e); }
           once();
         } else {
-          conv.pollUnusable();
+          // Any other status was the gate's, at its status line.
+          if (r.status === 200) conv.pollUnusable();
           retry();
         }
       }, function () {
@@ -561,6 +566,8 @@
     var mySession = session;
     pollSeq++;
     api("GET", "/desk/api/state", undefined, {}).then(function (r) {
+      // Whatever became of the send it follows, a snapshot faces the closing cue's check.
+      if (r.status === 200) conv.refreshed(r.data);
       if (mySession !== session || sentRequestId !== requestId || r.status !== 200 || !r.data) return;
       sentAckVersion = r.data.version;
       expireWaitingResult(r.data);

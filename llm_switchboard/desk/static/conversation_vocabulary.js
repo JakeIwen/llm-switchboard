@@ -81,7 +81,9 @@
     RESULT: "result", REC_AUDIOSTART: "rec_audiostart", REC_END: "rec_end", REC_ERROR: "rec_error",
     REC_START_FAILED: "rec_start_failed", SAY_END: "say_end", SAY_FAILED: "say_failed",
     TIMEOUT: "timeout", TICKET_OK: "ticket_ok", TICKET_FAIL: "ticket_fail",
-    SEND_OK: "send_ok", SEND_REFUSED: "send_refused", SEND_UNKNOWN: "send_unknown"
+    SEND_OK: "send_ok", SEND_REFUSED: "send_refused", SEND_UNKNOWN: "send_unknown",
+    // A status other than 200 from the hub, on any call the page makes.
+    HUB_STATUS: "hub_status"
   });
 
   // The phrases the reducer recognizes as commands (conversation_logic.js).
@@ -117,6 +119,9 @@
     GRANT_LOST: "the hub ended the conversation",
     REFUSED: "the hub refused the conversation",
     HUB_UNREACHABLE: "the hub could not be reached",
+    // Any status but 200, at its status line, shown with it ("HTTP 409")
+    // until that call's own answer, if its body arrives, says more.
+    CALL_FAILED: "a hub call failed",
     REC_FAILED: "speech recognition failed",
     REC_HUNG: "speech recognition did not start",
     REC_LOOP: "speech recognition keeps stopping",

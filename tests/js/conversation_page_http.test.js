@@ -29,17 +29,17 @@ test("a voice send's 401 drops the pairing at its headers, and a lost body chang
   assert.equal(h.state(), ended(REASON.UNPAIRED + "; " + L.withDetail(REASON.NOT_SENT, "HTTP 401")));
 });
 
-test("a ticket's or send's refusal whose body is lost is an answer: silent, never 'unreachable'", async () => {
+test("a ticket's or send's refusal whose body is lost is an answer: silent, its status shown, never 'unreachable'", async () => {
   const t = await turn();
   const said = t.said.length;
   await (await t.headers(PATH.TICKET, 409)).lose();
-  assert.equal(t.state(), ended(L.withDetail(REASON.NOT_SENT, "HTTP 409")));
+  assert.equal(t.state(), ended(L.withDetail(REASON.CALL_FAILED, "HTTP 409")));
   assert.equal(t.said.length, said);
   const s = await turn();
   await s.answer(PATH.TICKET, 200, { ticket: "t1" });
   const before = s.said.length;
   await (await s.headers(PATH.SEND, 409)).lose();
-  assert.equal(s.state(), ended(REASON.UNKNOWN));
+  assert.equal(s.state(), ended(L.withDetail(REASON.CALL_FAILED, "HTTP 409") + "; " + REASON.UNKNOWN));
   assert.equal(s.said.length, before);
 });
 

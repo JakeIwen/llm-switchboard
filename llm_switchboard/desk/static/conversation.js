@@ -13,8 +13,9 @@
 // Public surface, all the page needs (app.js and the view):
 //   DeskConversation.create({api, env, deps}) -> controller
 //   DeskConversation.browserEnv(window) -> env from the page's own objects.
-//     api(method, path, body, {signal}) -> Promise<{status, data}>, rejecting
-//       when no response came (app.js's `api`, which also drops the token on a 401).
+//     api(method, path, body, {signal, call}) -> Promise<{status, data}>,
+//       rejecting when no response came (hub_api.js, through app.js, which
+//       passes every status line to hubStatus() and drops the token on a 401).
 //     env: {Recognition, synth, Utterance, setTimeout, clearTimeout, now,
 //       wakeLock, AbortController}; `now` is a monotonic ms clock
 //       (performance.now), `wakeLock` is navigator.wakeLock or null.
@@ -36,10 +37,12 @@
 //   snapshot(state)   Every state the page's poll receives, whether or not
 //                     a conversation is active (a closing cue and an
 //                     abandoned grant request use it too).
-//   pollUnusable()    The page's poll was answered with anything but a
-//                     snapshot (a status other than 200, or no body): like
-//                     every hub answer that is not its call's success, it
-//                     cuts a closing cue.
+//   hubStatus(status, call) Every status line the hub sends, on any call
+//                     (`call` from that call's opts), before its body: the
+//                     gate (see hubStatus below).
+//   pollUnusable()    The page's poll was answered 200 with no snapshot.
+//   refreshed(state)  A snapshot the tap flow fetched after a send: only
+//                     the closing cue's check.
 //   endTap()          The full-screen End conversation control; also stops
 //                     the closing cue.
 //   hidden()          The page was hidden (visibilitychange to hidden).
@@ -111,7 +114,7 @@
     var utt = null;          // {id, u, kind, estimate}
     var timers = {};         // TIMER name -> {id, handle}
     var fetches = F.create(nextId, env.AbortController); // FETCH kind -> the one in flight
-    var begin = fetches.begin, signal = fetches.signal, settle = fetches.settle, abandon = fetches.abandon;
+    var begin = fetches.begin, callOpts = fetches.opts, settle = fetches.settle, abandon = fetches.abandon;
     var wake = null;         // {id, sentinel}
     var grant = null;        // the grant id this conversation holds
     // {freshUntil} while the closing cue plays: the grant is still held, and
@@ -121,9 +124,6 @@
     // it brought. Start waits for it, so it can't reach the hub after a
     // newer acquisition and replace that grant (the hub keeps the latest).
     var straggler = null;
-    // The id of the send POST an end left unanswered with delivery open:
-    // its answer may still settle what the end reason says, and nothing else.
-    var lateSend = null;
     var sound = T.create({ env: env, onChange: notify, onLate: lateSound });
     var cutsAtStart = 0;     // sound.cuts() at the Start tap: more means this conversation cut one off
     var interim = "";
@@ -211,11 +211,38 @@
 
     // ---- fetches ----------------------------------------------------------
 
-    // True once for the send POST the last end left open; a newer start forgets it.
-    function settleLate(id) {
-      if (lateSend === null || lateSend !== id) return false;
-      lateSend = null;
-      return true;
+    // The gate. Only a 200 can be a call's success; any other status, on
+    // any call, whoever made it and whether or not its answer is still
+    // wanted, cuts a closing cue (sound uncertain) and lets the grant go,
+    // and ends a running conversation silently, with nothing spoken: the
+    // reducer shows the status until this conversation's own call's
+    // answer, if the status was one, settles what the end says (late). A
+    // grant request answered so granted nothing, so Start stops waiting.
+    function hubStatus(status, call) {
+      if (status === 200) return;
+      stopClosing();
+      var kind = fetches.kindOf(call);
+      var send = kind === FETCH.SEND || fetches.isLateSend(call);
+      var ending = active();
+      if (ending && kind) fetches.lateCause(call);
+      if (ending || send) dispatch({ type: EV.HUB_STATUS, status: status, own: ending && !!kind, send: send });
+      if (straggler && straggler.id === call) forgetStraggler(call);
+    }
+
+    // The answer of a fetch an end left behind, as the event its call
+    // would have dispatched: the one whose status ended the conversation
+    // settles the end's cause once its body has arrived; the send POST the
+    // end left open settles what became of the prompt. Others are dropped.
+    function late(id, ev, r) {
+      var role = fetches.takeLate(id);
+      if (role.cause && r.data !== null && r.data !== undefined) return dispatch(Object.assign({ settles: true }, ev));
+      if (role.send) dispatch(ev);
+    }
+
+    // Only a snapshot that shows the target usable leaves a closing cue
+    // playing, whichever call fetched it.
+    function closingCheck(state) {
+      if (closing && (!state || L.targetProblem(c.dest, state))) stopClosing();
     }
 
     // A start step that never answers fails like one that refused; the grant
@@ -237,30 +264,18 @@
       dispatch({ type: EV.END, reason: reason });
     }
 
-    // Every answer the hub gives on a conversation's paths, the current
-    // conversation's or one it abandoned: one that is not its call's
-    // validated success cuts a closing cue at once (sound uncertain) and
-    // lets the grant go, and nothing replaces it. Nothing the hub says
-    // permits speech; while a conversation runs, its own reducer ends it
-    // silently on the same answers.
-    function answered(ok) { if (!ok) stopClosing(); }
-
-    // A 401 means the token is gone, whatever the call: the grant went with it.
-    function unauthorized(r) {
-      if (!r || r.status !== 401) return false;
-      grantLost(REASON.UNPAIRED);
-      return true;
-    }
-
     function fetchStartSnapshot() {
       var id = begin(FETCH.SNAPSHOT, true);
       setTimer(TIMER.STEP, LIMITS.STEP_MS);
-      api("GET", PATH.STATE, undefined, signal(FETCH.SNAPSHOT)).then(function (r) {
-        if (!settle(FETCH.SNAPSHOT, id)) return;
+      api("GET", PATH.STATE, undefined, callOpts(FETCH.SNAPSHOT)).then(function (r) {
+        var ev = r.status === 200 && r.data ? { type: EV.SNAPSHOT_FETCHED, snapshot: r.data }
+          : { type: EV.FAIL, reason: REASON.HUB_UNREACHABLE };
+        if (!settle(FETCH.SNAPSHOT, id)) {
+          if (r.status === 200) closingCheck(r.data);
+          return late(id, ev, r);
+        }
         clearTimer(TIMER.STEP);
-        if (unauthorized(r)) return;
-        if (r.status === 200 && r.data) dispatch({ type: EV.SNAPSHOT_FETCHED, snapshot: r.data });
-        else dispatch({ type: EV.FAIL, reason: REASON.HUB_UNREACHABLE });
+        dispatch(ev);
       }, function () {
         if (!settle(FETCH.SNAPSHOT, id)) return;
         clearTimer(TIMER.STEP);
@@ -312,17 +327,19 @@
       var startedAt = env.now();
       var d = c.dest;
       setTimer(TIMER.STEP, LIMITS.STEP_MS);
-      api("POST", PATH.GRANT, { session_id: d.session_id, generation: d.generation, epoch: d.epoch }, {}).then(function (r) {
+      api("POST", PATH.GRANT, { session_id: d.session_id, generation: d.generation, epoch: d.epoch },
+        callOpts(FETCH.GRANT)).then(function (r) {
         var got = A.grantOf(r);
-        // An abandoned request's grant, if any, replaced whatever grant this
-        // page holds now: no success of the conversation it would cut.
+        var refused = { type: EV.FAIL, reason: REASON.REFUSED, detail: detail(r) };
+        // An abandoned request's 200 may carry a grant, which replaced
+        // whatever grant this page holds now: no success of a closing cue.
         if (!settle(FETCH.GRANT, id)) {
-          answered(false);
+          if (r.status === 200) stopClosing();
+          late(id, refused, r);
           return straggled(id, got);
         }
         clearTimer(TIMER.STEP);
-        if (unauthorized(r)) return;
-        if (!got) return dispatch({ type: EV.FAIL, reason: REASON.REFUSED, detail: detail(r) });
+        if (!got) return dispatch(refused);
         grant = got;
         setTimer(TIMER.BEAT, LIMITS.BEAT_MS);
         dispatch({ type: EV.GRANT_OK, startedAt: startedAt,
@@ -380,13 +397,17 @@
       var startedAt = env.now();
       var named = grant;
       setTimer(TIMER.BEAT_ABORT, LIMITS.BEAT_ABORT_MS);
-      api("POST", PATH.BEAT, { grant: named }, signal(FETCH.BEAT)).then(function (r) {
+      api("POST", PATH.BEAT, { grant: named }, callOpts(FETCH.BEAT)).then(function (r) {
+        var ok = A.renewed(r, named);
         // A beat given up on can still answer (an abort while its body is
-        // read resolves with no body): it renews nothing, but it is an answer.
-        if (!settle(FETCH.BEAT, id)) return answered(A.renewed(r, named));
+        // read resolves with no body): it renews nothing, and a 200 that
+        // renews nothing cuts a closing cue.
+        if (!settle(FETCH.BEAT, id)) {
+          if (r.status === 200 && !ok) stopClosing();
+          return late(id, { type: EV.END, reason: REASON.GRANT_LOST }, r);
+        }
         clearTimer(TIMER.BEAT_ABORT);
-        if (unauthorized(r)) return;
-        if (A.renewed(r, named)) beatOk(startedAt);
+        if (ok) beatOk(startedAt);
         else grantLost(REASON.GRANT_LOST);
       }, function () {
         if (settle(FETCH.BEAT, id)) clearTimer(TIMER.BEAT_ABORT);
@@ -409,16 +430,15 @@
       var d = c.dest;
       setTimer(TIMER.STEP, LIMITS.STEP_MS);
       api("POST", PATH.TICKET, { session_id: d.session_id, generation: d.generation, epoch: d.epoch },
-        signal(FETCH.TICKET)).then(function (r) {
+        callOpts(FETCH.TICKET)).then(function (r) {
         var ticket = A.ticketOf(r);
-        if (!settle(FETCH.TICKET, id)) return answered(!!ticket);
-        clearTimer(TIMER.STEP);
-        if (unauthorized(r)) return;
-        if (ticket) {
-          dispatch({ type: EV.TICKET_OK, ticket: ticket });
-        } else {
-          dispatch({ type: EV.TICKET_FAIL, reason: detail(r) });
+        var ev = ticket ? { type: EV.TICKET_OK, ticket: ticket } : { type: EV.TICKET_FAIL, reason: detail(r) };
+        if (!settle(FETCH.TICKET, id)) {
+          if (r.status === 200 && !ticket) stopClosing();
+          return late(id, ev, r);
         }
+        clearTimer(TIMER.STEP);
+        dispatch(ev);
       }, function () {
         if (!settle(FETCH.TICKET, id)) return;
         clearTimer(TIMER.STEP);
@@ -427,33 +447,30 @@
     }
 
     // Unknown is never retried; a refusal before handoff is final. The
-    // answer is dispatched even after an end, and after a 401 has ended the
-    // conversation, so the end reason keeps what it establishes. The POST
-    // keeps its own deadline, apart from the conversation's timers, whatever
-    // becomes of the conversation: at it the POST is aborted, and delivery
-    // stays unknown for whichever conversation still listens for it.
+    // answer is dispatched even after an end, so the end reason keeps what
+    // it establishes (late). The POST keeps its own deadline, apart from
+    // the conversation's timers, whatever becomes of the conversation: at it
+    // the POST is aborted, and delivery stays as the end left it.
     function postSend(ticket, text) {
       var id = begin(FETCH.SEND, true);
       var ctl = fetches.get(FETCH.SEND).ctl;
+      function unanswered() {
+        if (settle(FETCH.SEND, id) || fetches.takeLate(id).send) dispatch({ type: EV.SEND_UNKNOWN });
+      }
       var deadline = env.setTimeout(function () {
-        var mine = settle(FETCH.SEND, id) || settleLate(id);
+        unanswered();
         if (ctl) ctl.abort();
-        if (mine) dispatch({ type: EV.SEND_UNKNOWN });
       }, LIMITS.SEND_DEADLINE_MS);
       var body = { ticket: ticket, text: text, confirm: L.CONFIRM.VOICE, grant: grant };
-      api("POST", PATH.SEND, body, signal(FETCH.SEND)).then(function (r) {
+      api("POST", PATH.SEND, body, callOpts(FETCH.SEND)).then(function (r) {
         env.clearTimeout(deadline);
         var ev = sendEvent(r);
-        var mine = settle(FETCH.SEND, id) || settleLate(id);
-        if (mine) {
-          unauthorized(r);
-          dispatch(ev);
-        }
-        answered(ev.type === EV.SEND_OK);
+        if (settle(FETCH.SEND, id)) dispatch(ev);
+        else late(id, ev, r);
+        if (r.status === 200 && ev.type !== EV.SEND_OK) stopClosing();
       }, function () {
         env.clearTimeout(deadline);
-        if (!settle(FETCH.SEND, id) && !settleLate(id)) return;
-        dispatch({ type: EV.SEND_UNKNOWN });
+        unanswered();
       });
     }
 
@@ -615,7 +632,7 @@
       // and fresh, a sound was cut off, or the page can't be heard or has no
       // voice: a successor may be listening.
       var cue = !!spoken && !!held && !cut && L.fresh(c, env.now()) && deps.visible() && deps.voiceAvailable();
-      lateSend = c.deliveryOpen && fetches.get(FETCH.SEND) ? fetches.get(FETCH.SEND).id : null;
+      fetches.lateSend(c.deliveryOpen && fetches.get(FETCH.SEND) ? fetches.get(FETCH.SEND).id : null);
       Object.keys(timers).forEach(function (name) { if (!(cue && CLOSING_TIMERS[name])) clearTimer(name); });
       // The grant request stays open so a late grant is released; a late
       // ticket answer is dropped; the send POST runs on to its own deadline,
@@ -632,8 +649,8 @@
         return release(held);
       }
       // The cue must not outlive the grant: freshness is still checked every
-      // tick, and a lapse, or any hub answer that is not its call's success,
-      // cuts the cue short.
+      // tick, and a lapse, any status but 200 (hubStatus) or a 200 that is
+      // not its call's success cuts the cue short.
       closing = { freshUntil: c.freshUntil };
       setTimer(TIMER.TICK, LIMITS.TICK_MS);
       speak(CUE.ENDED + ": " + reason + ".", SAY.END);
@@ -654,7 +671,7 @@
     }
 
     // The closing cue cut short by End, hiding, leaving, unpairing, the
-    // grant's lapse or any hub answer that is not its call's success.
+    // grant's lapse, any status but 200 or a 200 that is not its call's success.
     function stopClosing() {
       if (!closing) return;
       cutSpeech();
@@ -674,7 +691,7 @@
     function start(dest) {
       if (!dest || !canStart()) return false;
       cutsAtStart = sound.cuts();
-      lateSend = null;
+      fetches.forgetLate();
       dispatch({ type: EV.START, dest: Object.freeze({
         host: dest.host, session_id: dest.session_id, generation: dest.generation,
         label: dest.label, epoch: dest.epoch
@@ -691,9 +708,7 @@
       if (!state) return;
       if (straggler && state.epoch !== straggler.epoch) forgetStraggler(straggler.id);
       if (active()) return dispatch({ type: EV.SNAPSHOT, snapshot: state });
-      // Only a snapshot that shows the target usable leaves a closing cue
-      // playing, whichever poll it answers.
-      if (closing) answered(!L.targetProblem(c.dest, state));
+      closingCheck(state);
     }
 
     function targetSelected(id) {
@@ -750,7 +765,8 @@
 
     return {
       start: start, canStart: canStart, blocker: blocker, snapshot: snapshot, track: track, view: view, holds: holds,
-      soundClear: soundClear, stopPageSpeech: stopPageSpeech, pollUnusable: function () { answered(false); },
+      soundClear: soundClear, stopPageSpeech: stopPageSpeech, hubStatus: hubStatus, refreshed: closingCheck,
+      pollUnusable: function () { stopClosing(); },
       endTap: function () { endIfActive(REASON.END_TAPPED); },
       hidden: function () { endIfActive(REASON.HIDDEN); },
       unpaired: function () {

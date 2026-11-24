@@ -63,7 +63,13 @@ function harness() {
   function api(method, path, body, opts) {
     return new Promise((resolve, reject) => {
       const call = { method, path, body, done: false };
-      call.answer = (status, data) => { call.done = true; resolve({ status, data }); };
+      // Like the page's api (hub_api.js through app.js), every status line
+      // reaches the controller's gate before the answer does.
+      call.answer = (status, data) => {
+        call.done = true;
+        h.ctl.hubStatus(status, opts && opts.call);
+        resolve({ status, data });
+      };
       call.fail = () => { call.done = true; reject(new Error("network")); };
       if (opts && opts.signal && h.honorAbort) {
         opts.signal.addEventListener("abort", () => { call.aborted = true; call.done = true; reject(new Error("abort")); });
