@@ -20,7 +20,7 @@ from llm_switchboard.desk import link_authorize, link_hub
 from llm_switchboard.desk.link_authorize import (
     ED25519_REFUSAL, UNCONFIRMED, key_line, marker, run_authorize, run_lock_refusal, run_revoke,
 )
-from llm_switchboard.desk.link_proof import Signer, read_signers
+from llm_switchboard.desk.link_proof import Signer, SignersUnreadable, read_signers
 from llm_switchboard.desk.link_protocol import LinkType, RefusedCode
 from llm_switchboard.desk.locks import LockStore
 from llm_switchboard.desk.operator import HubResultUnknown
@@ -165,6 +165,26 @@ class LinkCommandsTest(CommandsMixin, MacTargetCase):
         self.assertEqual(self.links()[MAC]["state"], "up")
         self.hub.recheck_now()
         self.assertTrue(peer.closed())
+
+    def test_unreadable_signer_check_is_not_a_confirmation(self):
+        # The hub's signer check can't read link-signers, so its answer has
+        # readable false and null signer and link: neither command confirms.
+        unreadable = patch.object(link_hub, "read_signers", side_effect=SignersUnreadable("bad"))
+        with unreadable:
+            code, out = self.revoke(MAC)
+        self.assertEqual(code, 1, out.text())
+        self.assertIn(f"step 3 (confirmation): {UNCONFIRMED} (link-signers unreadable)", out.text())
+        self.assertNotIn("(confirmation): done", out.text())
+        self.assertIsNone(self.signer_blob(MAC))  # steps 1 and 2 stand
+        self.assertIsNone(self.key_blob(MAC))
+        with unreadable:
+            code, out = self.authorize(MAC, pub(self.key("mac-rotated")))
+        self.assertEqual(code, 1, out.text())
+        self.assertIn("step 4 (confirmation): not confirmed: link-signers unreadable; the credential edits already "
+                      "made stand", out.text())
+        self.assertNotIn("(confirmation): done", out.text())
+        self.assert_one_key(MAC)
+        self.assertEqual(self.signer_blob(MAC), self.key("mac-rotated").signer.blob)
 
     def test_revoke_interrupted_between_files_rerun_completes(self):
         code, out = self.authorize(MAC, pub(self.key("mac")))

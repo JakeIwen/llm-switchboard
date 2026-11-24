@@ -258,6 +258,13 @@ def _overtaken(host: str, fingerprint: str) -> str:
 
 UNCONFIRMED = ("cutoff not confirmed; the hub retires the link at its next housekeeping pass; run link-revoke "
                "again to confirm")
+SIGNERS_UNREADABLE = "link-signers unreadable"
+
+
+def _answer_unreadable(answer: dict) -> bool:
+    """A `link_drop` answer whose signer check couldn't read `link-signers`
+    (`readable` anything but true): its null signer and link confirm nothing."""
+    return answer.get("readable") is not True
 
 
 def _link_drop(config: DeskConfig, host: str):
@@ -292,7 +299,7 @@ def _confirm_authorized(config: DeskConfig, signer: Signer, steps: Steps, out) -
         except RunLockHeld:
             return steps.fail(run_lock_refusal(f"link-authorize {host}") + edits_stand)
         except (RunLockUnusable, SignersUnreadable) as exc:
-            return steps.fail(f"not confirmed: {exc or 'link-signers unreadable'}{edits_stand}")
+            return steps.fail(f"not confirmed: {exc or SIGNERS_UNREADABLE}{edits_stand}")
         if listed.get(host) != signer:
             return steps.fail(_not_listed(host))
         steps.done("no hub running: no link to drop")
@@ -303,6 +310,8 @@ def _confirm_authorized(config: DeskConfig, signer: Signer, steps: Steps, out) -
         if error == Refusal.UNKNOWN_OP:
             error = "the running desk hub is older and has no link_drop"
         return steps.fail(f"not confirmed: {error}{edits_stand}")
+    if _answer_unreadable(answer):
+        return steps.fail(f"not confirmed: {SIGNERS_UNREADABLE}{edits_stand}")
     listed, live = answer.get("signer"), answer.get("link")
     if not isinstance(listed, dict) or listed.get("fingerprint") != signer.fingerprint:
         return steps.fail(_not_listed(host))
@@ -365,13 +374,15 @@ def _confirm_revoked(config: DeskConfig, host: str, steps: Steps) -> int:
         except RunLockHeld:
             return steps.fail(run_lock_refusal(f"link-revoke {host}") + edits_stand)
         except (RunLockUnusable, SignersUnreadable) as exc:
-            return steps.fail(f"{UNCONFIRMED} ({exc or 'link-signers unreadable'})")
+            return steps.fail(f"{UNCONFIRMED} ({exc or SIGNERS_UNREADABLE})")
         if host in listed:
             return steps.fail(_overtaken(host, listed[host].fingerprint))
         steps.done("no hub running: no link to drop")
         return EXIT_DONE
     if not answer.get("ok"):
         return steps.fail(f"{UNCONFIRMED} ({answer.get('error', 'refused')})")
+    if _answer_unreadable(answer):
+        return steps.fail(f"{UNCONFIRMED} ({SIGNERS_UNREADABLE})")
     listed, live = answer.get("signer"), answer.get("link")
     if listed is not None:
         return steps.fail(_overtaken(host, listed.get("fingerprint") if isinstance(listed, dict) else "?"))
