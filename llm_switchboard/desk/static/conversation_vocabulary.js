@@ -122,6 +122,9 @@
     // Any status but 200, at its status line, shown with it ("HTTP 409")
     // until that call's own answer, if its body arrives, says more.
     CALL_FAILED: "a hub call failed",
+    // A 200 that is not its call's success, or whose body was lost, for a
+    // call the conversation had already given up on or one of the page's own.
+    UNUSABLE: "a hub answer could not be used",
     REC_FAILED: "speech recognition failed",
     REC_HUNG: "speech recognition did not start",
     REC_LOOP: "speech recognition keeps stopping",

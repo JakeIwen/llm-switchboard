@@ -34,15 +34,14 @@
 //   blocker()         Why canStart() is false, as a BLOCKER (IN_PROGRESS,
 //                     LETTING_GO, NOT_QUIET), or null; pass it to
 //                     startBlocker as `page.blocker` for the view's reason.
-//   snapshot(state)   Every state the page's poll receives, whether or not
-//                     a conversation is active (a closing cue and an
-//                     abandoned grant request use it too).
+//   snapshot(state, from) Every snapshot the page receives from the hub,
+//                     whichever fetch brought it (`from`, a SNAPSHOT_FROM:
+//                     the poll by default, the tap flow's refresh, an
+//                     earlier pairing's answer), and null for a 200 with none
+//                     (see snapshot below).
 //   hubStatus(status, call) Every status line the hub sends, on any call
 //                     (`call` from that call's opts), before its body: the
 //                     gate (see hubStatus below).
-//   pollUnusable()    The page's poll was answered 200 with no snapshot.
-//   refreshed(state)  A snapshot the tap flow fetched after a send: only
-//                     the closing cue's check.
 //   endTap()          The full-screen End conversation control; also stops
 //                     the closing cue.
 //   hidden()          The page was hidden (visibilitychange to hidden).
@@ -102,6 +101,22 @@
     SNAPSHOT: "snapshot", WAKE: "wake", GRANT: "grant", BEAT: "beat", TICKET: "ticket", SEND: "send"
   });
 
+  // Each fetch's own limit, which it keeps whatever becomes of the
+  // conversation (conversation_fetches.js), and whether the conversation
+  // aborts it when it gives up on it: never the grant request (abandonGrant).
+  var SPEC = {};
+  SPEC[FETCH.SNAPSHOT] = { abort: true, ms: LIMITS.STEP_MS };
+  SPEC[FETCH.WAKE] = { abort: false };
+  SPEC[FETCH.GRANT] = { abort: false, ms: LIMITS.STEP_MS };
+  SPEC[FETCH.BEAT] = { abort: true, ms: LIMITS.BEAT_ABORT_MS };
+  SPEC[FETCH.TICKET] = { abort: true, ms: LIMITS.STEP_MS };
+  SPEC[FETCH.SEND] = { abort: true, ms: LIMITS.SEND_DEADLINE_MS };
+
+  // Where a snapshot the page received came from (snapshot()): the page's
+  // poll, any other fetch of the current pairing, or a call made before the
+  // token in use now was paired.
+  var SNAPSHOT_FROM = Object.freeze({ POLL: "poll", FETCHED: "fetched", EARLIER_PAIRING: "earlier_pairing" });
+
   var UNREACHABLE = "the hub could not be reached";
   var detail = A.detail, sendEvent = A.sendEvent;
 
@@ -113,8 +128,8 @@
     var seq = 0;
     var utt = null;          // {id, u, kind, estimate}
     var timers = {};         // TIMER name -> {id, handle}
-    var fetches = F.create(nextId, env.AbortController); // FETCH kind -> the one in flight
-    var begin = fetches.begin, callOpts = fetches.opts, settle = fetches.settle, abandon = fetches.abandon;
+    var fetches = F.create(nextId, env.AbortController, env); // FETCH kind -> the one in flight
+    var settle = fetches.settle, abandon = fetches.abandon;
     var wake = null;         // {id, sentinel}
     var grant = null;        // the grant id this conversation holds
     // {freshUntil} while the closing cue plays: the grant is still held, and
@@ -124,6 +139,9 @@
     // it brought. Start waits for it, so it can't reach the hub after a
     // newer acquisition and replace that grant (the hub keeps the latest).
     var straggler = null;
+    // How many times the token was dropped (unpaired): a call made before
+    // the last drop answers for an earlier pairing.
+    var pairing = 0;
     var sound = T.create({ env: env, onChange: notify, onLate: lateSound });
     var cutsAtStart = 0;     // sound.cuts() at the Start tap: more means this conversation cut one off
     var interim = "";
@@ -222,6 +240,7 @@
     function hubStatus(status, call) {
       if (status === 200) return;
       stopClosing();
+      fetches.failed(call);
       var kind = fetches.kindOf(call);
       var send = kind === FETCH.SEND || fetches.isLateSend(call);
       var ending = active();
@@ -240,10 +259,30 @@
       if (role.send) dispatch(ev);
     }
 
-    // Only a snapshot that shows the target usable leaves a closing cue
-    // playing, whichever call fetched it.
-    function closingCheck(state) {
-      if (closing && (!state || L.targetProblem(c.dest, state))) stopClosing();
+    // An answer that silences the page, whichever call brought it and
+    // whether or not its caller still wants it: a closing cue is cut, and a
+    // running conversation, in any phase, ends silently with `reason`.
+    function silence(reason) {
+      if (closing) return stopClosing();
+      if (active()) dispatch({ type: EV.END, reason: reason, silent: true });
+    }
+
+    // Every snapshot the page receives from the hub, whichever call brought
+    // it (`from`, a SNAPSHOT_FROM): a 200 with none silences; a running
+    // conversation's reducer takes one in version order, an older one or
+    // one from an earlier pairing only for the target problem it shows,
+    // never as state; and only one that shows the target usable leaves a
+    // closing cue playing. The poll's alone can end the wait for an
+    // abandoned grant request, by showing a new hub epoch.
+    function snapshot(state, from) {
+      from = from || SNAPSHOT_FROM.POLL;
+      if (from === SNAPSHOT_FROM.POLL && state && straggler && state.epoch !== straggler.epoch) {
+        forgetStraggler(straggler.id);
+      }
+      if (!state) return silence(REASON.UNUSABLE);
+      if (active()) return dispatch({ type: EV.SNAPSHOT, snapshot: state, earlier: from === SNAPSHOT_FROM.EARLIER_PAIRING });
+      var why = closing && L.targetProblem(c.dest, state);
+      if (why) silence(why);
     }
 
     // A start step that never answers fails like one that refused; the grant
@@ -258,21 +297,20 @@
       }
     }
 
-    // An answer that proves the grant gone: the conversation ends, or the
-    // closing cue stops.
-    function grantLost(reason) {
-      if (closing) return stopClosing();
-      dispatch({ type: EV.END, reason: reason });
-    }
-
     function fetchStartSnapshot() {
-      var id = begin(FETCH.SNAPSHOT, true);
+      var askedIn = pairing;
       setTimer(TIMER.STEP, LIMITS.STEP_MS);
-      api("GET", PATH.STATE, undefined, callOpts(FETCH.SNAPSHOT)).then(function (r) {
+      var f = fetches.run(FETCH.SNAPSHOT, SPEC[FETCH.SNAPSHOT], function (o) {
+        return api("GET", PATH.STATE, undefined, o);
+      });
+      var id = f.id;
+      f.answer.then(function (r) {
         var ev = r.status === 200 && r.data ? { type: EV.SNAPSHOT_FETCHED, snapshot: r.data }
           : { type: EV.FAIL, reason: REASON.HUB_UNREACHABLE };
         if (!settle(FETCH.SNAPSHOT, id)) {
-          if (r.status === 200) closingCheck(r.data);
+          if (r.status === 200) {
+            snapshot(r.data, askedIn === pairing ? SNAPSHOT_FROM.FETCHED : SNAPSHOT_FROM.EARLIER_PAIRING);
+          }
           return late(id, ev, r);
         }
         clearTimer(TIMER.STEP);
@@ -286,7 +324,7 @@
 
     function takeWakeLock() {
       if (!env.wakeLock) return dispatch({ type: EV.FAIL, reason: REASON.NO_WAKE });
-      var id = begin(FETCH.WAKE, false);
+      var id = fetches.begin(FETCH.WAKE, SPEC[FETCH.WAKE]);
       setTimer(TIMER.STEP, LIMITS.STEP_MS);
       Promise.resolve().then(function () { return env.wakeLock.request("screen"); }).then(function (sentinel) {
         if (!settle(FETCH.WAKE, id)) {
@@ -324,18 +362,20 @@
     }
 
     function requestGrant() {
-      var id = begin(FETCH.GRANT, false);
       var startedAt = env.now();
       var d = c.dest;
       setTimer(TIMER.STEP, LIMITS.STEP_MS);
-      api("POST", PATH.GRANT, { session_id: d.session_id, generation: d.generation, epoch: d.epoch },
-        callOpts(FETCH.GRANT)).then(function (r) {
+      var f = fetches.run(FETCH.GRANT, SPEC[FETCH.GRANT], function (o) {
+        return api("POST", PATH.GRANT, { session_id: d.session_id, generation: d.generation, epoch: d.epoch }, o);
+      });
+      var id = f.id;
+      f.answer.then(function (r) {
         var got = A.grantOf(r);
         var refused = { type: EV.FAIL, reason: REASON.REFUSED, detail: detail(r) };
         // An abandoned request's 200 may carry a grant, which replaced
-        // whatever grant this page holds now: no success of a closing cue.
+        // whatever grant this page holds now: it silences the page.
         if (!settle(FETCH.GRANT, id)) {
-          if (r.status === 200) stopClosing();
+          if (r.status === 200) silence(REASON.GRANT_LOST);
           late(id, refused, r);
           return straggled(id, got);
         }
@@ -394,22 +434,23 @@
     function beat() {
       setTimer(TIMER.BEAT, LIMITS.BEAT_MS);
       if (fetches.get(FETCH.BEAT) || !grant) return;
-      var id = begin(FETCH.BEAT, true);
       var startedAt = env.now();
       var named = grant;
       setTimer(TIMER.BEAT_ABORT, LIMITS.BEAT_ABORT_MS);
-      api("POST", PATH.BEAT, { grant: named }, callOpts(FETCH.BEAT)).then(function (r) {
+      var f = fetches.run(FETCH.BEAT, SPEC[FETCH.BEAT], function (o) { return api("POST", PATH.BEAT, { grant: named }, o); });
+      var id = f.id;
+      f.answer.then(function (r) {
         var ok = A.renewed(r, named);
         // A beat given up on can still answer (an abort while its body is
         // read resolves with no body): it renews nothing, and a 200 that
-        // renews nothing cuts a closing cue.
+        // renews nothing silences the page.
         if (!settle(FETCH.BEAT, id)) {
-          if (r.status === 200 && !ok) stopClosing();
+          if (r.status === 200 && !ok) silence(REASON.GRANT_LOST);
           return late(id, { type: EV.END, reason: REASON.GRANT_LOST }, r);
         }
         clearTimer(TIMER.BEAT_ABORT);
         if (ok) beatOk(startedAt);
-        else grantLost(REASON.GRANT_LOST);
+        else silence(REASON.GRANT_LOST);
       }, function () {
         if (settle(FETCH.BEAT, id)) clearTimer(TIMER.BEAT_ABORT);
       });
@@ -427,15 +468,17 @@
     }
 
     function requestTicket() {
-      var id = begin(FETCH.TICKET, true);
       var d = c.dest;
       setTimer(TIMER.STEP, LIMITS.STEP_MS);
-      api("POST", PATH.TICKET, { session_id: d.session_id, generation: d.generation, epoch: d.epoch },
-        callOpts(FETCH.TICKET)).then(function (r) {
+      var f = fetches.run(FETCH.TICKET, SPEC[FETCH.TICKET], function (o) {
+        return api("POST", PATH.TICKET, { session_id: d.session_id, generation: d.generation, epoch: d.epoch }, o);
+      });
+      var id = f.id;
+      f.answer.then(function (r) {
         var ticket = A.ticketOf(r);
         var ev = ticket ? { type: EV.TICKET_OK, ticket: ticket } : { type: EV.TICKET_FAIL, reason: detail(r) };
         if (!settle(FETCH.TICKET, id)) {
-          if (r.status === 200 && !ticket) stopClosing();
+          if (r.status === 200 && !ticket) silence(REASON.UNUSABLE);
           return late(id, ev, r);
         }
         clearTimer(TIMER.STEP);
@@ -453,26 +496,21 @@
     // the conversation's timers, whatever becomes of the conversation: at it
     // the POST is aborted, and delivery stays as the end left it.
     function postSend(ticket, text) {
-      var id = begin(FETCH.SEND, true);
-      var ctl = fetches.get(FETCH.SEND).ctl;
+      var id = null;
       function unanswered() {
         if (settle(FETCH.SEND, id) || fetches.takeLate(id).send) dispatch({ type: EV.SEND_UNKNOWN });
       }
-      var deadline = env.setTimeout(function () {
-        unanswered();
-        if (ctl) ctl.abort();
-      }, LIMITS.SEND_DEADLINE_MS);
       var body = { ticket: ticket, text: text, confirm: L.CONFIRM.VOICE, grant: grant };
-      api("POST", PATH.SEND, body, callOpts(FETCH.SEND)).then(function (r) {
-        env.clearTimeout(deadline);
+      var f = fetches.run(FETCH.SEND, Object.assign({ onDeadline: unanswered }, SPEC[FETCH.SEND]), function (o) {
+        return api("POST", PATH.SEND, body, o);
+      });
+      id = f.id;
+      f.answer.then(function (r) {
         var ev = sendEvent(r);
         if (settle(FETCH.SEND, id)) dispatch(ev);
         else late(id, ev, r);
-        if (r.status === 200 && ev.type !== EV.SEND_OK) stopClosing();
-      }, function () {
-        env.clearTimeout(deadline);
-        unanswered();
-      });
+        if (r.status === 200 && ev.type !== EV.SEND_OK) silence(REASON.UNUSABLE);
+      }, unanswered);
     }
 
     // ---- speech -----------------------------------------------------------
@@ -579,7 +617,7 @@
       // and fresh, a sound was cut off, or the page can't be heard or has no
       // voice: a successor may be listening.
       var cue = !!spoken && !!held && !cut && L.fresh(c, env.now()) && deps.visible() && deps.voiceAvailable();
-      fetches.lateSend(c.deliveryOpen && fetches.get(FETCH.SEND) ? fetches.get(FETCH.SEND).id : null);
+      fetches.lateSend(L.awaitsSend(c) && fetches.get(FETCH.SEND) ? fetches.get(FETCH.SEND).id : null);
       Object.keys(timers).forEach(function (name) { if (!(cue && CLOSING_TIMERS[name])) clearTimer(name); });
       // The grant request stays open so a late grant is released; a late
       // ticket answer is dropped; the send POST runs on to its own deadline,
@@ -596,8 +634,8 @@
         return release(held);
       }
       // The cue must not outlive the grant: freshness is still checked every
-      // tick, and a lapse, any status but 200 (hubStatus) or a 200 that is
-      // not its call's success cuts the cue short.
+      // tick, and a lapse, any status but 200 (hubStatus) or any other
+      // answer that silences the page (silence) cuts the cue short.
       closing = { freshUntil: c.freshUntil };
       setTimer(TIMER.TICK, LIMITS.TICK_MS);
       speak(CUE.ENDED + ": " + reason + ".", SAY.END);
@@ -618,7 +656,7 @@
     }
 
     // The closing cue cut short by End, hiding, leaving, unpairing, the
-    // grant's lapse, any status but 200 or a 200 that is not its call's success.
+    // grant's lapse, any status but 200 or any other answer that silences the page.
     function stopClosing() {
       if (!closing) return;
       cutSpeech();
@@ -649,13 +687,6 @@
     function endIfActive(reason) {
       if (active()) dispatch({ type: EV.END, reason: reason });
       else stopClosing();
-    }
-
-    function snapshot(state) {
-      if (!state) return;
-      if (straggler && state.epoch !== straggler.epoch) forgetStraggler(straggler.id);
-      if (active()) return dispatch({ type: EV.SNAPSHOT, snapshot: state });
-      closingCheck(state);
     }
 
     function targetSelected(id) {
@@ -712,12 +743,12 @@
 
     return {
       start: start, canStart: canStart, blocker: blocker, snapshot: snapshot, track: track, view: view, holds: holds,
-      soundClear: soundClear, stopPageSpeech: stopPageSpeech, hubStatus: hubStatus, refreshed: closingCheck,
-      pollUnusable: function () { stopClosing(); },
+      soundClear: soundClear, stopPageSpeech: stopPageSpeech, hubStatus: hubStatus,
       endTap: function () { endIfActive(REASON.END_TAPPED); },
       hidden: function () { endIfActive(REASON.HIDDEN); },
       unpaired: function () {
         endIfActive(REASON.UNPAIRED);
+        pairing++;
         c = L.forget(c);
         interim = "";
         notify();
@@ -740,7 +771,7 @@
     };
   }
 
-  var exported = { create: create, browserEnv: browserEnv, PATH: PATH };
+  var exported = { create: create, browserEnv: browserEnv, PATH: PATH, SNAPSHOT_FROM: SNAPSHOT_FROM };
   root.DeskConversation = exported;
   if (typeof module !== "undefined" && module.exports) module.exports = exported;
 })(typeof window !== "undefined" ? window : globalThis);

@@ -47,6 +47,22 @@
   ACCEPTED[REQUEST_STATE.HANDED_OFF] = true;
   ACCEPTED[REQUEST_STATE.ANSWERED] = true;
 
+  // What became of the send POST an end left unanswered, one of the two
+  // facts an end's reason is built from (the other is its cause): OPEN
+  // until the POST's status line, answer or deadline settles it, and final
+  // once settled. NONE when no POST was out, or the cause itself says.
+  var DELIVERY = Object.freeze({
+    NONE: "none", OPEN: "open", UNKNOWN: "unknown", HANDED_OFF: "handed_off", NOT_SENT: "not_sent"
+  });
+
+  // What each delivery adds after the cause.
+  var AFTER = {};
+  AFTER[DELIVERY.NONE] = function () { return ""; };
+  AFTER[DELIVERY.OPEN] = function () { return "; " + REASON.UNKNOWN; };
+  AFTER[DELIVERY.UNKNOWN] = AFTER[DELIVERY.OPEN];
+  AFTER[DELIVERY.HANDED_OFF] = function () { return "; " + REASON.HANDED_OFF; };
+  AFTER[DELIVERY.NOT_SENT] = function (c) { return "; " + withDetail(REASON.NOT_SENT, c.deliveryDetail); };
+
   function initial() {
     return {
       phase: PHASE.OFF, dest: null, label: "", draft: "", frozenText: null,
@@ -65,11 +81,14 @@
       // The drafting deadlines as absolute times; their timers may fire late.
       turnAt: null, idleAt: null,
       reason: null,
-      // After an end that left a send POST unanswered: the end's own cause,
-      // and whether the POST's answer may still settle what the reason says.
-      cause: null, deliveryOpen: false,
+      // After an end, the two facts its reason is built from: its cause, and
+      // what became of a send POST it left unanswered (a DELIVERY, with the
+      // hub's words for NOT_SENT). `deliveryWords`: a 401 settled NOT_SENT at
+      // the send's status line, and that send's own body may still word it.
+      cause: null, delivery: DELIVERY.NONE, deliveryDetail: null, deliveryWords: false,
       // After an end at a status line of the conversation's own call: the
-      // conversation as it was then, which that call's answer is replayed on.
+      // conversation as it was then, which that call's answer is replayed on
+      // to settle the cause.
       replay: null
     };
   }
@@ -225,21 +244,37 @@
   // reason, the only ends the controller may speak.
   // An end that abandons a send POST issued and never answered says so
   // after its cause, the prompt may have been delivered, until that POST's
-  // own answer settles it (settleLate).
-  function finish(c, fx, reason, detail) {
-    var shown = withDetail(reason, detail);
-    c.cause = shown;
-    c.deliveryOpen = c.phase === PHASE.SENDING && c.posted && reason !== REASON.UNKNOWN;
-    if (c.deliveryOpen) shown = shown + "; " + REASON.UNKNOWN;
+  // own answer settles it (settleLate). `silent`: an end that may not be
+  // spoken whatever its reason.
+  function finish(c, fx, reason, detail, silent) {
+    c.cause = withDetail(reason, detail);
+    c.delivery = c.phase === PHASE.SENDING && c.posted && reason !== REASON.UNKNOWN ? DELIVERY.OPEN : DELIVERY.NONE;
+    c.deliveryDetail = null;
+    c.deliveryWords = false;
+    compose(c);
     c.posted = false;
     c.phase = PHASE.ENDED;
-    c.reason = shown;
     c.draft = "";
     c.frozenText = null;
     c.pendingReply = null;
     c.guardFor = null;
-    fx.push({ fx: FX.END, reason: shown, cue: SPOKEN_ENDS.indexOf(reason) !== -1 });
+    fx.push({ fx: FX.END, reason: c.reason, cue: !silent && SPOKEN_ENDS.indexOf(reason) !== -1 });
   }
+
+  // The reason shown: the cause, then what became of the send it left open.
+  function compose(c) { c.reason = c.cause + AFTER[c.delivery](c); }
+
+  // Settles what became of the open send, once: a delivery already settled
+  // never changes.
+  function settleDelivery(c, delivery, detail) {
+    if (c.delivery !== DELIVERY.OPEN) return;
+    c.delivery = delivery;
+    c.deliveryDetail = detail || null;
+    compose(c);
+  }
+
+  // Whether an ended conversation still listens for its send POST's answer.
+  function awaitsSend(c) { return c.delivery === DELIVERY.OPEN || c.deliveryWords; }
 
   // Every mic opening: only while admissionProblem finds nothing, and never
   // sooner than the guard after this page's last sound. Until the guard has
@@ -339,9 +374,15 @@
 
   function onSnapshot(c, fx, ev) {
     var snap = ev.snapshot;
-    // An older poll answering late never counts (a request "gone" from it
-    // may only not have existed yet).
-    if (!newer(c, snap)) return;
+    // An older snapshot answering late, or one from an earlier pairing, is
+    // never state (a request "gone" from it may only not have existed yet),
+    // but the target problem it shows ends the conversation, as it cuts a
+    // closing cue: the hub's answers can only silence the page.
+    if (ev.earlier || !newer(c, snap)) {
+      var why = targetProblem(c.dest, snap);
+      if (why) finish(c, fx, why);
+      return;
+    }
     c.snap = snap;
     recheck(c, fx);
   }
@@ -534,7 +575,7 @@
   }
 
   var HANDLERS = {};
-  HANDLERS[EV.END] = function (c, fx, ev) { finish(c, fx, ev.reason, ev.detail); };
+  HANDLERS[EV.END] = function (c, fx, ev) { finish(c, fx, ev.reason, ev.detail, ev.silent); };
   HANDLERS[EV.FAIL] = function (c, fx, ev) { if (c.phase === PHASE.STARTING) finish(c, fx, ev.reason, ev.detail); };
   HANDLERS[EV.SNAPSHOT_FETCHED] = onStartSnapshot;
   HANDLERS[EV.WAKE_OK] = onWake;
@@ -598,34 +639,46 @@
 
   // Whether an ended conversation still takes event `ev` (settleLate).
   function lateEvent(c, ev) {
-    return ev.type === EV.HUB_STATUS || (!!ev.settles && !!c.replay) || (c.deliveryOpen && !!SEND_ANSWER[ev.type]);
+    return ev.type === EV.HUB_STATUS || (!!ev.settles && !!c.replay) || (awaitsSend(c) && !!SEND_ANSWER[ev.type]);
   }
 
   // What an ended conversation still learns from the answers its end left
   // open. It changes only the reason shown: the conversation stays ended
-  // and nothing is spoken. A 401 to the open send proves, at its status
-  // line, that the prompt was not sent. The answer of the call whose status
-  // ended the conversation (`ev.settles`) is replayed on the conversation
-  // as it was then, and the end that replay reaches replaces the
-  // provisional one. Otherwise the open send's answer replaces "delivery is
-  // unknown" after the end's cause.
+  // and nothing is spoken. The reason is two facts, each settled once by
+  // its own evidence and never unsettled by the other's: the cause, which
+  // the answer of the call whose status ended the conversation
+  // (`ev.settles`) settles by being replayed on the conversation as it was
+  // then; and the open send's delivery, which a 401 at that POST's status
+  // line proves "not sent", and otherwise its own answer settles (handed
+  // off, not sent, or unknown at its deadline or for an answer that proves
+  // nothing).
   function settleLate(c, ev) {
     if (ev.type === EV.HUB_STATUS) {
-      if (ev.status === 401 && ev.send && c.deliveryOpen) {
-        c.reason = c.cause + "; " + withDetail(REASON.NOT_SENT, "HTTP " + ev.status);
+      if (ev.status === 401 && ev.send && c.delivery === DELIVERY.OPEN) {
+        settleDelivery(c, DELIVERY.NOT_SENT, "HTTP " + ev.status);
+        c.deliveryWords = true;
       }
       return;
     }
     if (ev.settles && c.replay) return replay(c, ev);
-    if (!c.deliveryOpen || !SEND_ANSWER[ev.type]) return;
-    c.deliveryOpen = false;
-    if (ev.type === EV.SEND_OK && ACCEPTED[ev.state] && typeof ev.request_id === "string") {
-      c.reason = c.cause + "; " + REASON.HANDED_OFF;
-    } else if (ev.type === EV.SEND_REFUSED) {
-      c.reason = c.cause + "; " + withDetail(REASON.NOT_SENT, ev.reason);
+    if (!SEND_ANSWER[ev.type]) return;
+    if (c.deliveryWords && ev.type === EV.SEND_REFUSED) {
+      c.deliveryDetail = ev.reason;
+      compose(c);
     }
+    c.deliveryWords = false;
+    settleDelivery(c, deliveryOf(ev), ev.reason);
   }
 
+  function deliveryOf(ev) {
+    if (ev.type === EV.SEND_OK && ACCEPTED[ev.state] && typeof ev.request_id === "string") return DELIVERY.HANDED_OFF;
+    return ev.type === EV.SEND_REFUSED ? DELIVERY.NOT_SENT : DELIVERY.UNKNOWN;
+  }
+
+  // The cause call's answer, replayed on the conversation as it was at its
+  // status line: the cause that replay ends with replaces the provisional
+  // one. When that call was the send itself, its cause already says what
+  // became of the prompt, so delivery settles with nothing to add.
   function replay(c, ev) {
     var then = copy(c.replay);
     c.replay = null;
@@ -633,8 +686,8 @@
     if (handler) handler(then, [], ev);
     if (then.phase !== PHASE.ENDED) return;
     c.cause = then.cause;
-    c.reason = then.reason;
-    c.deliveryOpen = then.deliveryOpen;
+    if (SEND_ANSWER[ev.type]) settleDelivery(c, DELIVERY.NONE);
+    compose(c);
   }
 
   function copy(c) {
@@ -669,8 +722,9 @@
     var fx = [];
     // Freshness is an absolute deadline: once it has passed, no event acts
     // or renews, whether or not the 1 s tick has run yet. Only the page's
-    // own end keeps its reason.
-    if (ev.type !== EV.END && c.freshUntil > 0 && !fresh(c, ev.now)) {
+    // own end keeps its reason, and a status other than 200, a definite
+    // failure that renews nothing, is still recorded as one (HUB_STATUS).
+    if (ev.type !== EV.END && ev.type !== EV.HUB_STATUS && c.freshUntil > 0 && !fresh(c, ev.now)) {
       // The send's own answer, come too late to act on, still says what
       // became of the prompt.
       finish(c, fx, REASON.HUB_LOST);
@@ -686,7 +740,7 @@
     PHASE: PHASE, CONFIRM: CONFIRM, REQUEST_STATE: REQUEST_STATE, REGISTRATION: REGISTRATION,
     LIMITS: LIMITS, TIMER: TIMER, SAY: SAY, FX: FX, EV: EV, COMMAND: COMMAND, CUE: CUE, REASON: REASON,
     BLOCKER: BLOCKER, SPEECH_DEADLINE_FACTOR: SPEECH_DEADLINE_FACTOR, SPOKEN_ENDS: SPOKEN_ENDS,
-    GRANT_ID: GRANT_ID, targetProblem: targetProblem,
+    GRANT_ID: GRANT_ID, DELIVERY: DELIVERY, targetProblem: targetProblem, awaitsSend: awaitsSend,
     initial: initial, reduce: reduce, active: active, fresh: fresh, renew: renew, withDetail: withDetail,
     startBlocker: startBlocker, currentReply: currentReply, forget: forget,
     command: command, appendDraft: appendDraft, draftProblem: draftProblem, estimateMs: estimateMs

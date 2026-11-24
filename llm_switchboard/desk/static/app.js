@@ -198,7 +198,7 @@
       var path = "/desk/api/state" + (state ? "?after=" + encodeURIComponent(state.version) : "");
       api("GET", path, undefined, { signal: ctl.signal }).then(function (r) {
         clearTimeout(timer);
-        if (mySession !== session) return;
+        if (mySession !== session) return snapshotAside(r, mySession);
         if (r.status === 200 && r.data) {
           failures = 0;
           setConn("online", "Connected");
@@ -206,7 +206,7 @@
           once();
         } else {
           // Any other status was the gate's, at its status line.
-          if (r.status === 200) conv.pollUnusable();
+          if (r.status === 200) conv.snapshot(null);
           retry();
         }
       }, function () {
@@ -224,6 +224,16 @@
       setTimeout(once, Math.min(10000, 500 * Math.pow(2, failures)));
     }
     once();
+  }
+
+  // A 200 to a state request outside the poll's own path (the tap flow's
+  // refresh, an earlier pairing's poll) still reaches the controller, which
+  // takes one from an earlier pairing only for what it silences; the page's
+  // own state never takes it.
+  function snapshotAside(r, askedIn) {
+    if (r.status !== 200) return;
+    var from = window.DeskConversation.SNAPSHOT_FROM;
+    try { conv.snapshot(r.data, askedIn === session ? from.FETCHED : from.EARLIER_PAIRING); } catch (e) { pageFault(e); }
   }
 
   // A fault in the page's own handling of a snapshot is shown, and polling
@@ -566,8 +576,8 @@
     var mySession = session;
     pollSeq++;
     api("GET", "/desk/api/state", undefined, {}).then(function (r) {
-      // Whatever became of the send it follows, a snapshot faces the closing cue's check.
-      if (r.status === 200) conv.refreshed(r.data);
+      // Whatever became of the send it follows, the controller hears it.
+      snapshotAside(r, mySession);
       if (mySession !== session || sentRequestId !== requestId || r.status !== 200 || !r.data) return;
       sentAckVersion = r.data.version;
       expireWaitingResult(r.data);
