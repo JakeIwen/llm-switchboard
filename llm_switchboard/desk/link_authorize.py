@@ -212,29 +212,33 @@ def run_authorize(config: DeskConfig, host: str, raw: bytes, *, verifier_self_te
         return steps.fail(ED25519_REFUSAL)
     signer = Signer(host, blob)
     steps.done()
+    signers_changed = keys_changed = None
     try:
-        keys = authorized_keys_path(config.home)
-    except ValueError as exc:
-        return steps.fail(f"{exc}; nothing changed")
-    with locked(config.link_signers_file), locked(keys):
         try:
-            listed = read_signers(config.link_signers_file)
-        except SignersUnreadable:
-            return steps.fail(SIGNERS_REFUSAL)
-        others = [line for line in read_lines(keys) if not has_marker(line, marker(host))]
-        if any(blob.encode() in line.split() for line in others):
-            return steps.fail("this key is already on another authorized_keys line (the v1 key or another "
-                              "host's); nothing changed")
-        if any(s.blob == blob and s.host != host for s in listed):
-            return steps.fail("this key is already listed for another Mac in link-signers; nothing changed")
-        if all(s.host != host for s in listed) and len(listed) >= MAX_SIGNER_LINES:
-            return steps.fail(f"link-signers already lists {MAX_SIGNER_LINES} Macs, the most it holds; run "
-                              "link-revoke for one first; nothing changed")
-        proposed = [signer if s.host == host else s for s in listed]
-        if signer not in proposed:
-            proposed.append(signer)
-        signers_changed = _replace_signers(config.link_signers_file, listed, proposed)
-        keys_changed = replace_marked_line(keys, marker(host), key_line(config, signer))
+            keys = authorized_keys_path(config.home)
+        except ValueError as exc:
+            return steps.fail(f"{exc}; nothing changed")
+        with locked(config.link_signers_file), locked(keys):
+            try:
+                listed = read_signers(config.link_signers_file)
+            except SignersUnreadable:
+                return steps.fail(SIGNERS_REFUSAL)
+            others = [line for line in read_lines(keys) if not has_marker(line, marker(host))]
+            if any(blob.encode() in line.split() for line in others):
+                return steps.fail("this key is already on another authorized_keys line (the v1 key or another "
+                                  "host's); nothing changed")
+            if any(s.blob == blob and s.host != host for s in listed):
+                return steps.fail("this key is already listed for another Mac in link-signers; nothing changed")
+            if all(s.host != host for s in listed) and len(listed) >= MAX_SIGNER_LINES:
+                return steps.fail(f"link-signers already lists {MAX_SIGNER_LINES} Macs, the most it holds; run "
+                                  "link-revoke for one first; nothing changed")
+            proposed = [signer if s.host == host else s for s in listed]
+            if signer not in proposed:
+                proposed.append(signer)
+            signers_changed = _replace_signers(config.link_signers_file, listed, proposed)
+            keys_changed = replace_marked_line(keys, marker(host), key_line(config, signer))
+    except OSError as exc:
+        return steps.fail(_edit_error(exc, signers_changed, keys_changed, "not confirmed"))
     steps.done(_edits(signers_changed, keys_changed))
     return _confirm_authorized(config, signer, steps, out)
 
@@ -244,6 +248,13 @@ def _edits(signers_changed: bool, keys_changed: bool) -> str:
         return "already so"
     return (f"done (link-signers {'written' if signers_changed else 'already so'}, authorized_keys "
             f"{'written' if keys_changed else 'already so'})")
+
+
+def _edit_error(exc: OSError, signers_changed: bool | None, keys_changed: bool | None, confirmation: str) -> str:
+    # An unfinished step is different from one that found the desired state.
+    status = {None: "not written", False: "already so", True: "written"}
+    return (f"link-signers {status[signers_changed]}, authorized_keys {status[keys_changed]}; "
+            f"{confirmation}: {exc}")
 
 
 def _not_listed(host: str) -> str:
@@ -347,18 +358,23 @@ def run_revoke(config: DeskConfig, host: str, *, out=_print) -> int:
     steps = Steps("link-revoke", ("link-signers", "authorized_keys", "confirmation"), out)
     if not valid_link_host(host):
         return steps.fail(f"{host!r} is not a Mac host name (never pi); nothing changed")
+    signers_changed = keys_changed = None
     try:
-        keys = authorized_keys_path(config.home)
-    except ValueError as exc:
-        return steps.fail(f"{exc}; nothing changed")
-    with locked(config.link_signers_file), locked(keys):
         try:
-            listed = read_signers(config.link_signers_file)
-        except SignersUnreadable:
-            return steps.fail(SIGNERS_REFUSAL)
-        changed = _replace_signers(config.link_signers_file, listed, [s for s in listed if s.host != host])
-        steps.done("done" if changed else "already so")
-        steps.done("done" if remove_marked_line(keys, marker(host)) else "already so")
+            keys = authorized_keys_path(config.home)
+        except ValueError as exc:
+            return steps.fail(f"{exc}; nothing changed")
+        with locked(config.link_signers_file), locked(keys):
+            try:
+                listed = read_signers(config.link_signers_file)
+            except SignersUnreadable:
+                return steps.fail(SIGNERS_REFUSAL)
+            signers_changed = _replace_signers(config.link_signers_file, listed, [s for s in listed if s.host != host])
+            steps.done("done" if signers_changed else "already so")
+            keys_changed = remove_marked_line(keys, marker(host))
+            steps.done("done" if keys_changed else "already so")
+    except OSError as exc:
+        return steps.fail(_edit_error(exc, signers_changed, keys_changed, "cutoff not confirmed"))
     return _confirm_revoked(config, host, steps)
 
 

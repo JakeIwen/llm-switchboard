@@ -5,6 +5,9 @@ relay in tests/link_peer.py, or with no hub under the run lock, and as
 child processes through the real CLI. Every `authorized_keys` and
 `link-signers` path is under a temporary HOME."""
 
+import errno
+import os
+from pathlib import Path
 import subprocess
 import threading
 import unittest
@@ -444,6 +447,51 @@ class InterleavedWithoutHubTest(InterleaveCase, unittest.TestCase):
 
     def test_authorize_and_revoke_same_host_interleaved(self):
         self.check_interleaved()
+
+
+class CredentialEditFailureTest(CommandsMixin, unittest.TestCase):
+    def setUp(self):
+        self.home = make_home(self)
+        self.config = desk_config(self.home)
+        self.old = KeyPair(self.home, MAC, "old")
+        self.new = KeyPair(self.home, MAC, "new")
+
+    def test_credential_edit_failures_report_partial_state_and_rerun_repairs_it(self):
+        real_replace = os.replace
+        for name, command, target in (
+            ("link-authorize", lambda: self.authorize(MAC, pub(self.new)), self.new.signer.blob),
+            ("link-revoke", lambda: self.revoke(MAC), None),
+        ):
+            for fail_keys in (False, True):
+                failed = self.keys_file() if fail_keys else self.config.link_signers_file
+                with self.subTest(command=name, failed=failed.name):
+                    self.assertEqual(self.authorize(MAC, pub(self.old))[0], 0)
+
+                    def replace(src, dst):
+                        if Path(dst) == failed:
+                            raise OSError(errno.ENOSPC, "injected disk full")
+                        real_replace(src, dst)
+
+                    with patch("os.replace", side_effect=replace), \
+                            patch.object(link_authorize, "operator_request") as confirm:
+                        try:
+                            code, out = command()
+                        except OSError as exc:
+                            self.fail(f"credential edit raised instead of returning an exit code: {exc}")
+                    self.assertEqual(code, 1, out.text())
+                    self.assertIn(f"{name} step", out.text())
+                    self.assertIn(f"link-signers {'written' if fail_keys else 'not written'}", out.text())
+                    self.assertIn("authorized_keys not written", out.text())
+                    self.assertIn("not confirmed", out.text())
+                    self.assertIn("injected disk full", out.text())
+                    self.assertIn("run the command again", out.text())
+                    confirm.assert_not_called()
+                    self.assertEqual(self.signer_blob(MAC), target if fail_keys else self.old.signer.blob)
+                    self.assertEqual(self.key_blob(MAC), self.old.signer.blob)
+                    code, out = command()
+                    self.assertEqual(code, 0, out.text())
+                    self.assert_one_key(MAC)
+                    self.assertEqual(self.key_blob(MAC), target)
 
 
 class CliTest(unittest.TestCase):
