@@ -30,8 +30,7 @@ def relay_install(args, config, *, launchd=None, platform: str = sys.platform, e
                   timing: dict | None = None) -> int:
     """`launchd`, `platform`, `environ` and `timing` (unload's wait_seconds,
     clock and sleep) are seams for tests."""
-    from .relay_launchd import (LABEL, UNLOAD_WAIT_SECONDS, RelayInstallRefused, RelayUnloadUnconfirmed,
-                                install, unload)
+    from .relay_launchd import LABEL, RelayInstallRefused, RelayUnloadUnconfirmed, install, unload
     try:
         if args.unload:
             plist = unload(config, launchd=launchd, platform=platform, **(timing or {}))
@@ -43,8 +42,7 @@ def relay_install(args, config, *, launchd=None, platform: str = sys.platform, e
         print(f"desk: {exc}", file=sys.stderr)
         return EXIT_SETUP
     except RelayUnloadUnconfirmed as exc:
-        print(f"desk: {LABEL} was booted out and its plist deleted, but after {UNLOAD_WAIT_SECONDS} s {exc}; "
-              "run relay-install --unload again", file=sys.stderr)
+        print(f"desk: {LABEL} unload unconfirmed: {exc}; run relay-install --unload again", file=sys.stderr)
         return EXIT_FAILED
     except subprocess.CalledProcessError as exc:
         print(f"desk: launchctl bootstrap of {LABEL} failed (exit {exc.returncode}); its plist is written; "

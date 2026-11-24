@@ -18,6 +18,7 @@ from pathlib import Path
 import plistlib
 import subprocess
 import sys
+import time
 import unittest
 from unittest import mock
 
@@ -32,6 +33,7 @@ REPO = Path(__file__).resolve().parents[1]
 DOMAIN = "gui/501"
 SERVICE = f"{DOMAIN}/{relay_launchd.LABEL}"
 NAMES = {MAC_NAME: "mac"}
+RUN_CHILD = subprocess.run
 HOLDER = (
     "import sys\n"
     "from pathlib import Path\n"
@@ -55,7 +57,7 @@ class FakeLaunchctl:
         self.print_status = print_status
         self._lag = 0
 
-    def __call__(self, argv, check=False, capture_output=False):
+    def __call__(self, argv, **kwargs):
         argv = [str(word) for word in argv]
         self.calls.append(argv)
         verb = argv[1]
@@ -234,7 +236,7 @@ class RelayInstallTest(RelayLaunchdCase):
             if argv[1] == "bootstrap":
                 failing.calls.append(list(argv))
                 return subprocess.CompletedProcess(argv, 5, b"", b"")
-            return failing(argv, check, capture_output)
+            return failing(argv, check=check, capture_output=capture_output)
         self.launchd = relay_launchd.Launchd(self.agents, DOMAIN, refuse_bootstrap)
         with mock.patch.object(host_launchd.time, "sleep"):
             code, out, err = self.cli(unload=False)
@@ -310,6 +312,46 @@ class RelayUnloadTest(RelayLaunchdCase):
                 code, out, err = self.cli(unload=True, wait_seconds=1)
                 self.assertEqual(code, 1)
                 self.assertIn(message, err)
+
+    def test_relay_unload_bootout_and_print_share_one_deadline(self):
+        self.install_loaded()
+        timeouts = []
+
+        def slow_bootout(argv, **kwargs):
+            timeouts.append(kwargs["timeout"])
+            if argv[1] == "bootout":
+                self.clock.advance(4)
+            return self.fake(argv, **kwargs)
+
+        self.launchd = relay_launchd.Launchd(self.agents, DOMAIN, slow_bootout)
+        code, _, err = self.cli(unload=True, wait_seconds=5)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(timeouts, [5, 1])
+
+    def test_relay_unload_stalled_launchctl_is_bounded_and_unconfirmed(self):
+        self.install_loaded()
+        for verb in ("print", "bootout"):
+            with self.subTest(verb):
+                self.launchd.plist.write_bytes(plistlib.dumps(relay_launchd.job(self.config)))
+
+                def stalled(argv, **kwargs):
+                    if argv[1] == verb:
+                        return RUN_CHILD([sys.executable, "-I", "-c", "import time, sys; "
+                                          f"time.sleep(1); sys.exit({relay_launchd.SERVICE_NOT_FOUND})"], **kwargs)
+                    return self.fake(argv)
+
+                launchd = relay_launchd.Launchd(self.agents, DOMAIN, stalled)
+                out, err = io.StringIO(), io.StringIO()
+                start = time.monotonic()
+                with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                    code = relay_install(argparse.Namespace(unload=True), self.config, launchd=launchd,
+                                         platform="darwin", timing={"wait_seconds": 0.25})
+                self.assertEqual(code, 1, out.getvalue())
+                self.assertLess(time.monotonic() - start, 0.9)
+                self.assertIn("unconfirmed", err.getvalue())
+                self.assertIn(f"`launchctl {verb}` timed out", err.getvalue())
+                self.assertEqual(out.getvalue(), "")
+                self.assertEqual(self.launchd.plist.exists(), verb == "bootout")
 
     def test_relay_install_unload_idempotent(self):
         code, out, err = self.cli(unload=True)

@@ -44,8 +44,7 @@ class RelayInstallRefused(Exception):
 
 
 class RelayUnloadUnconfirmed(Exception):
-    """The job was booted out and its plist deleted, but within the wait
-    launchd still listed the label or a relay still held `relay.lock`."""
+    """Couldn't prove the relay was stopped within the unload deadline."""
 
 
 @dataclass(frozen=True)
@@ -74,8 +73,14 @@ class Launchd:
     def runner(self) -> Callable[..., subprocess.CompletedProcess]:
         return self.run or subprocess.run
 
-    def launchctl(self, *args: str) -> int:
-        return self.runner(["launchctl", *args], check=False, capture_output=True).returncode
+    def launchctl(self, *args: str, timeout: float | None = None) -> int:
+        argv = ["launchctl", *args]
+        if timeout is None:
+            return self.runner(argv, check=False, capture_output=True).returncode
+        # No output is needed for the confirmation. subprocess.run kills and
+        # reaps on timeout without the desk link child's separate TERM grace.
+        return self.runner(argv, check=False, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, timeout=timeout).returncode
 
 
 def job(config: DeskConfig) -> dict:
@@ -123,19 +128,38 @@ def unload(config: DeskConfig, *, launchd: Launchd | None = None, platform: str 
     RelayUnloadUnconfirmed when it can't confirm within `wait_seconds`."""
     _require_mac_config(platform, config)
     launchd = launchd or Launchd.for_user(config.home)
-    launchd.launchctl("bootout", launchd.service)
-    launchd.plist.unlink(missing_ok=True)
     deadline = clock() + wait_seconds
-    while (left := _still_running(config, launchd)) is not None:
-        if clock() >= deadline:
-            raise RelayUnloadUnconfirmed(left)
-        sleep(POLL_SECONDS)
-    return launchd.plist
+    if _unload_call(launchd, "bootout", deadline, clock) is None:
+        raise RelayUnloadUnconfirmed("`launchctl bootout` timed out; the plist was left in place")
+    launchd.plist.unlink(missing_ok=True)
+    left = "confirmation deadline elapsed"
+    while clock() < deadline:
+        status = _unload_call(launchd, "print", deadline, clock)
+        if status is None:
+            left = "`launchctl print` timed out"
+            break
+        left = _still_running(config, status)
+        remaining = deadline - clock()
+        if remaining <= 0:
+            break
+        if left is None:
+            return launchd.plist
+        sleep(min(POLL_SECONDS, remaining))
+    raise RelayUnloadUnconfirmed(f"the plist was deleted, but {left or 'confirmation deadline elapsed'}")
 
 
-def _still_running(config: DeskConfig, launchd: Launchd) -> str | None:
+def _unload_call(launchd: Launchd, verb: str, deadline: float, clock: Callable[[], float]) -> int | None:
+    remaining = deadline - clock()
+    if remaining <= 0:
+        return None
+    try:
+        return launchd.launchctl(verb, launchd.service, timeout=remaining)
+    except subprocess.TimeoutExpired:
+        return None
+
+
+def _still_running(config: DeskConfig, status: int) -> str | None:
     """What still runs, or None when the label is gone and the lock is free."""
-    status = launchd.launchctl("print", launchd.service)
     if status == 0:
         return f"launchd still lists {LABEL}"
     if status != SERVICE_NOT_FOUND:
