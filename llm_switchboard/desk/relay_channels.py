@@ -195,6 +195,9 @@ class RelayChannels:
         self._exit_process = exit_process or (lambda: os._exit(1))
         self._rate_log = RateLog(clock)
         self._lock = threading.Lock()
+        # Held from issuing a `chan` to queuing its `register` (`_admit`);
+        # never taken under `_lock` or by a hub frame's handler.
+        self._register_order = threading.Lock()
         self._channels: dict[int, _Channel] = {}
         self._issued = 0
         self._unverified = 0
@@ -347,10 +350,17 @@ class RelayChannels:
             return self._refuse(sock, reason)
         if self._recently_refused(identity):
             return self._refuse(sock, REGISTER_REFUSAL_TEXT[RegisterRefusedCode.NOT_ENROLLED])
-        ch = self._new_channel(sock, identity, uplink, splitter, early)
+        entry = read_session_file(self.config.claude_sessions_dir, identity.claude_pid) or {}
+        # The hub drops a link that names a `chan` below one it has seen on
+        # it, so a `chan` is issued and its `register` queued as one step:
+        # the link's writer is first in, first out, so the wire order is
+        # the issue order however the admissions before this interleave.
+        with self._register_order:
+            ch = self._new_channel(sock, identity, uplink, splitter, early)
+            queued = ch is not None and self._submit_register(ch, entry)
         if ch is None:
             return self._refuse(sock, RelayRefusal.TOO_MANY_CHANNELS)
-        self._register(ch)
+        self._await_registered(ch, queued)
         return ch
 
     def _new_channel(self, sock, identity, uplink, splitter, early) -> _Channel | None:
@@ -368,17 +378,19 @@ class RelayChannels:
             self._verified += 1
         return ch
 
-    def _register(self, ch: _Channel) -> None:
-        entry = read_session_file(self.config.claude_sessions_dir, ch.identity.claude_pid) or {}
+    @staticmethod
+    def _submit_register(ch: _Channel, entry: dict) -> bool:
         identity = ch.identity
         try:
-            queued = ch.uplink.submit(
+            return ch.uplink.submit(
                 LinkType.REGISTER, chan=ch.chan, session_id=identity.session_id, channel_pid=identity.channel_pid,
                 channel_start=identity.channel_start, claude_pid=identity.claude_pid,
                 claude_start=identity.claude_start, label=_clean_label(entry.get("name")),
                 cwd=_clean_cwd(entry.get("cwd")))
         except LinkFrameError:
-            queued = False
+            return False
+
+    def _await_registered(self, ch: _Channel, queued: bool) -> None:
         if not queued:
             self._settle_pending(ch, RelayRefusal.BUSY)
         elif not ch.answered.wait(self._register_wait):

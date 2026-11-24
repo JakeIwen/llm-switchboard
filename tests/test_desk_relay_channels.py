@@ -23,6 +23,7 @@ from llm_switchboard.desk.model import ReplyRefusal
 from llm_switchboard.desk.operator import bind_private_socket
 from llm_switchboard.desk.protocol import MessageType
 from llm_switchboard.desk.relay_channels import REGISTER_REFUSAL_TEXT, RelayChannels, RelayRefusal
+from llm_switchboard.desk.session_identity import read_session_file
 
 GENEROUS = 15.0
 
@@ -242,6 +243,86 @@ class AdmissionTest(RelayCase):
         self.assertFalse(uplink.retired)
         client.send(MessageType.PING)
         self.assertEqual(client.read()[0], MessageType.PONG)
+
+    def connect_together(self, count: int) -> list[ChannelClient]:
+        """`count` channels connect at once, as every live channel does after a link reconnect."""
+        start = threading.Barrier(count)
+        clients: list[ChannelClient | Exception] = [None] * count
+
+        def connect(i):
+            start.wait(GENEROUS)
+            try:
+                clients[i] = self.client()
+            except Exception as exc:  # reported below, on the test's thread
+                clients[i] = exc
+        threads = [threading.Thread(target=connect, args=(i,)) for i in range(count)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(GENEROUS)
+        for client in clients:
+            if isinstance(client, Exception):
+                raise client
+            self.assertEqual(client.first[0], MessageType.WELCOME, client.first)
+        return clients
+
+    def test_concurrent_registers_reach_the_link_in_chan_order(self):
+        # The hub takes a `chan` below one it has seen on the link as reused
+        # and drops the link, so `register` frames go out in `chan` order.
+        # Each round is one link: every channel registers again at once.
+        relay, _ = self.start_relay()
+        for round_ in range(10):
+            uplink = self.uplink
+            # 5 a round: two rounds still closing leave room under the 16-channel cap.
+            clients = self.connect_together(5)
+            chans = [f["chan"] for f in uplink.of(LinkType.REGISTER)]
+            self.assertEqual(chans, sorted(set(chans)), f"round {round_}")
+            self.assertEqual(len(chans), 5)
+            relay.link_down(uplink)
+            for client in clients:
+                self.assertEqual(client.read(), (None, {}))
+                client.close()
+            self.uplink = FakeUplink(relay)
+            relay.link_up(self.uplink)
+
+    def test_registers_in_chan_order_whatever_order_admissions_finish(self):
+        # The work before a `register` (the Mac check, the session file) can
+        # finish in any order across channels; held back here and released
+        # last-first, each after the one before it has registered.
+        self.start_relay()
+        count = 5
+        held = ReverseRelease(count, lambda: len(self.uplink.of(LinkType.REGISTER)))
+        with mock.patch("llm_switchboard.desk.relay_channels.read_session_file", held):
+            self.connect_together(count)
+        chans = [f["chan"] for f in self.uplink.of(LinkType.REGISTER)]
+        self.assertEqual(chans, list(range(1, count + 1)))
+        self.assertEqual(held.released, list(reversed(range(count))))
+
+
+class ReverseRelease:
+    """Wraps `read_session_file`: holds its first `count` callers until all
+    have arrived, then lets them return last-first, each once `registered()`
+    shows the one before it has put its `register` on the link."""
+
+    def __init__(self, count: int, registered):
+        self.count = count
+        self.registered = registered
+        self.released: list[int] = []
+        self._arrived = 0
+        self._changed = threading.Condition()
+
+    def __call__(self, *args, **kwargs):
+        with self._changed:
+            me = self._arrived
+            self._arrived += 1
+            self._changed.notify_all()
+            if not self._changed.wait_for(lambda: self._arrived >= self.count, GENEROUS):
+                raise AssertionError("not every channel reached the session file read")
+        turn = self.count - 1 - me
+        wait_until(lambda: self.registered() >= turn, GENEROUS)
+        with self._changed:
+            self.released.append(me)
+        return read_session_file(*args, **kwargs)
 
 
 class ChannelFramesTest(RelayCase):
