@@ -464,15 +464,16 @@ class SettingsFileTest(unittest.TestCase):
         self.assertEqual(self.content(), {"voice_confirm_enabled": True})
 
     @unittest.skipIf(os.geteuid() == 0, "root reads a file whatever its mode")
-    def test_the_voice_gate_is_read_fresh_so_an_unreadable_file_means_off(self):
+    def test_both_switches_are_read_fresh_so_an_unreadable_file_means_both_off(self):
         self.settings.set_voice_confirm_enabled(True)
         self.settings.set_sends_enabled(True)
         self.assertTrue(self.settings.voice_confirm_enabled())
-        self.assertTrue(self.settings.sends_enabled())  # now cached
+        self.assertTrue(self.settings.sends_enabled())
         os.chmod(self.config.settings_file, 0)
         self.addCleanup(os.chmod, self.config.settings_file, 0o600)
         with self.assertLogs("llm_switchboard.desk", "WARNING"):
             self.assertFalse(self.settings.voice_confirm_enabled())
+            self.assertFalse(self.settings.sends_enabled())
 
     def test_the_offline_cli_keeps_the_other_key(self):
         self.config.settings_file.write_text('{"sends_enabled": true}')
@@ -588,13 +589,15 @@ class ConversationHubTest(HubCase):
         self.voice(True)
         _, granted = self.grant(token, generation)
         send = {"ticket": self.ticket(token, generation), "text": "hi", "confirm": "voice", "grant": granted["grant"]}
-        # A permission change keeps the cached sends value but must read as voice off.
+        # A permission change since the last pass reads as voice off at the
+        # handoff, and as sends off too, which the handoff refuses first.
         self.hub.refresh_files()
         os.chmod(self.config.settings_file, 0)
         self.addCleanup(os.chmod, self.config.settings_file, 0o600)
         with self.assertLogs("llm_switchboard.desk", "WARNING"):
-            self.assertEqual(self.post("/desk/api/send", send, token), (403, {"error": VOICE_OFF}))
+            self.assertEqual(self.post("/desk/api/send", send, token), (403, {"error": "sends off"}))
         self.assertIsNone(self.target(SESSION_A)["lock"])
+        self.assertFalse(self.hub.state_view()["voice_confirm_enabled"])
 
     def test_a_pairing_claim_during_a_grant_is_refused(self):
         token = self.pair()

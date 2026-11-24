@@ -308,6 +308,60 @@ class RoutingReadTest(MacTargetCase):
         self.assertEqual(self.target(SESSION_M)["lock"]["lock_id"], lock.lock_id)
 
 
+class SendsReadTest(MacTargetCase):
+    """The sends switch is established at each handoff from a read of
+    `desk-settings.json` that succeeded now (docs/voice-desk.md, Files:
+    anything unreadable reads as both off), for every route a prompt takes."""
+
+    def ticket(self, session_id: str) -> str:
+        return self.hub.ticket({"session_id": session_id, "generation": self.target(session_id)["generation"],
+                                "epoch": self.hub.epoch}, self.token)["ticket"]
+
+    def send_body(self, session_id: str, confirm: str) -> dict:
+        body = {"ticket": self.ticket(session_id), "text": "x"}
+        if confirm == "voice":
+            grant = self.hub.conversation({"session_id": session_id, "epoch": self.hub.epoch,
+                                           "generation": self.target(session_id)["generation"]}, self.token)
+            body.update(confirm="voice", grant=grant["grant"])
+        return body
+
+    def switches(self) -> tuple[bool, bool, bool]:
+        """What the page's snapshot and `desk status` show, and what a
+        handoff's own read would decide."""
+        return (self.hub.state_view()["sends_enabled"],
+                self.hub.handle_operator({"op": "status"})["sends_enabled"],
+                self.hub.settings.sends_enabled())
+
+    def test_a_settings_file_that_fails_its_read_is_sends_off_at_handoff_until_read_again(self):
+        self.assertEqual(self.channel(SESSION_A).first[0], MessageType.WELCOME)
+        self.hub.handle_operator({"op": "voice", "enabled": True})
+        routes = [(session_id, confirm) for session_id in (SESSION_A, SESSION_M) for confirm in ("tap", "voice")]
+        for breaker in (unreadable, corrupt_keeping_stat_key):
+            for session_id, confirm in routes:
+                with self.subTest(how=breaker.__name__, session=session_id[:8], confirm=confirm):
+                    if breaker is unreadable and os.geteuid() == 0:
+                        self.skipTest("root reads a file whatever its mode")
+                    self.hub.refresh_files()
+                    self.assertEqual(self.switches(), (True, True, True))
+                    body = self.send_body(session_id, confirm)
+                    restore = breaker(self.config.settings_file)
+                    try:
+                        with self.assertRaises(DeskError) as caught:
+                            self.hub.send(body, self.token)
+                        self.assertEqual((caught.exception.status, caught.exception.reason),
+                                         (403, Refusal.SENDS_OFF))
+                        self.assertEqual(self.hub.state_view()["requests"][-1]["state"], "expired")
+                        self.assertEqual(LockStore(self.config.lock_file).load(), [])
+                        self.assertEqual(self.switches(), (False, False, False))
+                    finally:
+                        restore()
+                    # The next good read turns sends back on, with no restart.
+                    self.hub.refresh_files()
+                    self.assertEqual(self.switches(), (True, True, True))
+        self.assertEqual(self.send_m()["state"], "handed_off")
+        self.assertEqual(self.mac.expect(LinkType.EVENT)["chan"], 1)
+
+
 class EnrollEditTest(MacTargetCase):
     """The edit rule, online through the hub and offline through the CLI."""
 

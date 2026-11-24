@@ -6,12 +6,11 @@ supervisor reads `enrolled.json` on every launch, and a FIFO or a huge file
 in its place must not stall its one thread (or an acknowledgement holding
 the file's lock); either reads as unreadable.
 
-`enrolled.json` is opened and validated on every read, never answered from
-an earlier one: a permission change or an in-place rewrite can leave its
-mtime, size and inode as they were, and routing must not outlive a read that
-fails. The sends switch in `desk-settings.json` is reread only when one of
-those three changes. Either way an `llm-switchboard desk
-enroll|unenroll|sends` from the CLI is seen at the hub's next recheck
+Both files are opened and validated on every read, never answered from an
+earlier one: a permission change or an in-place rewrite can leave a file's
+mtime, size and inode as they were, and neither routing nor the sends switch
+may outlive a read that fails. An `llm-switchboard desk
+enroll|unenroll|sends|voice` from the CLI is seen at the hub's next recheck
 without a restart. Anything unreadable reads as "nothing enrolled" and
 "sends off": the desk fails closed. Editing is stricter: an
 enroll or unenroll over an unreadable or malformed `enrolled.json` is
@@ -20,8 +19,8 @@ refused (503) rather than overwriting the sessions it may still hold.
 `voice_confirm_enabled`, each written by `desk sends|voice` through one
 read-modify-write that keeps the other key (a broken file is replaced, and
 then the other switch reads as off). Anything else in the file is dropped,
-so it stays at most two boolean keys. The voice gate is always read fresh,
-never from the cache: an unreadable file means voice off at the handoff.
+so it stays at most two boolean keys. An unreadable file means sends off and
+voice off at the handoff, whose refresh reads it just before the target lock.
 
 Every edit, the CLI's offline one included, holds the file's cross-process
 lock (the `<name>.lock` flock `JsonFile.locked` takes) for its whole
@@ -111,35 +110,18 @@ class FileLock:
 
 
 class CachedJson:
-    """A JsonFile whose parsed content is reused until the file changes."""
+    """A JsonFile opened, bounded and validated on every read (see the module
+    docstring for why nothing is kept from an earlier read)."""
 
     def __init__(self, path: Path, valid=lambda data: True, lock_for: Path | None = None):
         self.file = JsonFile(path)
         # A file whose content fails `valid` reads as empty and can't be edited.
         self._valid = valid
-        self._key = None
-        self._data: dict = {}
         # Its own `<name>.lock`, or the lock of the file `lock_for` names.
         self.lock = FileLock.for_file(lock_for or path)
 
-    def read(self) -> dict:
-        try:
-            stat = self.file.path.stat()
-            key = (stat.st_mtime_ns, stat.st_size, stat.st_ino)
-        except FileNotFoundError:
-            key = None
-        except OSError:
-            self._key = None
-            log.warning("desk: %s cannot be inspected; treating it as empty", self.file.path.name)
-            return {}
-        if key != self._key or key is None:
-            self._data = self._load()[0]
-            self._key = key
-        return self._data
-
     def read_fresh(self) -> tuple[dict, bool]:
-        """Opened and validated now, never from the cache: a permission
-        change alters none of the mtime, size and inode it is keyed on."""
+        """The content opened and validated now, and whether that read failed."""
         return self._load()
 
     def _load(self) -> tuple[dict, bool]:
@@ -179,7 +161,6 @@ class CachedJson:
             if json.dumps(data, sort_keys=True) != before:
                 # JsonFile writes through mkstemp, which creates the file 0600.
                 self.file.write(data)
-        self._key = None
 
 
 def valid_enrollment(data: dict) -> bool:
@@ -258,13 +239,17 @@ class DeskSettings:
         return self._json.lock.held()
 
     def sends_enabled(self) -> bool:
-        return self._json.read().get(SENDS_KEY) is True
+        """The master switch, from a read that succeeded now: a failed one
+        is off."""
+        return self._switch(SENDS_KEY)
 
     def voice_confirm_enabled(self) -> bool:
-        """Read fresh every time: a permission change alters nothing the cache
-        is keyed on, and the gate must read as off when the file can't be read."""
+        """The voice gate, read the same way."""
+        return self._switch(VOICE_KEY)
+
+    def _switch(self, key: str) -> bool:
         data, unreadable = self._json.read_fresh()
-        return not unreadable and data.get(VOICE_KEY) is True
+        return not unreadable and data.get(key) is True
 
     def set_sends_enabled(self, enabled: bool) -> None:
         self._set(SENDS_KEY, enabled)
