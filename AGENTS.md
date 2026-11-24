@@ -118,6 +118,7 @@ Sharing the socket would let its supervisor close the real windows.
 | `llm_switchboard/desk/relay_channels.py` | Mac relay: the channel socket (`DeskConfig.channel_socket`) where the phase 1 channel connects: uid before hello, the `peer_mac` check, `register` over the link (`Uplink`), the hub's text for its codes, local ping/pong and the idle rule, the 5 s and per-event/per-reply rechecks, one `LinkWriter` per channel and the evidence rules for events, local reply refusals, the 25 s not-enrolled cache |
 | `llm_switchboard/desk/relay_link.py` | Mac relay: `RelayLink`, one ssh attempt and link (the child through `child_process`, the 30 s handshake on `CLOCK_MONOTONIC`, negotiation and the proof, the ssh writer, 15 s pings, the 45 s idle rule, the ping records and the 40 s freshness rule), the `Uplink` relay_channels registers on; `RelayConnector`, links one after another with the backoff each end calls for |
 | `llm_switchboard/desk/relay.py`, `bin/desk-relay` | Mac relay process: `relay.lock` for its life (a second exits 3), the rotating `desk-relay.log` (1 MiB x 2) with every thread's uncaught exceptions, the launch log (`bin/desk-relay` points stderr at it before any package import, truncated over 256 KiB; closed to /dev/null once logging runs), `serve`: the channel socket and `RelayConnector` until SIGTERM, then the link retired and the socket closed |
+| `llm_switchboard/desk/relay_cli.py` | Mac command adapter: `desk relay` runs the relay in the foreground; `desk relay-install [--unload]` dispatches to the launchd installer and reports the result. Both handlers import their Mac runtime only when called |
 | `llm_switchboard/desk/relay_launchd.py` | Mac relay: the launchd job `dev.llm-switchboard.desk-relay` (the plist from `DeskConfig.relay_argv`, output to /dev/null), `desk relay-install` (checks first: macOS, the link key, the checkout's interpreter; v1's `host_launchd.bootstrap`) and `--unload` (bootout of its label only, the plist deleted, done only once `launchctl print` no longer finds the label and `relay.lock` is free, else exit 1 after 5 s); every launchctl call and the LaunchAgents directory behind `Launchd`, which tests replace |
 | `llm_switchboard/desk/checkout_build.py` | Mac relay: the hello's `relay_build`, the checkout's HEAD as 12 hex digits read from git's files (worktrees and packed refs included), never by running git; '' when unknown |
 | `llm_switchboard/desk/mac_machine.py` | Mac relay: the link hello's `machine`, a SHA-256 derivation of the hardware UUID (`gethostuuid` through `ctypes`, written as `ioreg` shows it) so the raw UUID never leaves the Mac |
@@ -130,7 +131,7 @@ Sharing the socket would let its supervisor close the real windows.
 | `llm_switchboard/desk/static/desk_hosts.js`, `link_view.js` | The tablet page's Mac link: the words for host badges, the link and unattributed refusal lines, the Mac hint, the host choice and which enrollment route an edit takes (pure, Node-tested in `tests/js/desk_*.test.js`); the link and refusal lines and the host badge (render only) |
 | `llm_switchboard/desk/static/enroll_view.js` | The tablet page's enrollment: the settings list (host badge, enroll or unenroll per host), the typed form's host choice, the Mac sessions asking to join and the Enroll now confirmation every Mac enroll waits for; each edit through `api`, keyed by (host, session_id) |
 | `llm_switchboard/desk/static/page_audio.js` | The tablet page's tap-flow sound: automatic reply speech, Play and one-shot Dictate, tracked by and deferring to the conversation controller |
-| `llm_switchboard/desk/cli.py` | `llm-switchboard desk <command>`: serve, pair, revoke, status, clear, clear-stopped (no offline form), link-authorize, link-revoke and link-fence (their no-hub outcomes under the run lock), sends, voice, enroll and unenroll (`--host` for a Mac session), ack, flags (`--lines`: one per line, for `claudep --desk`), install-config, relay and relay-install [--unload] (Mac, in `desk/relay_cli.py`, which imports the relay only when one runs) (a light command in `__main__`) |
+| `llm_switchboard/desk/cli.py` | `llm-switchboard desk <command>`: serve, pair, revoke, status, clear, clear-stopped (no offline form), link-authorize, link-revoke and link-fence (their no-hub outcomes under the run lock), sends, voice, enroll and unenroll (`--host` for a Mac session), ack, flags (`--lines`: one per line, for `claudep --desk`), install-config, relay and relay-install [--unload] (Mac, delegated to `desk/relay_cli.py`) (a light command in `__main__`) |
 | `llm_switchboard/listen.py` | Where `serve` listens (localhost + Tailscale, bound once Tailscale is up) and which peers it answers |
 | `llm_switchboard/web.py` | FastAPI routes, the root picker and former preview redirects, and the deterministic OpenAPI export; keeps the `App` and `make_app` imports |
 | `llm_switchboard/web_app.py` | HTTP-independent picker operations and the composition of local, Codex and Mac session sources |
@@ -163,7 +164,7 @@ Sharing the socket would let its supervisor close the real windows.
 
 | Path | Caller | Owner |
 | --- | --- | --- |
-| `bin/llm-switchboard` | Pi systemd, installed CLI link, SSH forced command (runs `.venv/bin/python` when present) | `llm_switchboard/__main__.py` |
+| `bin/llm-switchboard` | Pi systemd, installed CLI link, SSH forced command, Mac desk setup over SSH (`/home/pi/dev/llm-switchboard/bin/llm-switchboard`); runs `.venv/bin/python` when present | `llm_switchboard/__main__.py` |
 | `python3 -m llm_switchboard` | Mac launchd (host agent, search index, loopback search), Mac setup, search index child, shell callers | `llm_switchboard/__main__.py` (light host/search dispatch), `cli.py` |
 | `systemd/llm-switchboard.service` | `install.sh` template input | `install.sh` |
 | `install.sh` | Pi operator installation | `systemd/llm-switchboard.service` and `bin/llm-switchboard` |
@@ -174,7 +175,7 @@ Sharing the socket would let its supervisor close the real windows.
 | `/`, `/index.html`, `/assets/*`, `/theme.js` | Picker browsers; extensionless client routes also use the index | `llm_switchboard/page.py`, `web/dist` |
 | `/next`, `/next/*` | Former preview bookmarks; permanent redirects to the matching root URL | `llm_switchboard/page.py` |
 | `python -m scripts.api_parity` | Developer HTTP parity checks | `scripts/api_parity/__main__.py` |
-| `bin/desk-channel` | Claude Code, through the pinned `mcp.json` that `desk install-config` writes; its argv is pinned by `DeskConfig.channel_argv` and checked by `desk/peer.py`, so moving it breaks enrolled sessions | `llm_switchboard/desk/channel.py` |
+| `bin/desk-channel` | Claude Code, through the pinned `mcp.json` that `desk install-config` writes; its argv is pinned by `DeskConfig.channel_argv` and checked by `desk/peer.py` on the Pi and `desk/peer_mac.py` on the Mac, so moving it breaks enrolled sessions | `llm_switchboard/desk/channel.py` |
 | `bin/desk-link` | sshd, through the `authorized_keys` forced command `desk link-authorize` writes; its argv is pinned by `DeskConfig.link_argv`, so moving it breaks the link | `llm_switchboard/desk/link_pump.py` |
 | `~/.ssh/llm-switchboard-desk-<host>` (Mac) | The relay and Mac setup; the only identity the desk SSH invocation permits (`relay_ssh` names it in the ssh argv) | `llm_switchboard/desk/relay_link.py` (signs the link proof with it) |
 | `config_dir/run/link.sock` (Pi) | `bin/desk-link` (`DeskConfig.link_socket`); 0600 in the 0700 run directory, created by `desk serve` at start | `llm_switchboard/desk/link_hub.py` |
@@ -195,6 +196,7 @@ Sharing the socket would let its supervisor close the real windows.
 | `scripts/desk-ca.sh` | Mac operator, one-off (the desk's local CA) | `docs/voice-desk.md` |
 | `scripts/desk-units.sh <repo> <local.env>` | `install.sh` (reconciles the desk hub and adb link units) | `scripts/desk-units.sh` itself; `docs/voice-desk.md` |
 | `llm-switchboard desk ...` | Operator CLI and the hub unit (`desk serve`) | `llm_switchboard/desk/cli.py` |
+| `llm-switchboard desk relay`, `llm-switchboard desk relay-install [--unload]` | Mac operator (`relay` runs in the foreground); `scripts/setup-mac-desk.sh` calls `relay-install [--unload]` through `python -m llm_switchboard` | `llm_switchboard/desk/relay_cli.py` |
 | `llm-switchboard desk flags --lines` | `claudep --desk` in the Mac shell config (exactly four lines, put before every other argument) | `llm_switchboard/desk/cli.py` |
 
 The package remains shared by Pi and Mac. Public cross-feature boundaries are
@@ -264,11 +266,31 @@ the report instead of leaving it silently stale.
   session's title is its first prompt cut to one line, Jacob's call on
   2026-10-26), and only the
   actions in `ActionKind` can be queued; the Mac re-checks every one. Nothing
-  queued may start a process or send a prompt there. A transcript is uploaded to
-  the Pi only through `fork-pi` (mac_uploads.py). Search text may reach the Mac's
-  own browser through `host-search` on loopback, never the Pi: the HTTPS picker
-  fetches it directly with CORS restricted by `LLM_SWITCHBOARD_PAGE_ORIGINS` in
-  the Mac's `local.env` (comma-separated full origins; empty allows none).
+  queued through the exchange may start a process or send a prompt there.
+
+  The one exception is the voice desk's link (`docs/voice-desk.md`, "Mac
+  link"), accepted by Jacob on 2026-11-23 with full authority. It is the one
+  way the Pi's side can send a prompt to a Mac session, and it reaches only
+  sessions launched with `claudep --desk` and registered with the Mac's
+  running desk relay, which opens the link (the Pi still never connects to
+  the Mac). Those sessions run with bypass permissions, so whatever controls
+  the Pi's `pi` account can, through the link, make them do anything
+  Jacob's account can do on the Mac; the desk's enrollment list, pairing and
+  sends switch govern honest use, not that authority. Unloading the Mac's
+  desk relay ends the link and is the switch the Mac enforces; `desk
+  link-revoke <mac>` withdraws the Mac's credential from the Pi; launching
+  without `--desk` keeps a session out of the link's reach. None of them
+  recalls an event a session already holds, so none means a session is
+  quiet or a lock is safe to clear. The desk writes no prompt or reply text
+  to any log, to the host exchange or to the Pi's disk, and adds nothing to
+  the exchange's frames. A desk exchange is part of the session's
+  transcript on the Mac, which these rules cover like any Mac session's.
+
+  A transcript is uploaded to the Pi only through `fork-pi` (mac_uploads.py).
+  Search text may reach the Mac's own browser through `host-search` on
+  loopback, never the Pi: the HTTPS picker fetches it directly with CORS
+  restricted by `LLM_SWITCHBOARD_PAGE_ORIGINS` in the Mac's `local.env`
+  (comma-separated full origins; empty allows none).
   The HTTPS picker is Tailscale Serve on the Pi (`sudo tailscale serve --bg
   8777`, persisted by tailscaled; `tailscale serve status`), proxying to
   127.0.0.1:8777. Chrome blocks loopback fetches from plain-http pages, so the
