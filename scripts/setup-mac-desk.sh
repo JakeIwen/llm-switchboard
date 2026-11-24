@@ -44,6 +44,9 @@ done
 # settings so a foreign import path (or safe-path mode) cannot redirect it.
 cd -- "$repo" || fail "can't enter $repo; nothing changed"
 run_desk() { "$python" -E -m llm_switchboard desk "$@"; }
+# Check before creating the key or touching either machine's installed state.
+"$python" -E -B -c 'from llm_switchboard.desk.config import DeskConfig; raise SystemExit(DeskConfig.from_env().mac_relay_location_error())' \
+  || fail "the Mac desk configuration check failed (above); nothing changed"
 pi_cli=/home/pi/dev/llm-switchboard/bin/llm-switchboard
 key=$HOME/.ssh/llm-switchboard-desk-$mac
 job=dev.llm-switchboard.desk-relay

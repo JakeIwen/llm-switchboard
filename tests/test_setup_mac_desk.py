@@ -73,7 +73,8 @@ class SetupMacDeskTest(unittest.TestCase):
         result = subprocess.run([str(self.repo / "scripts" / SCRIPT.name), *args], env=environ,
                                 cwd=self.home, capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
         calls = self.log.read_text().splitlines() if self.log.exists() else []
-        return result, [call for call in calls if not call.startswith("uname ")]
+        return result, ["preflight" if call.startswith("python -E -B -c ") else call
+                        for call in calls if not call.startswith("uname ")]
 
     def add_key(self):
         self.key.parent.mkdir(mode=0o700)
@@ -91,6 +92,9 @@ class SetupMacDeskTest(unittest.TestCase):
         package = self.repo / "llm_switchboard"
         package.mkdir()
         (package / "__init__.py").touch()
+        config = package / "desk" / "config.py"
+        config.parent.mkdir()
+        shutil.copy2(REPO / "llm_switchboard" / "desk" / "config.py", config)
         (package / "__main__.py").write_text("import sys\nprint('fixture module:', *sys.argv[1:])\n")
         self._standin(self.repo / ".venv" / "bin" / "python", "python",
                       f'exec {shlex.quote(sys.executable)} "$@"\n')
@@ -110,8 +114,9 @@ class SetupMacDeskTest(unittest.TestCase):
     def test_setup_steps_in_order(self):
         result, calls = self.run_script()
         self.assertEqual(result.returncode, 0, result.stderr)
-        throwaway = calls[0].rsplit(" -f ", 1)[1]
+        throwaway = calls[1].rsplit(" -f ", 1)[1]
         self.assertEqual(calls, [
+            "preflight",
             f"ssh-keygen -q -t ed25519 -N  -C desk-self-test -f {throwaway}",
             f"ssh-keygen -Y sign -f {throwaway} -n llm-switchboard-desk-link {Path(throwaway).parent}/message",
             f"ssh-keygen -Y verify -f {Path(throwaway).parent}/signers -I self-test -n llm-switchboard-desk-link "
@@ -156,6 +161,34 @@ class SetupMacDeskTest(unittest.TestCase):
                 self.assertIn("nothing changed", result.stderr)
                 self.assert_changed_nothing(calls)
 
+    def test_wrong_config_home_refuses_install_and_removal_before_changes(self):
+        shutil.copytree(REPO / "llm_switchboard", self.repo / "llm_switchboard",
+                        ignore=shutil.ignore_patterns("__pycache__"))
+        python = shlex.quote(sys.executable)
+        # Use the real config writer and location check, but never call launchd.
+        self._standin(self.repo / ".venv" / "bin" / "python", "python", (
+            'case "$*" in\n'
+            '  *"desk relay-install"*)\n'
+            f"    exec {python} -E -c 'from llm_switchboard.desk.config import DeskConfig; "
+            "raise SystemExit(DeskConfig.from_env().mac_relay_location_error())';;\n"
+            'esac\n'
+            f'exec {python} "$@"\n'
+        ))
+        wrong_home = self.home / "other-config"
+        for args in ((), ("--remove",)):
+            with self.subTest(args=args):
+                self.log.unlink(missing_ok=True)
+                result, calls = self.run_script(*args, XDG_CONFIG_HOME=str(wrong_home))
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertNotIn(f"ssh {PI} {PI_CLI} desk link-authorize mac", calls)
+                self.assertNotIn(f"ssh {PI} {PI_CLI} desk link-revoke mac", calls)
+                self.assertFalse(any(call.startswith("launchctl ") or "desk relay-install" in call
+                                     for call in calls), calls)
+                self.assertFalse(self.key.parent.exists())
+                self.assertFalse(any(self.home.rglob("mcp.json")))
+                self.assertIn("unset XDG_CONFIG_HOME", result.stderr)
+                self.assertIn("nothing changed", result.stderr)
+
     def test_setup_refuses_without_names_or_checkout(self):
         cases = {
             "no Mac name": ("LLM_SWITCHBOARD_PI_SSH=pi.invalid\n", "LLM_SWITCHBOARD_MAC_NAME"),
@@ -188,7 +221,7 @@ class SetupMacDeskTest(unittest.TestCase):
         mcp.write_text("{}\n")
         result, calls = self.run_script("--remove")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(calls, ["python -E -m llm_switchboard desk relay-install --unload",
+        self.assertEqual(calls, ["preflight", "python -E -m llm_switchboard desk relay-install --unload",
                                  f"ssh {PI} {PI_CLI} desk link-revoke mac"])
         self.assertFalse(self.key.exists())
         self.assertFalse(self.key.with_name(self.key.name + ".pub").exists())
@@ -208,7 +241,7 @@ class SetupMacDeskTest(unittest.TestCase):
                 self.log.unlink(missing_ok=True)
                 result, calls = self.run_script("--remove", STANDIN_FAIL=pattern)
                 self.assertEqual(result.returncode, 1)
-                self.assertEqual(calls, expected)
+                self.assertEqual(calls, ["preflight", *expected])
                 self.assertIn(message, result.stderr)
                 self.assertTrue(self.key.exists())
 
