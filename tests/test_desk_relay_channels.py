@@ -221,6 +221,29 @@ class AdmissionTest(RelayCase):
                 self.uplink.send(kind, chan=2, **fields)
 
 
+    def test_chan_never_recurs_across_links(self):
+        # `chan` comes from one counter for the relay process's whole life,
+        # so a link that replaces another never reuses a number, and a frame
+        # on the new link naming an old link's `chan` reaches no channel.
+        relay, uplink = self.start_relay()
+        chans = []
+        for n in range(3):
+            if n:
+                relay.link_down(uplink)
+                self.assertEqual(client.read(), (None, {}))
+                uplink = self.uplink = FakeUplink(relay)
+                relay.link_up(uplink)
+            client = self.welcomed()
+            chans += [f["chan"] for f in uplink.of(LinkType.REGISTER)]
+        self.assertEqual(chans, [1, 2, 3])
+        rid = self.event(1, chan=1)
+        self.assertEqual(uplink.wait_for(LinkType.UNDELIVERABLE),
+                         {"chan": 1, "request_id": rid, "reason": "channel_closed"})
+        self.assertFalse(uplink.retired)
+        client.send(MessageType.PING)
+        self.assertEqual(client.read()[0], MessageType.PONG)
+
+
 class ChannelFramesTest(RelayCase):
     def test_relay_answers_channel_ping_locally(self):
         self.start_relay()
@@ -304,6 +327,37 @@ class ChannelFramesTest(RelayCase):
         self.assertEqual(self.unregistered(), {"chan": 1, "reason": "channel_closed"})
         rid = self.event(1)
         self.assertEqual(self.undeliverable_ids(), {rid: "channel_closed"})
+
+    def test_late_registered_reply_result_unregistered_ignored(self):
+        # The relay's rows of "Late and unsolicited messages": for a `chan`
+        # the relay has closed, a `registered` gets `unregistered
+        # {channel_closed}`, and `register_refused`, `drop` and
+        # `reply_result` are ignored; none is a bad frame, so the link stays.
+        self.start_relay()
+        client = self.welcomed()
+        rid = self.event(1)
+        self.assertEqual(client.read()[0], MessageType.EVENT)
+        client.send(MessageType.REPLY, request_id=rid, text="answer", spoken="said")
+        self.uplink.wait_for(LinkType.REPLY)  # the reply now waits for its result
+        client.close()
+        self.assertEqual(self.unregistered(), {"chan": 1, "reason": "channel_closed"})
+        wait_until(lambda: self.relay.registered_count() == 0)
+        before = len(self.uplink.frames)
+        self.uplink.send(LinkType.REPLY_RESULT, chan=1, request_id=rid, ok=True, reason=None)
+        self.uplink.send(LinkType.REGISTER_REFUSED, chan=1, reason="not_enrolled")
+        self.uplink.send(LinkType.DROP, chan=1, reason="unenrolled")
+        self.assertEqual(len(self.uplink.frames), before)  # ignored: nothing answered
+        self.uplink.send(LinkType.REGISTERED, chan=1, generation=9)
+        self.assertEqual(self.uplink.frames[before:],
+                         [(LinkType.UNREGISTERED, {"chan": 1, "reason": "channel_closed"})])
+        self.assertEqual({kind: self.relay.late[kind] for kind in ("reply_result", "register_refused", "drop",
+                                                                    "registered")},
+                         {"reply_result": 1, "register_refused": 1, "drop": 1, "registered": 1})
+        self.assertFalse(self.uplink.retired)
+        again = self.welcomed()  # the link still carries new channels
+        self.assertEqual(self.uplink.of(LinkType.REGISTER)[-1]["chan"], 2)
+        again.send(MessageType.PING)
+        self.assertEqual(again.read()[0], MessageType.PONG)
 
     def test_hub_drop_closes_channel_without_report(self):
         self.start_relay()
