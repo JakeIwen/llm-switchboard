@@ -5,7 +5,9 @@ waitpid) is a separate bound after it."""
 import ast
 import os
 import signal
+import subprocess
 import sys
+import textwrap
 import time
 import unittest
 from unittest import mock
@@ -96,6 +98,38 @@ class ChildProcessTest(unittest.TestCase):
         assert_reaped(self, child)
         self.assertGreaterEqual(time.monotonic() - started, TERM_GRACE_SECONDS)
         self.assertEqual(child.popen.returncode, -signal.SIGKILL)
+
+    def test_interpreter_waits_for_cleanup_started_by_daemon(self):
+        script = textwrap.dedent(f"""\
+            import threading
+            from llm_switchboard.desk.child_process import run_bounded
+
+            def run():
+                result = run_bounded({IGNORES_TERM!r}, env={ENV!r}, deadline_seconds=1.0,
+                                     stdout_limit=100, stderr_limit=100)
+                print(result.child.pid, result.timed_out, result.stdout == b"ready\\n", flush=True)
+
+            worker = threading.Thread(target=run, daemon=True)
+            worker.start()
+            worker.join()
+            # The caller is done; main exits without waiting on the child.
+            """)
+        result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True,
+                                timeout=1.0 + TERM_GRACE_SECONDS + ALLOWANCE)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        pid, timed_out, ready = result.stdout.split()
+        pid = int(pid)
+        try:
+            with self.assertRaises(ProcessLookupError, msg="child still exists after interpreter shutdown"):
+                os.kill(pid, 0)
+        except AssertionError:
+            # Don't leak the fixture child if this regression comes back.
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            raise
+        self.assertEqual((timed_out, ready), ("True", "True"))
 
     def test_child_that_obeys_sigterm_is_not_kept_for_the_grace(self):
         child = spawn(["/bin/sleep", "60"], env=ENV)

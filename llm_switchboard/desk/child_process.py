@@ -63,9 +63,9 @@ class Child:
             return
         with contextlib.suppress(ProcessLookupError):
             self.popen.send_signal(signal.SIGTERM)
-        # Not a daemon: a short-lived command that returns right after a
-        # timeout still waits, at interpreter exit, for the kill and waitpid.
-        threading.Thread(target=self._reap, name=f"reap-{self.pid}").start()
+        # Shutdown must wait for the kill and waitpid even when cleanup was
+        # started by a daemon (the relay connector or a hub admission thread).
+        threading.Thread(target=self._reap, name=f"reap-{self.pid}", daemon=False).start()
 
     def _reap(self) -> None:
         try:
