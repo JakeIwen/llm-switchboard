@@ -90,6 +90,7 @@
   var A = root.DeskConversationAnswers || require("./conversation_answers.js");
   var T = root.DeskSoundTracker || require("./sound_tracker.js");
   var F = root.DeskConversationFetches || require("./conversation_fetches.js");
+  var TM = root.DeskConversationTimers || require("./conversation_timers.js");
   var R = root.DeskConversationRecognition || require("./conversation_recognition.js");
   var PHASE = L.PHASE, FX = L.FX, EV = L.EV, TIMER = L.TIMER, SAY = L.SAY;
   var REASON = L.REASON, CUE = L.CUE, LIMITS = L.LIMITS;
@@ -131,7 +132,8 @@
     var seq = 0;
     var utt = null;          // {id, u, kind, estimate}
     var timers = {};         // TIMER name -> {id, handle}
-    var fetches = F.create(nextId, env.AbortController, env); // FETCH kind -> the one in flight
+    var clock = TM.create(env); // every timer below; each limit is the time it is due (catchUp)
+    var fetches = F.create(nextId, env.AbortController, clock, bodyLost); // FETCH kind -> the one in flight
     var settle = fetches.settle, abandon = fetches.abandon;
     var wake = null;         // {id, sentinel}
     var grant = null;        // the grant id this conversation holds
@@ -200,7 +202,7 @@
     function setTimer(name, ms) {
       clearTimer(name);
       var id = nextId();
-      var handle = env.setTimeout(function () {
+      var handle = clock.setTimeout(function () {
         if (!timers[name] || timers[name].id !== id) return;
         delete timers[name];
         onTimer(name);
@@ -212,7 +214,7 @@
       var t = timers[name];
       if (!t) return;
       delete timers[name];
-      env.clearTimeout(t.handle);
+      clock.clearTimeout(t.handle);
     }
 
     var ON_TIMER = {};
@@ -240,7 +242,10 @@
     // reducer shows the status until this conversation's own call's
     // answer, if the status was one, settles what the end says (late). A
     // grant request answered so granted nothing, so Start stops waiting.
+    // Limits already due apply first, a 200's too: past its call's own
+    // deadline, the abort then due loses its body.
     function hubStatus(status, call) {
+      clock.catchUp();
       if (status === 200) return;
       stopClosing();
       fetches.failed(call);
@@ -276,6 +281,7 @@
     // nothing, and it silences. A send's own answer, which follows, still
     // settles what became of the prompt (late): delivery unknown.
     function bodyLost() {
+      clock.catchUp();
       silence(REASON.UNUSABLE);
     }
 
@@ -287,6 +293,7 @@
     // closing cue playing. The poll's alone can end the wait for an
     // abandoned grant request, by showing a new hub epoch.
     function snapshot(state, from) {
+      clock.catchUp();
       from = from || SNAPSHOT_FROM.POLL;
       if (from === SNAPSHOT_FROM.POLL && state && straggler && state.epoch !== straggler.epoch) {
         forgetStraggler(straggler.id);
@@ -339,6 +346,7 @@
       var id = fetches.begin(FETCH.WAKE, SPEC[FETCH.WAKE]);
       setTimer(TIMER.STEP, LIMITS.STEP_MS);
       Promise.resolve().then(function () { return env.wakeLock.request("screen"); }).then(function (sentinel) {
+        clock.catchUp();
         if (!settle(FETCH.WAKE, id)) {
           releaseSentinel(sentinel);
           return;
@@ -353,6 +361,7 @@
         });
         dispatch({ type: EV.WAKE_OK });
       }, function () {
+        clock.catchUp();
         if (!settle(FETCH.WAKE, id)) return;
         clearTimer(TIMER.STEP);
         dispatch({ type: EV.FAIL, reason: REASON.NO_WAKE });

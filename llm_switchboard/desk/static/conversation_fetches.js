@@ -4,16 +4,19 @@
 // kind, so the answer of an abandoned fetch is seen and dropped. After an
 // end, two abandoned fetches may still be heard (`late`): the one whose
 // status line ended the conversation, and the send POST the end left open.
-// Each fetch keeps its own deadline, whatever becomes of the conversation.
+// Each fetch keeps its own deadline, whatever becomes of the conversation,
+// as an absolute time: an answer is used only after every deadline already
+// due has been applied (conversation_timers.js, catchUp).
 // No I/O of its own, so node can load it; the controller's tests in
 // tests/js/ drive it.
 (function (root) {
   "use strict";
 
   // `nextId` is the controller's one id counter; `AbortCtl` the page's
-  // AbortController, or null where there is none; `clock` its
-  // {setTimeout, clearTimeout}.
-  function create(nextId, AbortCtl, clock) {
+  // AbortController, or null where there is none; `clock` the
+  // conversation's timers (conversation_timers.js); `bodyLost()` the
+  // controller's entry for a 200 whose body never arrived.
+  function create(nextId, AbortCtl, clock, bodyLost) {
     var current = {};        // kind -> the fetch in flight
     var live = {};           // id -> every fetch whose answer hasn't settled yet
     var late = { cause: null, send: null };
@@ -23,24 +26,43 @@
     // of the conversation (deadline below); the wake lock has none.
     function begin(kind, spec) {
       var f = { id: nextId(), ctl: AbortCtl ? new AbortCtl() : null, abortable: !!spec.abort, failed: false,
-        expired: false, timer: null, onDeadline: spec.onDeadline || null };
+        expired: false, cutLate: false, timer: null, onDeadline: spec.onDeadline || null };
       current[kind] = f;
       if (spec.ms) {
-        f.timer = clock.setTimeout(function () { deadline(f); }, spec.ms);
+        f.timer = clock.setTimeout(function (late) { deadline(f, late); }, spec.ms);
         live[f.id] = f;
       }
       return f.id;
     }
 
     // Issues fetch `kind`: `call(opts)` makes its api call. Returns {id,
-    // answer}, `answer` being that call's promise; the deadline is disarmed
-    // once it settles, body read and all.
+    // answer}, `answer` being that call's promise, settled only once every
+    // deadline due by then has been applied, this one's included; the
+    // deadline is disarmed once it settles, body read and all.
     function run(kind, spec, call) {
       var id = begin(kind, spec);
       var f = live[id];
-      var answer = call(opts(kind));
-      answer.then(function () { done(f); }, function () { done(f); });
+      var answer = call(opts(kind)).then(function (r) {
+        clock.catchUp();
+        done(f);
+        return f.cutLate && r.data !== null && r.data !== undefined ? cutOff(r) : r;
+      }, function (e) {
+        clock.catchUp();
+        done(f);
+        throw e;
+      });
       return { id: id, answer: answer };
+    }
+
+    // A body that arrived after its deadline, which was applied only once it
+    // had (catchUp): what the abort at the deadline would have left, the
+    // status with no body, and for a 200 a lost body (bodyLost). A body the
+    // read had already lost was reported where it was lost. One that arrives
+    // after an abort made on time was read before that abort landed, and is
+    // the answer it is.
+    function cutOff(r) {
+      if (r.status === 200) bodyLost();
+      return { status: r.status, data: null };
     }
 
     function done(f) {
@@ -54,11 +76,13 @@
     // alike, so no read outlives it. A grant request is the one exception
     // until its status line shows it failed: an abort can't prove the hub
     // won't still grant it (conversation.js, abandonGrant).
-    function deadline(f) {
+    function deadline(f, late) {
       f.timer = null;
       f.expired = true;
       if (f.onDeadline) f.onDeadline();
-      if (f.ctl && (f.abortable || f.failed)) f.ctl.abort();
+      if (!(f.abortable || f.failed)) return;
+      f.cutLate = !!late;
+      if (f.ctl) f.ctl.abort();
     }
 
     // Fetch `id` was answered with a status other than 200: the hub took no
