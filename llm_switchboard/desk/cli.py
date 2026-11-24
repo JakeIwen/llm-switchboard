@@ -12,7 +12,8 @@ host-qualified ops, never the phase 1 ones, so a phase 1 hub refuses them
 (`unknown op`) instead of editing the Pi's file; offline, both forms check
 both enrollment files and `locks.json` first (remote_enrollment.py).
 `clear-stopped` has no offline form: a hub rewrites `locks.json` whole from
-its own list. `flags` and `install-config` work on files only.
+its own list. `link-fence` (link_authorize.py) asks the hub, and with none
+answering decides from the files under the run lock (`hub.lock`). `flags` and `install-config` work on files only.
 """
 
 import argparse
@@ -68,6 +69,8 @@ def main(argv=None) -> int:
     stopped.add_argument("session_id")
     stopped.add_argument("lock_id")
     stopped.add_argument("--confirm", metavar="LOCK_ID", help="off a terminal: the lock id again")
+    commands.add_parser("link-fence", help="before rolling the Pi back: confirm no Mac signer, link, handoff or "
+                        "lock is left")
     ack = commands.add_parser("ack", help="show a session's startup warning, then press Enter once to accept it")
     ack.add_argument("session_id")
     ack.add_argument("--digest", metavar="HEX", help="the digest a previous `desk ack` printed; sends without asking")
@@ -265,6 +268,11 @@ def _clear_stopped(args, config):
     return 0
 
 
+def _link_fence(args, config):
+    from .link_authorize import run_fence
+    return run_fence(config)
+
+
 def _ack(args, config):
     digest = args.digest
     if digest is None:
@@ -323,5 +331,5 @@ def _install_config(args, config):
 _COMMANDS = {
     "serve": _serve, "pair": _pair, "revoke": _revoke, "status": _status, "clear": _clear,
     "sends": _sends, "voice": _voice, "enroll": _enroll, "unenroll": _unenroll, "ack": _ack, "flags": _flags,
-    "install-config": _install_config, "clear-stopped": _clear_stopped,
+    "install-config": _install_config, "clear-stopped": _clear_stopped, "link-fence": _link_fence,
 }

@@ -14,7 +14,8 @@ from llm_switchboard.desk.text_rule import check_text
 
 DESK = Path(__file__).resolve().parents[1] / "llm_switchboard" / "desk"
 HUB_MODULES = ("hub.py", "hub_state.py", "grants.py", "http_server.py", "link_hub.py", "link_views.py",
-               "enrollment_views.py", "hub_enrollment.py", "remote_enrollment.py")
+               "enrollment_views.py", "hub_enrollment.py", "remote_enrollment.py", "hub_link_ops.py",
+               "link_fence.py")
 
 # (module, function, expression): reasons that are not the hub's own words.
 PASS_THROUGH = {

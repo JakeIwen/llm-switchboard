@@ -295,6 +295,9 @@ OUT_OF_REACH = {
     Refusal.ENROLLMENT_FILES_UNREADABLE, Refusal.LOCKS_UNREADABLE, Refusal.HOST_ENROLLMENT_FULL,
     Refusal.USE_ENROLL_HOST, Refusal.CLEAR_STOPPED_NEEDS_CONFIRM, Refusal.CLEAR_STOPPED_PI_LOCK,
     Refusal.CLEAR_STOPPED_LINK_UP,
+    # The operator-only rollback fence (hub_link_ops.py, link_fence.py).
+    Refusal.FENCE_SIGNERS_UNREADABLE, Refusal.FENCE_SIGNERS_LISTED, Refusal.FENCE_LINK_LIVE, Refusal.FENCE_HANDOFF,
+    Refusal.FENCE_LOCK_FILE, Refusal.FENCE_STORE_ERROR, Refusal.FENCE_MAC_LOCK,
 }
 
 PATHS = ("ticket", "send", "grant", "beat")

@@ -133,6 +133,16 @@ class Refusal(StrEnum):
     MAC_NOT_CONNECTED = ("the Mac that holds this lock is not connected, so its channel can't be checked; "
                          "reconnect that Mac, or, once you have seen the session exit there, use desk "
                          "clear-stopped on the Pi")
+    # The rollback fence (`desk link-fence`, operator op `link_fence`); each
+    # names what is left, with the hosts or locks in the answer's fields.
+    FENCE_SIGNERS_UNREADABLE = "link-signers is unreadable or malformed; move it aside and run link-fence again"
+    FENCE_SIGNERS_LISTED = "link-signers still lists a Mac; run desk link-revoke for each host named"
+    FENCE_LINK_LIVE = "a Mac link is live; run desk link-revoke for each host named"
+    FENCE_HANDOFF = "a Mac send is being handed off; run link-fence again"
+    FENCE_LOCK_FILE = "locks.json is unreadable, not a regular file, oversize or malformed"
+    FENCE_STORE_ERROR = "the hub's lock store reports an error; restart the hub and run link-fence again"
+    FENCE_MAC_LOCK = ("a Mac lock remains; clear each lock named (desk clear, or desk clear-stopped once you "
+                      "have seen its session exit)")
 
     # -- enrollment edits (remote_enrollment.py, hub_enrollment.py) -----------
     ENROLLMENT_FILES_UNREADABLE = "enrollment files unreadable; nothing changed"

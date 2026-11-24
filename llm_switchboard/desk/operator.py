@@ -53,6 +53,9 @@ class OperatorOp(str, Enum):
     ENROLL_HOST = "enroll_host"
     UNENROLL_HOST = "unenroll_host"
     CLEAR_STOPPED = "clear_stopped"
+    # The Mac link's signer check (answer `{signer, link}`) and the rollback fence.
+    LINK_DROP = "link_drop"
+    LINK_FENCE = "link_fence"
 
 
 class HubUnavailable(Exception):

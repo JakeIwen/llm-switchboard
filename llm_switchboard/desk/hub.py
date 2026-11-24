@@ -43,6 +43,7 @@ from ..tmux import Tmux
 from .config import DeskConfig
 from .enrollment import DeskSettings, Enrollment, ensure_private_dir
 from .hub_enrollment import HubEnrollment
+from .hub_link_ops import HubLinkOps
 from .hub_state import HubState
 from .http_server import DeskHttpServer, make_tls_context
 from .labels import SessionLabels, encodable
@@ -127,7 +128,7 @@ class ChannelConnection:
             self.sock.close()
 
 
-class Hub(HubEnrollment):
+class Hub(HubEnrollment, HubLinkOps):
     def __init__(self, config: DeskConfig, *, peer=None, now: Callable[[], float] = time.time,
                  elapsed: Callable[[], float] = time.monotonic,
                  token_bytes: Callable[[int], bytes] = secrets.token_bytes, lock_store=None,
@@ -176,6 +177,7 @@ class Hub(HubEnrollment):
             OperatorOp.UNENROLL: self._op_unenroll, OperatorOp.STARTUP_VIEW: self._op_startup_view,
             OperatorOp.STARTUP_ACK: self._op_startup_ack, OperatorOp.ENROLL_HOST: self._op_enroll_host,
             OperatorOp.UNENROLL_HOST: self._op_unenroll_host, OperatorOp.CLEAR_STOPPED: self._op_clear_stopped,
+            OperatorOp.LINK_DROP: self._op_link_drop, OperatorOp.LINK_FENCE: self._op_link_fence,
         }
 
     @property
@@ -580,7 +582,13 @@ class Hub(HubEnrollment):
         # A CLI unenroll or sends change since the last 5 s pass counts too.
         # The file locks stay held until the target lock is persisted, so an
         # offline edit either lands before this reread or waits for the handoff.
-        with self._policy_files(), self._policy_lock:
+        # A Mac target's handoff passes the link's handoff gate (counted until
+        # its lock write is over, whole or failed): the rollback fence rests
+        # on it, not on the recheck above.
+        identity = registration.identity
+        gate = (self.links.handoff_gate(identity) if isinstance(identity, RemoteIdentity)
+                else contextlib.nullcontext())
+        with self._policy_files(), self._policy_lock, gate:
             self.refresh_files()
             return self.state.hand_off(request.request_id)
 

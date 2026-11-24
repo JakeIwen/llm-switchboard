@@ -302,7 +302,9 @@ class LinkObjectTest(LinkHubCase, HubCase):
 
 
 class SignerCheckTest(LinkHubCase, HubCase):
-    def test_signer_removal_retires_established_link(self):
+    def test_signer_removal_retires_established_link_without_link_drop(self):
+        # The hub never receives link_drop: the housekeeping pass's first
+        # step, the signer check, retires the link.
         mac, mac2 = self.connect(), self.connect("mac2", MAC2)
         write_signers(self.config.link_signers_file, self.key("mac2").signer)
         self.hub.recheck_now()

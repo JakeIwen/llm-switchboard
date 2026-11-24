@@ -47,6 +47,10 @@ class Phase1HubTest(unittest.TestCase):
         # the file), so the override refuses and changes nothing.
         done = run_desk_cli(self.home, "clear-stopped", SESSION_M, lock.lock_id, "--confirm", lock.lock_id, input="")
         self.assertEqual(done.returncode, 1, done.stdout)
+        # The phase 1 hub answers `unknown op`: the fence is not passed.
+        done = run_desk_cli(self.home, "link-fence", input="")
+        self.assertEqual(done.returncode, 1, done.stdout)
+        self.assertIn("older and has no link-fence", done.stderr)
         self.assertEqual(file_bytes(*files), before)
         # The phase 1 messages still work against it.
         done = run_desk_cli(self.home, "enroll", SESSION_X, input="")

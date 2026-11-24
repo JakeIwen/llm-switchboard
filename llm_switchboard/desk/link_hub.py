@@ -8,8 +8,9 @@ signer line reread, 6 admissions a minute per host, 4 hosts, replacement
 of the host's current link), one reader thread per link (the admission
 thread goes on as the reader) and one writer (`link_session`), the link
 heartbeat and idle rule, presence queries, the signer check, the per-host
-link records, the unattributed refusals, the link-wait caps and the
-candidates (a `register` refused only as not enrolled, link_candidates).
+link records, the unattributed refusals, the link-wait caps, the
+candidates (a `register` refused only as not enrolled, link_candidates),
+the handoff gate and its count, and the link half of the rollback fence.
 
 Lock rules: the links lock covers in-memory work, socket shutdowns and the
 bounded read of `link-signers`; it is never held across link I/O or a wait
@@ -40,6 +41,7 @@ from .link_admission import (
     AdmissionClosed, AdmissionRefusals, AdmissionRefused, Admitted, admit, refusal_frame,
 )
 from .link_candidates import Candidates
+from .link_fence import refuse_signers
 from .link_proof import SignersUnreadable, read_signers, self_test, verify_proof
 from .link_protocol import (
     ADMISSION_DEADLINE_SECONDS, HEARTBEAT_SECONDS, IDLE_TIMEOUT_SECONDS, LINK_ID_BYTES, MAX_ACCEPTS_PER_MINUTE,
@@ -135,6 +137,8 @@ class LinkHub:
         self._links: dict[str, LinkSession] = {}
         self._records: dict[str, _Record] = {}
         self._signer_hosts: frozenset[str] = frozenset()
+        # Mac handoffs past the handoff gate and not yet out of it.
+        self._handoffs = 0
         self._host_admissions: dict[str, deque[float]] = {}
         self._accepts: deque[float] = deque()
         self._pending = threading.BoundedSemaphore(MAX_PENDING_ADMISSIONS)
@@ -407,6 +411,42 @@ class LinkHub:
     def live_link(self, host: str) -> LinkSession | None:
         with self._lock:
             return self._links.get(host)
+
+    # -- the handoff gate and the fence ---------------------------------------------------------
+
+    @contextlib.contextmanager
+    def handoff_gate(self, identity: RemoteIdentity):
+        """Around a Mac handoff's reread and its lock write: entered only
+        while the identity's link is its host's live, current link, counted
+        under the links lock until the write is over (whole or failed). The
+        links lock is held only to enter and to leave, never across the
+        write, so the count and the live links read in one hold of it say
+        whether a Mac handoff can still write to the lock file."""
+        with self._lock:
+            link = self._links.get(identity.host)
+            if link is None or link.retired or link.link_id != identity.link_id:
+                raise DeskError(409, Refusal.TARGET_CHANGED_NOT_SENT)
+            self._handoffs += 1
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._handoffs -= 1
+
+    def fence_check(self) -> None:
+        """The link half of the rollback fence, in one hold of the links
+        lock: `link-signers` readable with no line, no live link, no handoff
+        past the gate. Reads and refuses; changes nothing."""
+        with self._lock:
+            try:
+                listed = read_signers(self._config.link_signers_file)
+            except SignersUnreadable:
+                raise DeskError(409, Refusal.FENCE_SIGNERS_UNREADABLE) from None
+            refuse_signers(listed)
+            if self._links:
+                raise DeskError(409, Refusal.FENCE_LINK_LIVE, {"hosts": sorted(self._links)})
+            if self._handoffs:
+                raise DeskError(409, Refusal.FENCE_HANDOFF)
 
     # -- the reader ------------------------------------------------------------------------
 

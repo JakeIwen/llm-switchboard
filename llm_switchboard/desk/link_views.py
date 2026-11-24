@@ -4,8 +4,9 @@ admission refusals `link_hub.LinkHub` publishes (`set_links`,
 `set_admission_refusals`), their snapshot and `status` fields, and the
 lock lookup a clear makes before it asks a Mac for presence
 (`lock_info`), a Mac target's label as its link registered it
-(`set_label`), a Mac lock's row in `desk status`, and the operator-only
-`clear_stopped`. The mixin uses HubState's `_mutex`, `_bump`, `_locks`,
+(`set_label`), a Mac lock's row in `desk status`, the operator-only
+`clear_stopped`, and the rollback fence's view of the locks
+(`fence_lock_view`). The mixin uses HubState's `_mutex`, `_bump`, `_locks`,
 `_labels`, `_in_delivery`, `_writer_done`, `_lock_store`, `_lock_error`,
 `_requests`, `_finish` and `_earlier_run`. Standard library only.
 """
@@ -13,6 +14,7 @@ lock lookup a clear makes before it asks a Mac for presence
 from enum import StrEnum
 from typing import Callable
 
+from .link_fence import FenceLockView, read_lock_view
 from .model import HOST, MACHINE_PREFIX_LENGTH, DeskError, Lock, LockStoreError, RequestState
 from .refusals import Refusal
 
@@ -103,6 +105,14 @@ class LinkViews:
                 self._finish(request, RequestState.UNKNOWN)
             self._bump()
             return lock
+
+    def fence_lock_view(self, inspect: Callable[[], list[Lock]]) -> FenceLockView:
+        """The rollback fence's lock half: the in-memory list, the store's
+        error and `inspect()` (a bounded, non-blocking read of `locks.json`)
+        in one hold of the mutex, which every lock write holds, so the disk
+        view and the list are of one moment. Changes nothing."""
+        with self._mutex:
+            return read_lock_view(inspect, self._locks.values(), self._lock_error)
 
     def _lock_status(self, lock: Lock) -> dict:
         """A lock as `desk status` lists it; a Mac lock adds its key and the

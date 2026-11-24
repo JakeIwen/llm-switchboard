@@ -92,6 +92,8 @@ class LinkWaitTest(MacTargetCase):
                 self.assertEqual((status, sent['state']), (200, 'handed_off'))
                 self.assertEqual(pi.read()[0].value, 'event')
                 self.assertEqual(run_desk_cli(self.home, 'status').returncode, 0)
+                dropped = operator_request(self.config.operator_socket, OperatorOp.LINK_DROP, host=MAC2)
+                self.assertEqual(dropped['signer'], {'fingerprint': self.key('mac2').signer.fingerprint})
                 version = self.hub.state_view()['version']
                 poll = pool.submit(self.call, 'GET', f'/desk/api/state?after={version}', token=self.token)
                 self.assertTrue(polling.wait(10))
