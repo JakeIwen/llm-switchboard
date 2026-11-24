@@ -299,24 +299,6 @@
 
   // ---- Target display -----------------------------------------------------
 
-  function badgeFor(t) {
-    if (t.lock) {
-      return t.lock.earlier_run
-        ? { text: "Unknown (earlier hub run)", tone: "warn" }
-        : { text: "Busy", tone: "warn" };
-    }
-    switch (t.registration) {
-      case "replied": return { text: "Replied before", tone: "ok" };
-      case "registered": return { text: "Registered, no desk reply yet", tone: "warn" };
-      case "ambiguous": return { text: "Ambiguous", tone: "bad" };
-      default: return { text: "Unavailable", tone: "" };
-    }
-  }
-
-  function canCompose(t) {
-    return !!t && !t.lock && (t.registration === "replied" || t.registration === "registered");
-  }
-
   function folderOf(t) { return t.cwd || ""; }
 
   // ---- Rendering ----------------------------------------------------------
@@ -363,7 +345,7 @@
     var targets = state ? state.targets : [];
     $("targets-empty").hidden = targets.length > 0;
     targets.forEach(function (t) {
-      var badge = badgeFor(t);
+      var badge = Logic.badgeFor(t);
       var btn = el("button", { type: "button", "class": "target", "data-testid": "target", "data-session": t.session_id }, [
         el("span", { "class": "name", text: t.label || t.session_id }),
         el("span", { "class": "folder", text: folderOf(t) }),
@@ -396,7 +378,7 @@
     $("detail").hidden = !t;
     $("pick-note").hidden = !!t;
     if (!t) return;
-    var badge = badgeFor(t);
+    var badge = Logic.badgeFor(t);
     $("detail-title").textContent = t.label || t.session_id;
     $("detail-folder").textContent = folderOf(t);
     var b = $("detail-badge");
@@ -416,7 +398,7 @@
         formatTime(t.lock.since) + ".";
     }
 
-    var composable = canCompose(t);
+    var composable = Logic.canCompose(t);
     var editing = compose.phase === "edit";
     var busy = compose.phase === "sending" || conv.holds();
     // While Dictate listens only its words may change the draft (Test
@@ -482,7 +464,7 @@
     if (state.epoch !== d.epoch) return voidCompose("The hub restarted: the review was discarded.");
     if (!t) return voidCompose("The target went away: the review was discarded.");
     if (t.generation !== d.generation) return voidCompose("The target reconnected: the review was discarded.");
-    if (!canCompose(t)) return voidCompose("The target changed state: the review was discarded.");
+    if (!Logic.canCompose(t)) return voidCompose("The target changed state: the review was discarded.");
   }
 
   // Freeze destination and ask for a ticket; the first typed or dictated
@@ -490,7 +472,7 @@
   function freezeDestination() {
     if (compose.dest) return true;
     var t = selectedId === null ? null : findTarget(selectedId);
-    if (!canCompose(t) || !state) return false;
+    if (!Logic.canCompose(t) || !state) return false;
     var dest = Logic.destinationOf(t, state.epoch);
     compose.dest = dest;
     compose.ticketPending = true;

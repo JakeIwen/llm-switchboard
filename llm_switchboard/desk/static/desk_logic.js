@@ -93,6 +93,26 @@
     return { host: t.host, session_id: t.session_id, generation: t.generation, label: t.label || t.session_id, epoch: epoch };
   }
 
+  // The badge a target shows: its lock first, then its registration.
+  function badgeFor(t) {
+    if (t.lock) {
+      return t.lock.earlier_run
+        ? { text: "Unknown (earlier hub run)", tone: "warn" }
+        : { text: "Busy", tone: "warn" };
+    }
+    switch (t.registration) {
+      case "replied": return { text: "Replied before", tone: "ok" };
+      case "registered": return { text: "Registered, no desk reply yet", tone: "warn" };
+      case "ambiguous": return { text: "Ambiguous", tone: "bad" };
+      default: return { text: "Unavailable", tone: "" };
+    }
+  }
+
+  // Whether the tap flow may write to a target.
+  function canCompose(t) {
+    return !!t && !t.lock && (t.registration === "replied" || t.registration === "registered");
+  }
+
   // Keeps only ids still present in the current request history.
   function pruneIds(idSet, requests) {
     var live = {};
@@ -103,7 +123,7 @@
   var api = {
     REFUSALS: REFUSALS, classifySend: classifySend, describeRequestState: describeRequestState,
     freezeClear: freezeClear, waitingOver: waitingOver, clearStillValid: clearStillValid, pruneIds: pruneIds,
-    destinationOf: destinationOf
+    destinationOf: destinationOf, badgeFor: badgeFor, canCompose: canCompose
   };
   root.DeskLogic = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
