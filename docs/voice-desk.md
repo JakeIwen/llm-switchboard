@@ -45,7 +45,7 @@ conversation mode has not been qualified for driving.
 | `launcher.py`, `supervisor.py` | runtime | Start a kept Pi session through `claudepd`, adding desk flags only if enrolled at launch |
 | `screen.py`, `supervisor_state.py` | rules | Identify the complete development-channel dialog and its selected option, and report `startup_blocked` without restarting the session |
 | `tmux.py` | adapter | `Tmux.panes()` (pane id, pid, copy mode, by `@car_session`; raises when tmux fails rather than reading as no panes), `capture(..., check=True)`, and `send_enter_if(pane_id, PaneGuard)`, the server-side guarded Enter the acknowledgement uses |
-| `desk/static/` | page | The tablet page: plain HTML/CSS/JS, no build step, Chrome 119. Scripts, in load order: `text_rule.js` (the text rule's mirror), `desk_logic.js` (the tap flow's pure decisions), `conversation_vocabulary.js` (conversation mode's vocabulary, declared once: phases, commands, cues, end reasons, limits, Start's blockers), `conversation_logic.js` (conversation mode's pure reducer, which re-exports that vocabulary, and `startBlocker`), `sound_tracker.js` (the page's own sound: every utterance it submitted until its end, error or the page's cancel, the guard's start, uncertain periods and the overdue watchdog), `conversation_answers.js` (what the hub's answers to a conversation's calls establish, for the controller), `conversation_fetches.js` (the controller's fetches in flight, one of each kind, and which answer is still current), `conversation.js` (the conversation controller: every mic, sound and send effect, no DOM; `app.js` gives it every poll's snapshot, or calls its `pollUnusable()` when a poll was answered with anything but one, which cuts a closing cue), `conversation_view.js` (the Start control and the overlay; renders only), `page_audio.js` (the tap flow's own sound: reply speech, Play and one-shot Dictate, deferring to the controller), `startup.js` (the startup-blocked view), `hub_api.js` (the page's one way to the hub: `app.js`'s `api`, through which every call goes), `app.js` (wiring and the tap flow). Node tests in `tests/js/` |
+| `desk/static/` | page | The tablet page: plain HTML/CSS/JS, no build step, Chrome 119. Scripts, in load order: `text_rule.js` (the text rule's mirror), `desk_logic.js` (the tap flow's pure decisions), `conversation_vocabulary.js` (conversation mode's vocabulary, declared once: phases, commands, cues, end reasons, limits, Start's blockers), `conversation_logic.js` (conversation mode's pure reducer, which re-exports that vocabulary, and `startBlocker`), `sound_tracker.js` (the page's own sound: every utterance it submitted until its end, error or the page's cancel, the guard's start, uncertain periods and the overdue watchdog), `conversation_answers.js` (what the hub's answers to a conversation's calls establish, for the controller), `conversation_fetches.js` (the controller's fetches in flight, one of each kind, which answer is still current, and the two answers an end still listens for), `conversation.js` (the conversation controller: every mic, sound and send effect, no DOM; `app.js` gives it every status line the hub sends, on any call, as it arrives (its `hubStatus()`, the gate), every poll's snapshot, and the tap flow's refresh after a send), `conversation_view.js` (the Start control and the overlay; renders only), `page_audio.js` (the tap flow's own sound: reply speech, Play and one-shot Dictate, deferring to the controller), `startup.js` (the startup-blocked view), `hub_api.js` (the page's one way to the hub: `app.js`'s `api`, through which every call goes), `app.js` (wiring and the tap flow). Node tests in `tests/js/` |
 | `bin/desk-channel` | entry | Pinned channel server entry (`.venv/bin/python -I -B bin/desk-channel`) |
 | `bin/desk-adb-link` | entry | The USB reverse-forward loop for one tablet serial |
 | `systemd/llm-switchboard-desk.service`, `systemd/llm-switchboard-desk-adb.service` | unit | Hub and adb link user units (templated by `install.sh`) |
@@ -810,19 +810,70 @@ The page's own ends outside the list are silent too: hidden, closed or
 frozen, another session selected, the wake lock released or refused, no
 voice, the voice failed, and the desk may have heard its own speech.
 
-While the closing cue plays, the page still beats the grant and reads
-every poll, and any hub answer that is not its own call's validated
-success cuts the cue at once (sound uncertain) and releases the grant,
-with nothing spoken in its place. That holds on every call: the ticket
-and the send (the current ones, or the send an earlier end left open),
-whose success is a ticket or a send handed off or answered; the beat,
-whose success is the renewal of the grant it named, one given up on whose
-answer still arrives included; a grant request an earlier conversation
-gave up on, for which any answer cuts, even a grant, since it replaced
-the one this page holds; and the poll, which cuts with anything but a
-snapshot, or with a snapshot showing a target problem. A send POST that
-reaches its 20 s deadline with no answer leaves the cue to finish; a
-freshness lapse cuts it. `tests/test_desk_conversation_js.py` drives a
+**The gate.** Every call the page makes goes through one function,
+`hub_api.js`'s `api`, and every status line the hub sends reaches the
+controller's gate (`hubStatus` in `conversation.js`) the moment it
+arrives, before and whatever becomes of the body, on every call: the
+conversation's own (Start's snapshot, the grant request, the beat, the
+grant release, the ticket and the send), the poll, the tap flow's
+ticket, send and refresh, the startup listing and acknowledgement, a lock
+clear, enroll and unenroll, and pairing. It hears it whether or not the
+call's caller still wants the answer: abandoned, superseded or made for
+an earlier conversation. Only a 200 can be a call's success. Any other
+status cuts a closing cue that is playing (sound uncertain) and releases
+its grant, with nothing spoken in its place, and ends a running
+conversation, in any phase, silently and at once: the recognizer stopped,
+no cue, the grant released. So a hub hiccup on any call ends the
+conversation, and Start is tapped again. A response that never came (a
+network error, an abort before the headers) is no answer: freshness and
+the deadlines cover it. A non-200 to a grant request an earlier
+conversation gave up on proves it granted nothing, so Start stops waiting
+for it.
+
+A 200 is judged as before by the call that made it. While the closing cue
+plays, the page still beats the grant and reads every poll, and a 200 that
+is not its call's success cuts the cue too: a ticket answer with no
+ticket, a send answer neither handed off nor answered, a beat that does
+not renew the grant it named (one given up on included), any 200 to a
+grant request an earlier conversation gave up on (a grant in it replaced
+the one this page holds), and a snapshot that is missing or shows a
+target problem, whether a poll, an abandoned Start snapshot or the tap
+flow's refresh after a send brought it. A send POST that reaches its 20 s
+deadline with no answer leaves the cue to finish; a freshness lapse cuts
+it.
+
+**What the end says.** Ending at the status line, the page shows the
+status: "a hub call failed: HTTP <status>", or "this tablet is no longer
+paired" for a 401, which needs no body (the token is checked before
+anything else, and the page returns to pairing then). When the status is
+one of the conversation's own calls, the page keeps the conversation as it
+was at that status line, and when that call's body arrives its answer is
+replayed there, so the end then says what the call would have shown on
+its own: "not sent: <reason>" for a ticket refusal or a send refusal on
+the `Delivery` list below, "the hub refused the conversation: <reason>"
+for a grant request, "the hub ended the conversation" for a beat, "the
+hub could not be reached" for Start's snapshot, "delivery is unknown;
+check the session" for a send answer that settles nothing. A body that
+never arrives or can't be read settles nothing, so the status stays
+shown, and a send POST's stays "delivery is unknown" after it: the page
+never says "not sent" for what isn't proven. A status on any other call
+(the poll, the tap flow, the startup view, a release) stays shown as it
+is. A 401 to the send proves at its status line that the prompt was not
+sent ("this tablet is no longer paired; not sent: HTTP 401", its body's
+words in place of "HTTP 401" if they arrive), and neither a lost body nor
+the POST's deadline changes that.
+
+**The page trusts a 200 from its own hub.** The link is TLS to a leaf of
+the desk's own CA, and the page build is checked at pairing, so a 200
+whose body has a shape the hub can't produce (a whitespace-only ticket,
+an empty request id, a snapshot without a version, requests that are
+empty records, a reply of `{}`, a poll body of `{}`) is a hub bug or a
+hostile hub, which could do worse than mislead the page. The page checks a
+200 only for what its calls name as success (above, and the grant id's
+shape, the beat naming its grant, the snapshot checks behind a target
+problem) and validates no further shape.
+
+`tests/test_desk_conversation_js.py` drives a
 real hub into each refusal of the ticket, the send, the grant request and
 the beat, and feeds it to the page while the conversation runs and while
 the cue plays; every `Refusal` member is driven there or named as out of
@@ -859,8 +910,8 @@ session was selected; this tablet is no longer paired; the screen wake
 lock was released; the screen can't be kept awake; this tablet has no
 voice; nothing was heard for three minutes; the turn took over five
 minutes; the hub stopped answering; the hub ended the conversation; the
-hub refused the conversation: <reason>; the hub could not be reached;
-speech recognition failed (with the recognizer's error); speech
+hub refused the conversation: <reason>; the hub could not be reached; a
+hub call failed: HTTP <status> (see What the end says); speech recognition failed (with the recognizer's error); speech
 recognition did not start; speech recognition keeps stopping; the desk may
 have heard its own speech (see Late sound); the voice failed; the hub
 restarted; the session changed or went away; sends are off; voice confirm
@@ -874,9 +925,8 @@ the reason is followed by "; delivery is unknown; check the session" (for
 example "Conversation ended: the hub stopped answering; delivery is
 unknown; check the session."), since the prompt may have been delivered;
 nothing is retried. An end before any POST shows its cause alone. If that
-POST's own answer still comes (after the end, after the freshness
-deadline, or as the 401 that ended it), it settles the reason shown, after
-the same cause: "; the prompt was handed off; check the session for its
+POST's own answer still comes (after the end or after the freshness
+deadline), it settles the reason shown, after the same cause: "; the prompt was handed off; check the session for its
 reply" when the hub accepted it, or "; not sent: <reason>" when it refused
 it. That answer changes the reason only: the conversation stays ended,
 nothing is spoken, no mic opens, a closing cue still playing is cut unless
