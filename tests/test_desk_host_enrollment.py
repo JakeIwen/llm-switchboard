@@ -6,6 +6,7 @@ host, unenroll stopping routing at once, and Enroll now for a running Mac
 session, with a real hub driven by the test-side relay in tests/link_peer.py."""
 
 import json
+import logging
 import os
 from pathlib import Path
 import threading
@@ -20,7 +21,7 @@ from desk_fixtures import (
 from link_peer import MAC, MAC2, MACHINE, write_host_enrollment
 from test_desk_link_channels import SESSION_M, MacTargetCase
 
-from llm_switchboard.desk.enrollment import Enrollment
+from llm_switchboard.desk.enrollment import DeskSettings, Enrollment
 from llm_switchboard.session_names import MAX_TITLE_LEN
 from llm_switchboard.desk.link_candidates import Candidates, candidate_folder
 from llm_switchboard.desk.link_protocol import LinkType
@@ -231,6 +232,13 @@ def corrupt_keeping_stat_key(path: Path):
     return lambda: path.write_bytes(original)
 
 
+def wrong_shape(path: Path):
+    """Rewrites `path` as JSON that isn't an object; returns the restore."""
+    original = path.read_bytes()
+    path.write_text("[]")
+    return lambda: path.write_bytes(original)
+
+
 @unittest.skipIf(os.geteuid() == 0, "root reads a file whatever its mode")
 class RoutingReadTest(MacTargetCase):
     """Routing reads both enrollment files now, never content kept from an
@@ -360,6 +368,88 @@ class SendsReadTest(MacTargetCase):
                     self.assertEqual(self.switches(), (True, True, True))
         self.assertEqual(self.send_m()["state"], "handed_off")
         self.assertEqual(self.mac.expect(LinkType.EVENT)["chan"], 1)
+
+
+class FailedReadLogTest(unittest.TestCase):
+    """Every read of a policy file is fresh, but a file that stays broken
+    logs one warning when it breaks and one line when it reads again, per
+    file and per process, however often it is read in between: the hub
+    rereads every 5 s and at each handoff, the picker at each poll and the
+    supervisor at each launch, and the Pi's log is on an SD card."""
+
+    def setUp(self):
+        self.config = desk_config(make_home(self))
+        enroll_file(self.config, SESSION_A)
+        write_host_enrollment(self.config.remote_enrolled_file, {SESSION_M: MAC})
+        DeskSettings(self.config.settings_file).set_sends_enabled(True)
+
+    def readers(self):
+        """(file, a read as each of its readers makes it): the hub's long-lived
+        object and a new one per read, as the supervisor builds them."""
+        config = self.config
+        hub_enrollment, hub_hosts, hub_settings = (
+            Enrollment(config.enrolled_file), HostEnrollment(config.remote_enrolled_file, config.enrolled_file),
+            DeskSettings(config.settings_file))
+        return [
+            (config.enrolled_file, lambda: hub_enrollment.sessions()),
+            (config.enrolled_file, lambda: Enrollment(config.enrolled_file).is_enrolled(SESSION_A)),
+            (config.remote_enrolled_file, lambda: hub_hosts.hosts()),
+            (config.remote_enrolled_file,
+             lambda: HostEnrollment(config.remote_enrolled_file, config.enrolled_file).hosts()),
+            (config.settings_file, lambda: hub_settings.sends_enabled()),
+            (config.settings_file, lambda: hub_settings.voice_confirm_enabled()),
+        ]
+
+    def logged(self, reads) -> list[str]:
+        with self.assertLogs("llm_switchboard.desk", "INFO") as logs:
+            for read in reads:
+                read()
+            logging.getLogger("llm_switchboard.desk").info("end")
+        return [f"{r.levelname} {r.getMessage()}" for r in logs.records][:-1]
+
+    def test_a_file_that_stays_broken_logs_once_until_it_reads_again(self):
+        for breaker in (unreadable, corrupt_keeping_stat_key, wrong_shape):
+            for path in (self.config.enrolled_file, self.config.remote_enrolled_file, self.config.settings_file):
+                with self.subTest(how=breaker.__name__, file=path.name):
+                    if breaker is unreadable and os.geteuid() == 0:
+                        self.skipTest("root reads a file whatever its mode")
+                    reads = [read for file, read in self.readers() if file == path]
+                    restore = breaker(path)
+                    try:
+                        lines = self.logged(reads * 50)
+                    finally:
+                        restore()
+                    self.assertEqual(len(lines), 1, lines)
+                    self.assertRegex(lines[0], rf"^WARNING desk: {path.name} (unreadable|malformed)")
+                    self.assertEqual(self.logged(reads * 50), [f"INFO desk: {path.name} reads again"])
+                    # Breaking again is a new break, and logs again, once.
+                    restore = breaker(path)
+                    try:
+                        self.assertEqual(len(self.logged(reads * 3)), 1)
+                    finally:
+                        restore()
+                    self.logged(reads)
+
+
+class HubFailedReadLogTest(MacTargetCase):
+    def test_the_hub_s_rereads_of_a_file_that_stays_broken_log_once(self):
+        for path in (self.config.enrolled_file, self.config.remote_enrolled_file, self.config.settings_file):
+            with self.subTest(file=path.name):
+                self.hub.refresh_files()
+                restore = corrupt_keeping_stat_key(path)
+                try:
+                    with self.assertLogs("llm_switchboard.desk", "INFO") as logs:
+                        for _ in range(20):
+                            self.hub.recheck_now()
+                            self.hub.refresh_files()
+                finally:
+                    restore()
+                with self.assertLogs("llm_switchboard.desk", "INFO") as recovered:
+                    self.hub.refresh_files()
+                    self.hub.refresh_files()
+                self.assertEqual([r.levelname for r in logs.records if path.name in r.getMessage()], ["WARNING"])
+                self.assertEqual([r.getMessage() for r in recovered.records if path.name in r.getMessage()],
+                                 [f"desk: {path.name} reads again"])
 
 
 class EnrollEditTest(MacTargetCase):

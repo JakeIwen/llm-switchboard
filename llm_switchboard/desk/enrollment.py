@@ -12,7 +12,8 @@ mtime, size and inode as they were, and neither routing nor the sends switch
 may outlive a read that fails. An `llm-switchboard desk
 enroll|unenroll|sends|voice` from the CLI is seen at the hub's next recheck
 without a restart. Anything unreadable reads as "nothing enrolled" and
-"sends off": the desk fails closed. Editing is stricter: an
+"sends off": the desk fails closed, and says so once per break (below).
+Editing is stricter: an
 enroll or unenroll over an unreadable or malformed `enrolled.json` is
 refused (503) rather than overwriting the sessions it may still hold.
 `desk-settings.json` holds two switches, `sends_enabled` and
@@ -109,6 +110,39 @@ class FileLock:
                     os.close(fd)
 
 
+class FailedReads:
+    """One warning when a desk file's read starts failing (or fails in
+    another way) and one line when it reads again, per file and per process,
+    however often it is read in between. Every read is fresh, and the hub
+    rereads these files every 5 s and at each handoff, the picker at each
+    poll and the supervisor at each launch, each through readers of its own:
+    a warning per read would grow the Pi's log on its SD card without bound
+    while a file stays broken. Only files failing now are kept."""
+
+    def __init__(self):
+        self._failing: dict[str, str] = {}
+        self._lock = threading.Lock()
+
+    def failed(self, path: Path, how: str) -> None:
+        key = os.path.abspath(path)
+        with self._lock:
+            if self._failing.get(key) == how:
+                return
+            self._failing[key] = how
+        log.warning("desk: %s %s; treating it as empty", path.name, how)
+
+    def read(self, path: Path) -> None:
+        key = os.path.abspath(path)
+        with self._lock:
+            if self._failing.pop(key, None) is None:
+                return
+        log.info("desk: %s reads again", path.name)
+
+
+# One per process, not per reader: the supervisor builds a reader per launch.
+FAILED_READS = FailedReads()
+
+
 class ValidatedJson:
     """A JsonFile opened, bounded and validated on every read (see the module
     docstring for why nothing is kept from an earlier read)."""
@@ -129,11 +163,12 @@ class ValidatedJson:
         try:
             data = self._read_json()
         except (OSError, ValueError, RecursionError):
-            log.warning("desk: %s unreadable; treating it as empty", self.file.path.name)
+            FAILED_READS.failed(self.file.path, "unreadable")
             return {}, True
         if not isinstance(data, dict) or not self._valid(data):
-            log.warning("desk: %s malformed; treating it as empty", self.file.path.name)
+            FAILED_READS.failed(self.file.path, "malformed")
             return {}, True
+        FAILED_READS.read(self.file.path)
         return data, False
 
     def _read_json(self):

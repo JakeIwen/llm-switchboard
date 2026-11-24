@@ -459,7 +459,8 @@ class SettingsFileTest(unittest.TestCase):
         self.config.settings_file.write_text("{broken")
         with self.assertLogs("llm_switchboard.desk", "WARNING"):
             self.assertFalse(self.settings.voice_confirm_enabled())
-        with self.assertLogs("llm_switchboard.desk", "WARNING"):
+        # The same break was already reported once.
+        with self.assertNoLogs("llm_switchboard.desk", "WARNING"):
             self.settings.set_voice_confirm_enabled(True)
         self.assertEqual(self.content(), {"voice_confirm_enabled": True})
 

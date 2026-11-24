@@ -230,6 +230,9 @@ class EnrollmentFilesTest(unittest.TestCase):
         contents.append(json.dumps({"sessions": {SESSION_A: {"since": 1}}, "other": 1}))
         for content in contents:
             with self.subTest(content=content):
+                # A good read in between: a file that stays broken warns once.
+                self.config.enrolled_file.write_text(json.dumps({"sessions": {SESSION_A: {"since": 1}}}))
+                self.assertTrue(enrollment.is_enrolled(SESSION_A))
                 self.config.enrolled_file.write_text(content)
                 with self.assertLogs("llm_switchboard.desk", "WARNING"):
                     self.assertFalse(enrollment.is_enrolled(SESSION_A))
