@@ -102,18 +102,24 @@ function page(opts) {
         resolve({ status, text: () => Promise.resolve(data === undefined ? "" : JSON.stringify(data)) });
       };
       // The status line arrives; the body read waits until `arrive(data)`
-      // delivers the body, or `lose()` makes it fail, as on a connection cut
-      // mid-response, or an abort does, as in a browser.
+      // delivers the body (`raw(text)` delivers text as it is), or `lose()`
+      // makes it fail, as on a connection cut mid-response, or an abort
+      // does, as in a browser.
       call.headers = (status) => {
         call.done = true;
-        let lose, arrive;
+        let lose, deliver;
         const body = new Promise((res, rej) => {
           lose = () => rej(new Error("connection reset"));
-          arrive = (data) => res(data === undefined ? "" : JSON.stringify(data));
+          deliver = res;
         });
         call.loseBody = lose;
         resolve({ status, text: () => body });
-        return { lose: async () => { lose(); await settle(); }, arrive: async (data) => { arrive(data); await settle(); } };
+        const then = async (step) => { step(); await settle(); };
+        return {
+          lose: () => then(lose),
+          arrive: (data) => then(() => deliver(data === undefined ? "" : JSON.stringify(data))),
+          raw: (text) => then(() => deliver(text))
+        };
       };
       if (init.signal) init.signal.addEventListener("abort", () => {
         if (!h.honorAbort) return;

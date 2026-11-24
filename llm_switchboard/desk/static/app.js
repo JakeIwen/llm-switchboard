@@ -54,7 +54,8 @@
 
   // hub_api.js: every call the page makes, resolving {status, data}.
   var api = window.DeskHubApi.create({
-    token: function () { return token; }, session: function () { return session; }, onStatus: statusArrived
+    token: function () { return token; }, session: function () { return session; }, onStatus: statusArrived,
+    onBodyLost: bodyLost
   });
 
   // Every status line the hub sends, on any call, the moment it arrives:
@@ -67,6 +68,13 @@
     if (status === 401 && opts.auth !== false && startedIn === session) {
       dropToken("The hub no longer accepts this tablet.");
     }
+  }
+
+  // A 200 whose body never arrived, on any call: the conversation's one
+  // entry for it (conversation.js, bodyLost), before the caller's own code
+  // and whether or not that caller still wants the answer.
+  function bodyLost() {
+    try { conv.bodyLost(); } catch (e) { pageFault(e); }
   }
 
   function errorText(r) {
@@ -205,7 +213,8 @@
           try { applyState(r.data, startSeq); } catch (e) { pageFault(e); }
           once();
         } else {
-          // Any other status was the gate's, at its status line.
+          // Any other status was the gate's, at its status line, and a lost
+          // body bodyLost's; a 200 whose body holds no snapshot silences here.
           if (r.status === 200) conv.snapshot(null);
           retry();
         }

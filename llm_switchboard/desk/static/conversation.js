@@ -15,7 +15,8 @@
 //   DeskConversation.browserEnv(window) -> env from the page's own objects.
 //     api(method, path, body, {signal, call}) -> Promise<{status, data}>,
 //       rejecting when no response came (hub_api.js, through app.js, which
-//       passes every status line to hubStatus() and drops the token on a 401).
+//       passes every status line to hubStatus(), every 200 whose body was
+//       lost to bodyLost(), and drops the token on a 401).
 //     env: {Recognition, synth, Utterance, setTimeout, clearTimeout, now,
 //       wakeLock, AbortController}; `now` is a monotonic ms clock
 //       (performance.now), `wakeLock` is navigator.wakeLock or null.
@@ -42,6 +43,8 @@
 //   hubStatus(status, call) Every status line the hub sends, on any call
 //                     (`call` from that call's opts), before its body: the
 //                     gate (see hubStatus below).
+//   bodyLost()        A 200 whose body never arrived, on any call, before
+//                     the call's own handling: it silences (see bodyLost).
 //   endTap()          The full-screen End conversation control; also stops
 //                     the closing cue.
 //   hidden()          The page was hidden (visibilitychange to hidden).
@@ -267,6 +270,15 @@
       if (active()) dispatch({ type: EV.END, reason: reason, silent: true });
     }
 
+    // A 200 whose body read failed (hub_api.js), on any call the page makes,
+    // current or abandoned, this pairing's or an earlier one's, before that
+    // call's own handling: no body was received, so the 200 established
+    // nothing, and it silences. A send's own answer, which follows, still
+    // settles what became of the prompt (late): delivery unknown.
+    function bodyLost() {
+      silence(REASON.UNUSABLE);
+    }
+
     // Every snapshot the page receives from the hub, whichever call brought
     // it (`from`, a SNAPSHOT_FROM): a 200 with none silences; a running
     // conversation's reducer takes one in version order, an older one or
@@ -441,9 +453,9 @@
       var id = f.id;
       f.answer.then(function (r) {
         var ok = A.renewed(r, named);
-        // A beat given up on can still answer (an abort while its body is
-        // read resolves with no body): it renews nothing, and a 200 that
-        // renews nothing silences the page.
+        // A beat given up on can still answer: it renews nothing, and a 200
+        // that renews nothing silences the page (one whose body was lost
+        // already has, at bodyLost).
         if (!settle(FETCH.BEAT, id)) {
           if (r.status === 200 && !ok) silence(REASON.GRANT_LOST);
           return late(id, { type: EV.END, reason: REASON.GRANT_LOST }, r);
@@ -743,7 +755,7 @@
 
     return {
       start: start, canStart: canStart, blocker: blocker, snapshot: snapshot, track: track, view: view, holds: holds,
-      soundClear: soundClear, stopPageSpeech: stopPageSpeech, hubStatus: hubStatus,
+      soundClear: soundClear, stopPageSpeech: stopPageSpeech, hubStatus: hubStatus, bodyLost: bodyLost,
       endTap: function () { endIfActive(REASON.END_TAPPED); },
       hidden: function () { endIfActive(REASON.HIDDEN); },
       unpaired: function () {

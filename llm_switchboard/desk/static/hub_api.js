@@ -7,15 +7,19 @@
 
   function NetworkError(message) { this.message = message; }
 
-  // o: {token(), session(), onStatus(status, opts, session)}. `onStatus`
-  // hears each call's status line the moment it arrives, before and
-  // whatever becomes of the body, with the call's own opts and the
-  // session() it started in.
+  // o: {token(), session(), onStatus(status, opts, session),
+  // onBodyLost(opts, session)}. `onStatus` hears each call's status line the
+  // moment it arrives, before and whatever becomes of the body, with the
+  // call's own opts and the session() it started in. `onBodyLost` hears a
+  // 200 whose body read failed (nothing usable was received, whether the
+  // connection broke or the page aborted the read), before the caller does:
+  // that 200 did not establish its call's success.
   //
   // api(method, path, body, opts) resolves {status, data} and rejects with
   // NetworkError when no response came. The status line is the hub's answer
   // even if the body never arrives: a body that can't be read or parsed
   // resolves with data null (answered, body unavailable), never as no answer.
+  // A body that was received but is empty or not JSON is the caller's to judge.
   function create(o) {
     return function api(method, path, body, opts) {
       opts = opts || {};
@@ -31,7 +35,10 @@
         o.onStatus(res.status, opts, started);
         return res.text().then(function (raw) {
           try { return raw ? JSON.parse(raw) : null; } catch (e) { return null; }
-        }, function () { return null; }).then(function (data) {
+        }, function () {
+          if (res.status === 200) o.onBodyLost(opts, started);
+          return null;
+        }).then(function (data) {
           return { status: res.status, data: data };
         });
       }, function () {
