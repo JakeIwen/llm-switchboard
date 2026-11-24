@@ -20,7 +20,10 @@ from ..host_protocol import HOST_PATTERN
 from ..session_id import is_session_id
 from ..session_names import MAX_TITLE_LEN
 from .channel import UndeliverableReason
-from .model import EPOCH_BYTES, HOST, ChannelProcess, ReplyRefusal, is_request_id, valid_channel_identity
+from .model import (
+    EPOCH_BYTES, HOST, MACHINE_PATTERN, ChannelProcess, ReplyRefusal, is_request_id,
+    valid_channel_identity,
+)
 from .shallow_json import loads_shallow
 
 LINK_VERSIONS = (1,)
@@ -36,7 +39,6 @@ MAX_COUNTER = 2**31 - 1
 MAX_EXACT_INT = 2**53
 MAX_CWD_LENGTH = 4096
 MAX_SIGNATURE_BYTES = 4 * 1024
-MACHINE_HEX_LENGTH = 32
 NONCE_BYTES = 32
 LINK_ID_BYTES = 16
 
@@ -232,7 +234,6 @@ def undeliverable_code(reason) -> UndeliverableCode:
 
 _HOST = re.compile(HOST_PATTERN)
 _LINK_ID = re.compile(rf"[0-9a-f]{{{2 * LINK_ID_BYTES}}}")
-_MACHINE = re.compile(rf"[0-9a-f]{{{MACHINE_HEX_LENGTH}}}")
 _EPOCH = re.compile(rf"[0-9a-f]{{{2 * EPOCH_BYTES}}}")
 _NONCE = re.compile(rf"[0-9a-f]{{{2 * NONCE_BYTES}}}")
 _RELAY_BUILD = re.compile(r"[0-9a-f]{0,40}")
@@ -261,7 +262,7 @@ def valid_link_host(value) -> bool:
 
 
 def valid_machine(value) -> bool:
-    return isinstance(value, str) and _MACHINE.fullmatch(value) is not None
+    return isinstance(value, str) and MACHINE_PATTERN.fullmatch(value) is not None
 
 
 def valid_epoch(value) -> bool:

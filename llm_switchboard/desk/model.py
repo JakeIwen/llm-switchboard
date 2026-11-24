@@ -8,11 +8,13 @@ from dataclasses import dataclass
 from enum import Enum, StrEnum
 import re
 
+from ..host_protocol import HOST_PATTERN
 from .refusals import Refusal
 
-# Phase 1 has one host; the Mac relay adds another in phase 2.
+# The desk's fixed name for the Pi's own sessions; a Mac's sessions carry
+# its host name (v1's host-name rule) and reach the hub over the Mac link.
 HOST = "pi"
-KNOWN_HOSTS = frozenset({HOST})
+_HOST_NAME = re.compile(HOST_PATTERN)
 
 EPOCH_BYTES = 16
 
@@ -104,6 +106,16 @@ SHA256_HEX_PATTERN = re.compile(r"[0-9a-f]{64}")
 # A channel process's start time: /proc/<pid>/stat field 22 (clock ticks since boot).
 CHANNEL_START_PATTERN = re.compile(r"[0-9]{1,20}")
 MAX_PID = 2**31 - 1
+# A Mac lock's binding to the link it was handed over: the link key's
+# OpenSSH fingerprint (SHA-256, unpadded base64) and the hello's machine id.
+LINK_KEY_PATTERN = re.compile(r"SHA256:[A-Za-z0-9+/]{43}")
+MACHINE_HEX_LENGTH = 32
+MACHINE_PATTERN = re.compile(rf"[0-9a-f]{{{MACHINE_HEX_LENGTH}}}")
+
+
+def is_desk_host(value) -> bool:
+    """`pi` (the Pi's own sessions) or a Mac's host name."""
+    return isinstance(value, str) and (value == HOST or _HOST_NAME.fullmatch(value) is not None)
 
 
 def valid_channel_identity(pid, start) -> bool:
@@ -210,6 +222,24 @@ class Registration:
     identity: object
     # A request handed to this connection was answered through `reply`.
     replied: bool = False
+    # The session's host: HOST for a Pi channel, the link's host for a Mac one.
+    host: str = HOST
+
+
+@dataclass(frozen=True)
+class RemoteIdentity:
+    """A Mac channel's identity as its link reported it at `register`: the
+    `Registration.identity` of a remote registration (a Pi channel's is a
+    peer.PeerIdentity). The relay checked it on the Mac; the hub rechecks
+    only that `link_id` is still its host's live link."""
+    host: str
+    link_id: str
+    chan: int
+    channel_pid: int
+    channel_start: str
+    claude_pid: int
+    claude_start: str
+    session_id: str
 
 
 @dataclass
@@ -240,6 +270,7 @@ class Request:
     # checked again at handoff.
     confirm: ConfirmMode = ConfirmMode.TAP
     grant_id: str | None = None
+    host: str = HOST
 
 
 @dataclass(frozen=True)
@@ -267,11 +298,21 @@ class Lock:
     since: float
     channel_pid: int
     channel_start: str
+    # Only for a lock handed over the Mac link (any host but HOST): the
+    # link's verified key fingerprint and machine id, so presence about it
+    # is taken only from a link with both (docs/voice-desk.md, "Locks bound
+    # to the Mac that wrote them"). None for a Pi lock.
+    link_key: str | None = None
+    machine: str | None = None
 
     def to_json(self) -> dict:
-        return {"lock_id": self.lock_id, "host": self.host, "session_id": self.session_id,
+        data = {"lock_id": self.lock_id, "host": self.host, "session_id": self.session_id,
                 "request_id": self.request_id, "ticket_hash": self.ticket_hash, "since": self.since,
                 "channel_pid": self.channel_pid, "channel_start": self.channel_start}
+        if self.host != HOST:
+            data["link_key"] = self.link_key
+            data["machine"] = self.machine
+        return data
 
 
 @dataclass

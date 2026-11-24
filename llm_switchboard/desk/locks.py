@@ -9,6 +9,12 @@ as added survives a crash. Anything unexpected (unreadable, over
 `MAX_LOCK_FILE_BYTES`, corrupt, an entry with a malformed field, over the
 cap, unwritable) raises `LockStoreError`; the hub then refuses every send
 rather than guess.
+
+A `pi` lock has exactly phase 1's fields; a lock for any other host (handed
+over the Mac link) has those plus `link_key` and `machine`. A phase 1 hub
+reads such a lock as a corrupt file and refuses every send: it fails closed.
+`inspect_lock_file` reads the file without any store, for the fence and the
+offline checks.
 """
 
 import contextlib
@@ -18,18 +24,23 @@ import os
 from pathlib import Path
 
 from ..session_id import is_session_id
+from .bounded_read import read_bounded
 from .model import (
-    CHANNEL_START_PATTERN, KNOWN_HOSTS, LOCK_ID_PATTERN, MAX_LOCK_FILE_BYTES, MAX_LOCKS, MAX_PID, SHA256_HEX_PATTERN,
-    Lock, LockStoreError, is_request_id,
+    CHANNEL_START_PATTERN, HOST, LINK_KEY_PATTERN, LOCK_ID_PATTERN, MACHINE_PATTERN, MAX_LOCK_FILE_BYTES, MAX_LOCKS,
+    MAX_PID, SHA256_HEX_PATTERN, Lock, LockStoreError, is_desk_host, is_request_id,
 )
 from .shallow_json import loads_shallow
 
-__all__ = ["LockStore", "LockStoreError"]
+__all__ = ["LockStore", "LockStoreError", "inspect_lock_file"]
 
 FILE_VERSION = 1
 # {version, locks: [{...}]} nests three deep.
 MAX_LOCK_FILE_DEPTH = 4
 _STRING_FIELDS = ("lock_id", "host", "session_id", "request_id", "ticket_hash", "channel_start")
+_PI_FIELDS = frozenset({*_STRING_FIELDS, "since", "channel_pid"})
+# What a lock handed over the Mac link adds.
+_LINK_FIELDS = ("link_key", "machine")
+_REMOTE_FIELDS = _PI_FIELDS | set(_LINK_FIELDS)
 
 
 class LockStore:
@@ -146,8 +157,29 @@ def _parse(raw: bytes, max_locks: int) -> list[Lock]:
     return locks
 
 
+def inspect_lock_file(path: Path, max_locks: int = MAX_LOCKS) -> list[Lock]:
+    """The locks in the file at `path`, read without any LockStore (so it can
+    run beside the hub's live store, changing no list and no broken flag): a
+    missing file is empty; a FIFO, a symlink, any other non-regular file, an
+    unreadable, oversize or undecodable file raises LockStoreError at once
+    (one non-blocking open, no link followed, at most MAX_LOCK_FILE_BYTES)."""
+    try:
+        raw = read_bounded(Path(path), MAX_LOCK_FILE_BYTES)
+    except OSError as exc:
+        raise LockStoreError("lock file unreadable") from exc
+    if raw is None:
+        return []
+    try:
+        return _parse(raw, max_locks)
+    except ValueError as exc:
+        raise LockStoreError(f"lock file corrupt: {exc}") from exc
+
+
 def _parse_lock(entry) -> Lock:
-    if not isinstance(entry, dict) or set(entry) != {*_STRING_FIELDS, "since", "channel_pid"}:
+    if not isinstance(entry, dict):
+        raise ValueError("entry not a lock")
+    expected = _PI_FIELDS if entry.get("host") == HOST else _REMOTE_FIELDS
+    if set(entry) != expected:
         raise ValueError("entry not a lock")
     since = entry["since"]
     if isinstance(since, bool) or not isinstance(since, (int, float)):
@@ -156,7 +188,8 @@ def _parse_lock(entry) -> Lock:
         since = float(since)
     except OverflowError:
         raise ValueError("bad since") from None
-    lock = Lock(since=since, channel_pid=entry["channel_pid"], **{name: entry[name] for name in _STRING_FIELDS})
+    lock = Lock(since=since, channel_pid=entry["channel_pid"],
+                **{name: entry[name] for name in (*_STRING_FIELDS, *_LINK_FIELDS) if name in entry})
     _check_lock(lock)
     return lock
 
@@ -165,7 +198,7 @@ def _check_lock(lock: Lock) -> None:
     """Every field has the shape the hub writes; raises ValueError naming the first bad one."""
     checks = {
         "lock_id": lambda v: isinstance(v, str) and LOCK_ID_PATTERN.fullmatch(v),
-        "host": lambda v: isinstance(v, str) and v in KNOWN_HOSTS,
+        "host": is_desk_host,
         "session_id": lambda v: isinstance(v, str) and is_session_id(v),
         "request_id": is_request_id,
         "ticket_hash": lambda v: isinstance(v, str) and SHA256_HEX_PATTERN.fullmatch(v),
@@ -173,6 +206,9 @@ def _check_lock(lock: Lock) -> None:
         "channel_pid": lambda v: isinstance(v, int) and not isinstance(v, bool) and 0 < v <= MAX_PID,
         "channel_start": lambda v: isinstance(v, str) and CHANNEL_START_PATTERN.fullmatch(v),
     }
+    remote = lock.host != HOST
+    checks["link_key"] = lambda v: (isinstance(v, str) and LINK_KEY_PATTERN.fullmatch(v)) if remote else v is None
+    checks["machine"] = lambda v: (isinstance(v, str) and MACHINE_PATTERN.fullmatch(v)) if remote else v is None
     for name, valid in checks.items():
         if not valid(getattr(lock, name)):
             raise ValueError(f"bad {name}")
