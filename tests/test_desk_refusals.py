@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 import unittest
 
-from llm_switchboard.desk.refusals import OWNERSHIP_KEPT, Ownership, Refusal
+from llm_switchboard.desk.refusals import NOT_SENT, OWNERSHIP_KEPT, Delivery, Ownership, Refusal
 from llm_switchboard.desk.text_rule import check_text
 
 DESK = Path(__file__).resolve().parents[1] / "llm_switchboard" / "desk"
@@ -108,9 +108,11 @@ class RefusalVocabularyTests(unittest.TestCase):
     def test_every_refusal_states_its_ownership_class(self):
         self.assertTrue(all(isinstance(r.ownership, Ownership) for r in Refusal))
         self.assertEqual(OWNERSHIP_KEPT, {r for r in Refusal if r.ownership is Ownership.INTACT})
+        self.assertTrue(all(isinstance(r.delivery, Delivery) for r in Refusal))
+        self.assertEqual(NOT_SENT, {r for r in Refusal if r.delivery is Delivery.NOT_SENT})
         # A member added without its class doesn't import.
         source = (DESK / "refusals.py").read_text(encoding="utf-8")
-        anchor = '    WRONG_HOST = "wrong host", Ownership.UNPROVEN\n'
+        anchor = '    NOT_FOUND = "not found", Ownership.UNPROVEN\n'
         self.assertIn(anchor, source)
         with self.assertRaises(TypeError):
             exec(compile(source.replace(anchor, anchor + '    NEW_REFUSAL = "new refusal"\n'), "refusals.py", "exec"), {})

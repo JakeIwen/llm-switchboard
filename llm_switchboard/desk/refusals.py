@@ -14,7 +14,10 @@ enrollment.py's refusals are those of the enroll routes.
 
 Every member also states its `Ownership` class, which the conversation page
 acts on (docs/voice-desk.md, "The closing cue after a refusal"); a member
-without one fails at import.
+without one fails at import. A refusal the send route gives before it writes
+the event to the channel also states `Delivery.NOT_SENT`, which the
+conversation page's send outcome reads; every other member is
+`Delivery.UNPROVEN`.
 """
 
 from enum import Enum, StrEnum
@@ -36,71 +39,95 @@ class Ownership(Enum):
     UNPROVEN = "unproven"
 
 
+class Delivery(Enum):
+    """What a refusal of a send (`POST /desk/api/send`, hub.py's `Hub.send`)
+    shows about the prompt.
+
+    NOT_SENT: the send route gives this refusal only before the event is
+    written to the channel (the HTTP layer's checks, `begin_send`, the
+    dispatch recheck and `hand_off`), so nothing was handed off. UNPROVEN:
+    anything else, including a refusal that could follow a write that may
+    have reached the channel, one that says nothing about an earlier attempt,
+    and every refusal the send route never gives.
+    """
+
+    NOT_SENT = "not sent"
+    UNPROVEN = "unproven"
+
+
+_NOT_SENT = Delivery.NOT_SENT
+
+
 class Refusal(StrEnum):
-    def __new__(cls, reason: str, ownership: Ownership):
+    def __new__(cls, reason: str, ownership: Ownership, delivery: Delivery = Delivery.UNPROVEN):
         member = str.__new__(cls, reason)
         member._value_ = reason
         member.ownership = ownership
+        member.delivery = delivery
         return member
 
     # -- every request -----------------------------------------------------
-    WRONG_HOST = "wrong host", Ownership.UNPROVEN
-    WRONG_ORIGIN = "wrong origin", Ownership.UNPROVEN
+    # On the send route the HTTP layer's checks run before Hub.send is called.
+    WRONG_HOST = "wrong host", Ownership.UNPROVEN, _NOT_SENT
+    WRONG_ORIGIN = "wrong origin", Ownership.UNPROVEN, _NOT_SENT
     NOT_FOUND = "not found", Ownership.UNPROVEN
-    BAD_REQUEST = "bad request", Ownership.UNPROVEN
-    METHOD_NOT_ALLOWED = "method not allowed", Ownership.UNPROVEN
-    NOT_JSON = "content type must be application/json", Ownership.UNPROVEN
-    LENGTH_REQUIRED = "length required", Ownership.UNPROVEN
-    BODY_TOO_LARGE = "body too large", Ownership.UNPROVEN
-    TRUNCATED_BODY = "truncated body", Ownership.UNPROVEN
-    BAD_JSON = "bad json", Ownership.UNPROVEN
+    BAD_REQUEST = "bad request", Ownership.UNPROVEN, _NOT_SENT
+    METHOD_NOT_ALLOWED = "method not allowed", Ownership.UNPROVEN, _NOT_SENT
+    NOT_JSON = "content type must be application/json", Ownership.UNPROVEN, _NOT_SENT
+    LENGTH_REQUIRED = "length required", Ownership.UNPROVEN, _NOT_SENT
+    BODY_TOO_LARGE = "body too large", Ownership.UNPROVEN, _NOT_SENT
+    TRUNCATED_BODY = "truncated body", Ownership.UNPROVEN, _NOT_SENT
+    BAD_JSON = "bad json", Ownership.UNPROVEN, _NOT_SENT
+    # An unexpected exception, which can come after the channel write.
     INTERNAL_ERROR = "internal error", Ownership.UNPROVEN
-    UNAUTHORIZED = "unauthorized", Ownership.UNPROVEN
+    UNAUTHORIZED = "unauthorized", Ownership.UNPROVEN, _NOT_SENT
     BAD_AFTER = "bad after", Ownership.UNPROVEN
 
     # -- tickets and sends -------------------------------------------------
     BAD_SESSION_ID = "bad session_id", Ownership.UNPROVEN
     BAD_GENERATION_OR_EPOCH = "bad generation or epoch", Ownership.UNPROVEN
-    STALE_EPOCH = "stale epoch", Ownership.UNPROVEN
-    STALE_GENERATION = "stale generation", Ownership.UNPROVEN
-    NOT_REGISTERED = "not registered", Ownership.UNPROVEN
-    AMBIGUOUS = "ambiguous", Ownership.UNPROVEN
-    NOT_ENROLLED = "not enrolled", Ownership.UNPROVEN
+    STALE_EPOCH = "stale epoch", Ownership.UNPROVEN, _NOT_SENT
+    STALE_GENERATION = "stale generation", Ownership.UNPROVEN, _NOT_SENT
+    NOT_REGISTERED = "not registered", Ownership.UNPROVEN, _NOT_SENT
+    AMBIGUOUS = "ambiguous", Ownership.UNPROVEN, _NOT_SENT
+    NOT_ENROLLED = "not enrolled", Ownership.UNPROVEN, _NOT_SENT
     # Raised by begin_send and hand_off before the registration is looked at.
-    SENDS_OFF = "sends off", Ownership.UNPROVEN
-    LOCK_FILE_FULL = "lock file full", Ownership.UNPROVEN
+    SENDS_OFF = "sends off", Ownership.UNPROVEN, _NOT_SENT
+    LOCK_FILE_FULL = "lock file full", Ownership.UNPROVEN, _NOT_SENT
     # issue_ticket: after the epoch, routing, single registration and
     # generation checks; begin_send: after those and the grant check.
-    BUSY = "busy", Ownership.INTACT
+    BUSY = "busy", Ownership.INTACT, _NOT_SENT
     # issue_ticket only, after its busy check.
     TICKET_TABLE_FULL = "ticket table full", Ownership.INTACT
-    BAD_TICKET = "bad ticket", Ownership.UNPROVEN
-    UNKNOWN_TICKET = "unknown ticket", Ownership.UNPROVEN
-    TICKET_EXPIRED = "ticket expired", Ownership.UNPROVEN
+    BAD_TICKET = "bad ticket", Ownership.UNPROVEN, _NOT_SENT
+    UNKNOWN_TICKET = "unknown ticket", Ownership.UNPROVEN, _NOT_SENT
+    TICKET_EXPIRED = "ticket expired", Ownership.UNPROVEN, _NOT_SENT
+    # Before this attempt's write, but an earlier send with the same ticket
+    # may have been handed off.
     TICKET_ALREADY_USED = "ticket already used", Ownership.UNPROVEN
     # begin_send only, after its busy check.
-    TOO_MANY_OUTSTANDING = "too many outstanding requests", Ownership.INTACT
-    REQUEST_NOT_PENDING = "request not pending", Ownership.UNPROVEN
-    TARGET_CHANGED_NOT_SENT = "target changed; not sent", Ownership.UNPROVEN
-    CHANNEL_IDENTITY_UNUSABLE = "channel identity unusable; not sent", Ownership.UNPROVEN
+    TOO_MANY_OUTSTANDING = "too many outstanding requests", Ownership.INTACT, _NOT_SENT
+    REQUEST_NOT_PENDING = "request not pending", Ownership.UNPROVEN, _NOT_SENT
+    TARGET_CHANGED_NOT_SENT = "target changed; not sent", Ownership.UNPROVEN, _NOT_SENT
+    CHANNEL_IDENTITY_UNUSABLE = "channel identity unusable; not sent", Ownership.UNPROVEN, _NOT_SENT
 
     # -- the text rule (text_rule.py; static/text_rule.js mirrors it) -------
     # begin_send checks the text before the ticket, the grant and the registration.
-    EMPTY = "empty", Ownership.UNPROVEN
-    TOO_LONG = "too long", Ownership.UNPROVEN
-    INVALID_CHARACTER = "invalid character", Ownership.UNPROVEN
-    OUTER_WHITESPACE = "leading or trailing whitespace", Ownership.UNPROVEN
-    CONTROL_CHARACTER = "control character", Ownership.UNPROVEN
-    COMMAND_CHARACTER = "starts with a command character", Ownership.UNPROVEN
+    EMPTY = "empty", Ownership.UNPROVEN, _NOT_SENT
+    TOO_LONG = "too long", Ownership.UNPROVEN, _NOT_SENT
+    INVALID_CHARACTER = "invalid character", Ownership.UNPROVEN, _NOT_SENT
+    OUTER_WHITESPACE = "leading or trailing whitespace", Ownership.UNPROVEN, _NOT_SENT
+    CONTROL_CHARACTER = "control character", Ownership.UNPROVEN, _NOT_SENT
+    COMMAND_CHARACTER = "starts with a command character", Ownership.UNPROVEN, _NOT_SENT
 
     # -- conversation grants (grants.py) -------------------------------------
-    BAD_CONFIRM = "bad confirm", Ownership.UNPROVEN
+    BAD_CONFIRM = "bad confirm", Ownership.UNPROVEN, _NOT_SENT
     # begin_send checks the voice gate before the grant and the registration.
-    VOICE_OFF = "voice confirm off", Ownership.UNPROVEN
-    GRANT_NOT_CURRENT = "conversation grant not current", Ownership.UNPROVEN
-    GRANT_WRONG_TARGET = "conversation grant not for this target", Ownership.UNPROVEN
+    VOICE_OFF = "voice confirm off", Ownership.UNPROVEN, _NOT_SENT
+    GRANT_NOT_CURRENT = "conversation grant not current", Ownership.UNPROVEN, _NOT_SENT
+    GRANT_WRONG_TARGET = "conversation grant not for this target", Ownership.UNPROVEN, _NOT_SENT
     # After the grant check, but before the registration is looked at.
-    VOICE_TEXT_TOO_LONG = "too long for a voice send", Ownership.UNPROVEN
+    VOICE_TEXT_TOO_LONG = "too long for a voice send", Ownership.UNPROVEN, _NOT_SENT
     ANOTHER_PAGE = "another page is paired; revoke its token first", Ownership.UNPROVEN
     TARGET_CHANGED = "target changed", Ownership.UNPROVEN
     CONVERSATION_LIVE = "a conversation is in progress", Ownership.UNPROVEN
@@ -134,3 +161,6 @@ class Refusal(StrEnum):
 # The refusals after which the conversation page may speak its closing cue;
 # static/conversation_logic.js's OWNERSHIP_KEPT must equal it.
 OWNERSHIP_KEPT = frozenset(r for r in Refusal if r.ownership is Ownership.INTACT)
+# The send refusals that prove nothing was handed off;
+# static/conversation_answers.js's NOT_SENT must equal it.
+NOT_SENT = frozenset(r for r in Refusal if r.delivery is Delivery.NOT_SENT)

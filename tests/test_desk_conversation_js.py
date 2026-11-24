@@ -19,7 +19,7 @@ from llm_switchboard.desk.locks import LockStore
 from llm_switchboard.desk.model import (
     MAX_TICKETS, MAX_VOICE_TEXT_BYTES, ConfirmMode, DeskError, RegistrationState, RequestState,
 )
-from llm_switchboard.desk.refusals import OWNERSHIP_KEPT, Ownership, Refusal
+from llm_switchboard.desk.refusals import NOT_SENT, OWNERSHIP_KEPT, Delivery, Ownership, Refusal
 
 ROOT = Path(__file__).resolve().parents[1]
 STATIC = ROOT / "llm_switchboard" / "desk" / "static"
@@ -29,11 +29,12 @@ EXPORTS = """
 const L = require(process.argv[1]);
 const D = require(process.argv[2]);
 const C = require(process.argv[3]);
+const A = require(process.argv[4]);
 process.stdout.write(JSON.stringify({
   paths: C.PATH,
   confirm: L.CONFIRM, request: L.REQUEST_STATE, registration: L.REGISTRATION, limits: L.LIMITS,
   tooLong: L.draftProblem("a".repeat(L.LIMITS.MAX_DRAFT_BYTES + 1)), refusals: D.REFUSALS,
-  ownershipKept: L.OWNERSHIP_KEPT,
+  ownershipKept: L.OWNERSHIP_KEPT, notSent: A.NOT_SENT,
 }));
 """
 
@@ -57,7 +58,8 @@ class ConversationMirrorTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         proc = subprocess.run([node(), "-e", EXPORTS, str(STATIC / "conversation_logic.js"),
-                               str(STATIC / "desk_logic.js"), str(STATIC / "conversation.js")],
+                               str(STATIC / "desk_logic.js"), str(STATIC / "conversation.js"),
+                               str(STATIC / "conversation_answers.js")],
                               capture_output=True, text=True, timeout=60, check=False)
         if proc.returncode != 0:
             raise AssertionError(proc.stderr)
@@ -94,12 +96,15 @@ class ConversationMirrorTests(unittest.TestCase):
                        Refusal.NOT_REGISTERED, Refusal.AMBIGUOUS, Refusal.NOT_ENROLLED, Refusal.UNAUTHORIZED):
             self.assertIs(reason.ownership, Ownership.UNPROVEN, reason)
 
-    def test_voice_send_refusals_are_definitive_on_the_page(self):
-        # A send refused for these reasons was never handed off, so the page
-        # may say "not sent"; any reason missing here reads as "unknown".
-        for reason in (grants.VOICE_OFF, grants.GRANT_NOT_CURRENT, grants.GRANT_WRONG_TARGET,
-                       grants.VOICE_TEXT_TOO_LONG, grants.BAD_CONFIRM):
-            self.assertIn(reason, self.js["refusals"])
+    def test_the_voice_flow_reads_not_sent_from_exactly_the_hub_s_delivery_class(self):
+        self.assertEqual(sorted(self.js["notSent"]), sorted(NOT_SENT))
+        for reason in (Refusal.NOT_ENROLLED, Refusal.CHANNEL_IDENTITY_UNUSABLE, Refusal.REQUEST_NOT_PENDING,
+                       grants.VOICE_OFF, grants.GRANT_NOT_CURRENT, grants.BAD_CONFIRM):
+            self.assertIs(reason.delivery, Delivery.NOT_SENT, reason)
+        # One that can follow the channel write, and one that says nothing
+        # of an earlier send with the same ticket.
+        for reason in (Refusal.INTERNAL_ERROR, Refusal.TICKET_ALREADY_USED):
+            self.assertIs(reason.delivery, Delivery.UNPROVEN, reason)
 
 
 def _identity(pid: int) -> FakeIdentity:
@@ -125,9 +130,15 @@ class _Hub:
         return self.state.issue_ticket(SESSION_A, self.generation if generation is None else generation,
                                        self.state.epoch if epoch is None else epoch)["ticket"]
 
-    def reregister(self) -> int:
+    def reregister(self, identity=None) -> int:
         self.state.drop_registration(1)
-        return self.state.register(1, SESSION_A, _identity(300))
+        return self.state.register(1, SESSION_A, identity or _identity(300))
+
+    def unusable_identity(self) -> None:
+        """The target comes back with a channel identity a lock can't name,
+        and this page's grant follows it."""
+        self.generation = self.reregister(FakeIdentity(0, "", 301, "2", SESSION_A))
+        self.grant = self.state.grant_conversation(self.token, SESSION_A, self.generation, self.state.epoch)["grant"]
 
     def send(self, ticket, text="x", between=None):
         """The hub's send route: begin_send, then the handoff."""
@@ -182,6 +193,7 @@ HUB_REFUSALS = {
     "send, grant not current": ("send", _send_after(lambda h: h.state.end_grant(h.token, h.grant))),
     "send, grant for another target": ("send", lambda h: h.send(h.ticket(generation=h.reregister()))),
     "send, not enrolled": ("send", _send_after(lambda h: h.state.set_enrolled([]))),
+    "send, channel identity unusable": ("send", lambda h: (h.unusable_identity(), h.send(h.ticket()))),
     "send, busy": ("send", _busy_send),
     "send, sends off": ("send", _send_after(lambda h: h.state.set_sends_enabled(False))),
     "send, voice confirm off": ("send", _send_after(lambda h: h.state.set_voice_enabled(False))),
@@ -190,32 +202,63 @@ HUB_REFUSALS = {
 }
 
 
+def _refused(case: unittest.TestCase, names) -> list[dict]:
+    """Each named entry of HUB_REFUSALS run against a fresh real hub."""
+    cases = []
+    for name in names:
+        path, refuse = HUB_REFUSALS[name]
+        with case.assertRaises(DeskError, msg=name) as caught:
+            refuse(_Hub(case))
+        reason = caught.exception.reason
+        case.assertIsInstance(reason, Refusal, name)
+        cases.append({"name": name, "path": path, "status": caught.exception.status, "reason": str(reason),
+                      "kept": reason in OWNERSHIP_KEPT, "not_sent": path == "ticket" or reason in NOT_SENT})
+    return cases
+
+
+def _probe(case: unittest.TestCase, cases) -> list[dict]:
+    proc = subprocess.run([node(), str(PROBE)], input=json.dumps(cases), capture_output=True, text=True,
+                          timeout=60, check=False, cwd=ROOT)
+    case.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+    return json.loads(proc.stdout)
+
+
+# Send refusals that are definitive, from checks the hub makes before the
+# channel write, though they don't keep ownership.
+LATE_SETTLED = ("send, not enrolled", "send, channel identity unusable", "send, registration gone at handoff")
+
+
 class HubRefusalOnThePageTests(unittest.TestCase):
     """Each refusal the hub gives the page's ticket or send, fed to the
     controller: a refusal that keeps ownership ends with the closing cue,
-    and every other ends the conversation as lost, in silence."""
+    and every other ends the conversation as lost, in silence; the reason
+    says "not sent" exactly when the hub's refusal proves it."""
 
     def test_the_page_acts_on_the_hub_s_class_of_each_refusal(self):
-        cases = []
-        for name, (path, refuse) in HUB_REFUSALS.items():
-            with self.assertRaises(DeskError, msg=name) as caught:
-                refuse(_Hub(self))
-            self.assertIsInstance(caught.exception.reason, Refusal, name)
-            cases.append({"name": name, "path": path, "status": caught.exception.status,
-                          "reason": str(caught.exception.reason), "kept": caught.exception.reason in OWNERSHIP_KEPT})
+        cases = _refused(self, HUB_REFUSALS)
         reasons = {c["name"]: c["reason"] for c in cases}
         self.assertEqual(reasons["ticket, no registration"], Refusal.NOT_REGISTERED)
         self.assertEqual(reasons["ticket, two registrations"], Refusal.AMBIGUOUS)
         self.assertEqual(reasons["send, second registration at handoff"], Refusal.TARGET_CHANGED_NOT_SENT)
+        self.assertEqual(reasons["send, registration gone at handoff"], Refusal.REQUEST_NOT_PENDING)
+        self.assertEqual(reasons["send, not enrolled"], Refusal.NOT_ENROLLED)
+        self.assertEqual(reasons["send, channel identity unusable"], Refusal.CHANNEL_IDENTITY_UNUSABLE)
         self.assertTrue(any(c["kept"] for c in cases) and not all(c["kept"] for c in cases))
-        proc = subprocess.run([node(), str(PROBE)], input=json.dumps(cases), capture_output=True, text=True,
-                              timeout=60, check=False, cwd=ROOT)
-        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
-        for case, page in zip(cases, json.loads(proc.stdout), strict=True):
+        for case, page in zip(cases, _probe(self, cases), strict=True):
             with self.subTest(case["name"], reason=case["reason"]):
                 self.assertEqual(page["phase"], "ended")
                 self.assertEqual(page["lost"], not case["kept"])
                 self.assertEqual(page["cue"], case["kept"])
+                self.assertEqual(page["notSent"], case["not_sent"], page["reason"])
+                self.assertEqual(page["unknown"], not case["not_sent"], page["reason"])
+
+    def test_a_definitive_refusal_that_comes_after_the_end_settles_its_reason(self):
+        cases = [dict(c, late=True) for c in _refused(self, LATE_SETTLED)]
+        for case, page in zip(cases, _probe(self, cases), strict=True):
+            with self.subTest(case["name"], reason=case["reason"]):
+                self.assertTrue(case["not_sent"])
+                self.assertEqual(page["phase"], "ended")
+                self.assertTrue(page["notSent"], page["reason"])
 
 
 if __name__ == "__main__":

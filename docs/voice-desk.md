@@ -25,7 +25,7 @@ conversation mode has not been qualified for driving.
 | `desk/protocol.py` | model | Channel socket framing and messages; the delivery suffix and channel instructions |
 | `desk/text_rule.py` | rules | The prompt text rule (`check_text`, `normalize_text`); mirrored by `static/text_rule.js` over `text_rule_cases.json` |
 | `desk/model.py` | model | `RequestState`, `Registration`, request/ticket/token/pairing records, limits |
-| `desk/refusals.py` | model | `Refusal`: every reason the hub's HTTPS API and operator socket refuse with (hub, state, grants, HTTP layer) and the text rule's reasons, declared once, each with its `Ownership` class (whether the conversation page may speak its closing cue after it) and `OWNERSHIP_KEPT`; `tests/test_desk_refusals.py` fails on a refusal raised in those modules without it. The startup acknowledgement keeps its own `StartupRefusal` |
+| `desk/refusals.py` | model | `Refusal`: every reason the hub's HTTPS API and operator socket refuse with (hub, state, grants, HTTP layer) and the text rule's reasons, declared once, each with its `Ownership` class (whether the conversation page may speak its closing cue after it) and `OWNERSHIP_KEPT`, and its `Delivery` class (whether a send refused with it was certainly not handed off) and `NOT_SENT`; `tests/test_desk_refusals.py` fails on a refusal raised in those modules without it. The startup acknowledgement keeps its own `StartupRefusal` |
 | `desk/hub_state.py` | rules | The hub's in-memory state machine; clock and randomness injected, no I/O |
 | `desk/locks.py` | adapter | The target lock file (fsync before handoff; refuses on unreadable, oversize, malformed or full) |
 | `desk/enrollment.py` | adapter | `enrolled.json` and `desk-settings.json` (`sends_enabled`, `voice_confirm_enabled`): read through `bounded_read`, written and locked through `JsonFile` |
@@ -855,6 +855,17 @@ sent: <reason>" when it refused it. That answer changes the reason only:
 the conversation stays ended, nothing is spoken, no mic opens, and a
 conversation started since never sees it. An answer that settles nothing
 (a 5xx, an unrecognised body) leaves delivery unknown.
+
+Whether a send's refusal says "not sent" is a separate question from
+whether the page may speak after it: it is not sent only for a 401 or a
+refusal whose `Delivery` is `NOT_SENT` in `desk/refusals.py` (the page's
+`NOT_SENT` list in `conversation_answers.js` must equal that set). The
+send route gives each of them only before it writes the event to the
+channel: the HTTP layer's checks, `begin_send`, the dispatch recheck and
+`hand_off` (for example not enrolled, channel identity unusable; not sent,
+and request not pending). Any other words, ticket already used (an earlier
+send with that ticket may have gone through) and internal error (it can
+follow the write) among them, leave delivery unknown.
 
 ### Hub side
 
