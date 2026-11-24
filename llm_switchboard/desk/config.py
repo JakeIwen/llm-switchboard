@@ -119,6 +119,46 @@ class DeskConfig:
         /proc/<pid>/cmdline with it)."""
         return (str(self.repo / ".venv" / "bin" / "python"), "-I", "-B", str(self.repo / "bin" / "desk-channel"))
 
+    # -- the Mac link (docs/voice-desk.md, "Mac link") ------------------------------
+
+    @property
+    def link_socket(self) -> Path:
+        """Pi: the hub's third socket, where the forced command's pump connects."""
+        return self.runtime_dir / "link.sock"
+
+    @property
+    def link_argv(self) -> tuple[str, ...]:
+        """Pi: the `authorized_keys` forced command; moving bin/desk-link breaks the link."""
+        return self._checkout_python("desk-link")
+
+    @property
+    def link_signers_file(self) -> Path:
+        """Pi: the allowed-signers list link proofs are verified against."""
+        return self.config_dir / "link-signers"
+
+    @property
+    def remote_enrolled_file(self) -> Path:
+        """Pi: enrollment of Mac sessions, beside phase 1's enrolled.json."""
+        return self.config_dir / "enrolled-hosts.json"
+
+    @property
+    def hub_run_lock(self) -> Path:
+        """Pi: held by `desk serve` for its life; probed by the offline decisions."""
+        return self.runtime_dir / "hub.lock"
+
+    @property
+    def relay_argv(self) -> tuple[str, ...]:
+        """Mac: the relay's launchd ProgramArguments; moving bin/desk-relay breaks the link."""
+        return self._checkout_python("desk-relay")
+
+    @property
+    def relay_lock(self) -> Path:
+        """Mac: held by the relay for its life, so only one runs."""
+        return self.runtime_dir / "relay.lock"
+
+    def _checkout_python(self, script: str) -> tuple[str, ...]:
+        return (str(self.repo / ".venv" / "bin" / "python"), "-I", "-B", str(self.repo / "bin" / script))
+
     @property
     def launch_flags(self) -> tuple[str, ...]:
         """What an enrolled session's claude is started with."""
