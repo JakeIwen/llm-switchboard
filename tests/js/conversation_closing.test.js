@@ -132,6 +132,7 @@ const BAD_SNAPSHOTS = [
   ["voice confirm off", () => snap({ voice_confirm_enabled: false })],
   ["the lock store failed", () => snap({ lock_store_error: "lock file full" })],
   ["no targets list", () => ({ version: 999, epoch: "e1", sends_enabled: true, voice_confirm_enabled: true })],
+  ["a target entry that is no record", () => snap({ targets: [null] })],
   ["not a snapshot", () => ({})],
 ];
 

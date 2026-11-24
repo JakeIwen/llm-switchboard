@@ -113,9 +113,15 @@
     return 1000 + words * 400;
   }
 
+  // A snapshot is the hub's answer, so its shape is not trusted: a targets
+  // list or an entry that is no record shows no target, rather than
+  // throwing past the check that would cut a closing cue.
   function findTarget(snap, id) {
-    var targets = (snap && snap.targets) || [];
-    for (var i = 0; i < targets.length; i++) if (targets[i].session_id === id) return targets[i];
+    var targets = snap && Array.isArray(snap.targets) ? snap.targets : [];
+    for (var i = 0; i < targets.length; i++) {
+      var t = targets[i];
+      if (t && typeof t === "object" && t.session_id === id) return t;
+    }
     return null;
   }
 
