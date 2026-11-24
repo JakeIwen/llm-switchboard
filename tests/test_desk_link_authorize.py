@@ -122,7 +122,7 @@ class LinkCommandsTest(CommandsMixin, MacTargetCase):
     def test_signer_removal_after_publication_reread(self):
         self.mac.close()
         wait_until(lambda: self.links()[MAC]["state"] == "down", timeout=30)
-        entered, resume, once = threading.Event(), threading.Event(), []
+        entered, resume, answered, once = threading.Event(), threading.Event(), threading.Event(), []
         reread = link_hub.read_signers
 
         def paused(path):
@@ -131,12 +131,23 @@ class LinkCommandsTest(CommandsMixin, MacTargetCase):
                 once.append(True)
                 entered.set()
                 resume.wait(30)
+            elif once:
+                # A signer check after the publication (link_drop's, or a
+                # housekeeping pass) retires the link and drops a welcome its
+                # writer hasn't begun, as on a slow machine; hold it until
+                # the relay has read its answer, so the test sees the welcome.
+                answered.wait(30)
             return listed
+
+        def hello_thread():
+            try:
+                result.update(peer.handshake(lambda _: fake_signature(Signer(MAC, self.key("mac").signer.blob))))
+            finally:
+                answered.set()
         result, revoked = {}, {}
         with patch.object(link_hub, "read_signers", paused):
             peer = self.link_peer()
-            hello = threading.Thread(target=lambda: result.update(peer.handshake(
-                lambda _: fake_signature(Signer(MAC, self.key("mac").signer.blob)))), daemon=True)
+            hello = threading.Thread(target=hello_thread, daemon=True)
             hello.start()
             self.assertTrue(entered.wait(30))
             # The revoke's steps 1 and 2 land; its link_drop waits for the links lock.
