@@ -228,7 +228,7 @@ class PairingHttpTest(HttpCase):
         status, _, view = self.call("GET", "/desk/api/state", token=claimed["token"])
         self.assertEqual(status, 200)
         self.assertEqual(set(view), {"version", "epoch", "sends_enabled", "voice_confirm_enabled", "lock_store_error",
-                                     "targets", "requests"})
+                                     "targets", "requests", "links", "admission_refusals"})
 
 
 class SendHttpTest(HttpCase):
@@ -255,7 +255,7 @@ class SendHttpTest(HttpCase):
         self.assertTrue(client.read()[1]["ok"])
         _, _, view = self.call("GET", "/desk/api/state", token=token)
         [request] = view["requests"]
-        self.assertEqual(request, {"request_id": sent["request_id"], "session_id": SESSION_A, "state": "answered",
+        self.assertEqual(request, {"request_id": sent["request_id"], "host": "pi", "session_id": SESSION_A, "state": "answered",
                                    "text": "how is the build?", "created": request["created"], "confirm": "tap",
                                    "reply": {"text": "Green.", "spoken": "It is green."}})
         duplicate = self.call("POST", "/desk/api/send", {"ticket": ticket, "text": "how is the build?"}, token=token)

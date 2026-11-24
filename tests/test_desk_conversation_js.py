@@ -287,6 +287,8 @@ OUT_OF_REACH = {
     Refusal.TOO_MANY_PAIRING_ATTEMPTS, Refusal.TOO_MANY_PENDING_PAIRINGS, Refusal.BAD_CODE, Refusal.NO_SUCH_PAIRING,
     Refusal.BAD_PAIR_CLAIM, Refusal.WRONG_SECRET, Refusal.NOT_CONFIRMED, Refusal.UNKNOWN_OP, Refusal.BAD_TOKEN_ID,
     Refusal.REVOKE_IN_PROGRESS, Refusal.BAD_ENABLED,
+    # Need a Mac target or a Mac lock (the Mac link, link_hub.py).
+    Refusal.LINK_BUSY, Refusal.LINK_OPERATOR_BUSY, Refusal.MAC_NOT_CONNECTED,
 }
 
 PATHS = ("ticket", "send", "grant", "beat")

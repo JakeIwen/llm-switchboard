@@ -45,11 +45,13 @@ from .enrollment import DeskSettings, Enrollment, ensure_private_dir
 from .hub_state import HubState
 from .http_server import DeskHttpServer, make_tls_context
 from .labels import SessionLabels, encodable
+from .link_hub import LinkHub, LinkWaitSurface
+from .link_protocol import PRESENCE_PROCESS
 from .locks import LockStore
 from .model import (
-    HELLO_TIMEOUT_SECONDS, MAX_PENDING_CHANNEL_CONNECTIONS, RECHECK_SECONDS,
-    STARTUP_TMUX_TIMEOUT_SECONDS, ChannelProcess, ConfirmMode, DeskError, ReplyRefusal, WriteOutcome,
-    is_request_id,
+    HELLO_TIMEOUT_SECONDS, HOST, MAX_PENDING_CHANNEL_CONNECTIONS, RECHECK_SECONDS,
+    STARTUP_TMUX_TIMEOUT_SECONDS, ChannelProcess, ConfirmMode, DeskError, RemoteIdentity, ReplyRefusal,
+    WriteOutcome, is_request_id,
 )
 from .operator import OperatorOp, OperatorServer, bind_private_socket
 from .peer import process_presence
@@ -116,7 +118,7 @@ class ChannelConnection:
             return WriteOutcome.WRITTEN
         return WriteOutcome.UNFINISHED
 
-    def close(self) -> None:
+    def close(self, reason: str | None = None) -> None:
         with contextlib.suppress(OSError):
             self.sock.shutdown(socket.SHUT_RDWR)
         with contextlib.suppress(OSError):
@@ -129,7 +131,8 @@ class Hub:
                  token_bytes: Callable[[int], bytes] = secrets.token_bytes, lock_store=None,
                  recheck_seconds: float = RECHECK_SECONDS, heartbeat_seconds: float = HEARTBEAT_SECONDS,
                  idle_timeout_seconds: float = IDLE_TIMEOUT_SECONDS, long_poll_seconds: float | None = None,
-                 tmux: Tmux | None = None):
+                 tmux: Tmux | None = None, remote_enrollment: Callable[[], dict[str, str]] | None = None,
+                 link_options: dict | None = None):
         self.config = config
         self._peer = peer
         self._now = now
@@ -140,6 +143,11 @@ class Hub:
         # published over a newer change. Lock order, everywhere: the files'
         # cross-process locks (`_policy_files`), this lock, the state's.
         self._policy_lock = threading.RLock()
+        # {session id: Mac host} for Mac enrollment. Until Mac enrollment
+        # lands (remote_enrollment.py) nothing is enrolled for a Mac.
+        self._remote_enrollment = remote_enrollment or dict
+        # (Pi-enrolled ids, {id: Mac host}) as last published, swapped whole.
+        self._owners: tuple[frozenset[str], dict[str, str]] = (frozenset(), {})
         self.state = HubState(lock_store or LockStore(config.lock_file), now=now, elapsed=elapsed,
                               token_bytes=token_bytes)
         self.labels = SessionLabels(config)
@@ -158,6 +166,7 @@ class Hub:
         self._channel_listener: socket.socket | None = None
         self._stopping = threading.Event()
         self._threads: list[threading.Thread] = []
+        self.links = LinkHub(config, self, **(link_options or {}))
         self._operator_ops = {
             OperatorOp.PAIR: self._op_pair, OperatorOp.REVOKE: self._op_revoke,
             OperatorOp.STATUS: self._op_status, OperatorOp.CLEAR: self._op_clear,
@@ -184,6 +193,7 @@ class Hub:
         self._channel_listener = bind_private_socket(self.config.channel_socket)
         self._channel_listener.settimeout(_ACCEPT_POLL_SECONDS)
         try:
+            self.links.start()
             self.operator.start()
             self.http.start()
         except BaseException:
@@ -207,6 +217,7 @@ class Hub:
             self._channel_listener = None
             with contextlib.suppress(FileNotFoundError):
                 os.unlink(self.config.channel_socket)
+        self.links.close()
         with self._connections_lock:
             connections = list(self._connections.values())
         for connection in connections:
@@ -244,7 +255,10 @@ class Hub:
 
     def refresh_files(self) -> None:
         with self._policy_files(), self._policy_lock:
-            self.state.set_enrolled(self.enrollment.sessions())
+            pi, remote = frozenset(self.enrollment.sessions()), dict(self._remote_enrollment())
+            self._owners = (pi, remote)
+            # An id enrolled on the Pi and for a Mac is enrolled nowhere.
+            self.state.set_enrolled(pi.symmetric_difference(remote))
             self.state.set_sends_enabled(self.settings.sends_enabled())
             self.state.set_voice_enabled(self.settings.voice_confirm_enabled())
 
@@ -254,11 +268,20 @@ class Hub:
         that can't be read labels its target by the session id instead of
         stopping startup, a registration or the recheck loop. Both fields are
         made strict-UTF-8 encodable here too, since every snapshot carries them."""
-        pids = {r.session_id: getattr(r.identity, "claude_pid", None) for r in self.state.registrations()}
+        registrations = self.state.registrations()
+        pids = {r.session_id: getattr(r.identity, "claude_pid", None) for r in registrations}
+        # A Mac session's label and folder are what its link reported.
+        with self._connections_lock:
+            remote = {r.session_id: self._connections.get(r.conn_id) for r in registrations if r.host != HOST}
         labels = {}
         for session_id in self.state.target_session_ids():
             try:
-                label, cwd = self.labels.describe(session_id, pids.get(session_id))
+                if session_id in remote or session_id in self._owners[1]:
+                    channel = remote.get(session_id)
+                    label, cwd = ((channel.label or session_id[:8], channel.cwd) if channel
+                                  else (session_id[:8], ""))
+                else:
+                    label, cwd = self.labels.describe(session_id, pids.get(session_id))
                 labels[session_id] = (encodable(str(label)), encodable(str(cwd)))
             except Exception as exc:
                 log.warning("desk: label for session %s failed: %s", session_id[:8], type(exc).__name__)
@@ -266,7 +289,9 @@ class Hub:
         self.state.set_labels(labels)
 
     def recheck_now(self) -> None:
-        """One pass of the 5 s loop: files, expiry, identity rechecks, labels."""
+        """One pass of the 5 s loop: the signer check, files, expiry,
+        identity rechecks, labels."""
+        self.links.check_signers()
         self.refresh_files()
         self.state.expire()
         for registration in self.state.registrations():
@@ -277,6 +302,8 @@ class Hub:
 
     def _recheck(self, identity) -> str | None:
         try:
+            if isinstance(identity, RemoteIdentity):
+                return self.links.recheck(identity)
             return self._peer.recheck(identity, self.config, self.enrollment.is_enrolled)
         except Exception:
             log.exception("desk: recheck raised")
@@ -438,13 +465,32 @@ class Hub:
         if reason:
             self._drop_connection(connection.conn_id, f"recheck after undeliverable: {reason}")
 
+    def attach_connection(self, make):
+        """A connection made by `make(conn_id)` under a fresh id from the
+        hub's one counter, put in `_connections` (the link's proxies)."""
+        connection = make(next(self._conn_ids))
+        with self._connections_lock:
+            self._connections[connection.conn_id] = connection
+        return connection
+
+    def remote_owner(self, session_id) -> str | None:
+        """The host `session_id` is enrolled for as last published: HOST,
+        a Mac host, or None (nowhere, or both on the Pi and for a Mac)."""
+        pi, remote = self._owners
+        if session_id in pi:
+            return None if session_id in remote else HOST
+        return remote.get(session_id)
+
+    def remote_hosts(self) -> set[str]:
+        return set(self._owners[1].values())
+
     def _drop_connection(self, conn_id: int, reason: str) -> None:
         with self._connections_lock:
             connection = self._connections.pop(conn_id, None)
         lost = self.state.drop_registration(conn_id)
         if connection:
             log.info("desk: channel %d dropped: %s", conn_id, _loggable(reason))
-            connection.close()
+            connection.close(reason)
         for request_id in lost:
             log.info("desk: request %s is now unknown", request_id)
 
@@ -477,6 +523,17 @@ class Hub:
         # Only an omitted `confirm` means a tap; a supplied null is refused.
         request = self.state.begin_send(body.get("ticket"), body.get("text"), token,
                                         body.get("confirm", ConfirmMode.TAP), body.get("grant"))
+        try:
+            # A Mac target's send waits on its link, within the link-wait cap.
+            slot = (contextlib.nullcontext() if request.host == HOST
+                    else self.links.wait_slot(LinkWaitSurface.HTTP))
+        except BaseException:
+            self.state.expire_request(request.request_id)
+            raise
+        with slot:
+            return self._dispatch(request)
+
+    def _dispatch(self, request) -> dict:
         try:
             conn_id, content = self._prepare_handoff(request)
         except BaseException:
@@ -531,12 +588,35 @@ class Hub:
         return ended
 
     def clear(self, body: dict, token: str) -> dict:
+        if not self.state.authenticate(token):
+            raise DeskError(401, Refusal.UNAUTHORIZED)
+        process = self._lock_presence(body.get("session_id"), body.get("lock_id"), LinkWaitSurface.HTTP)
         with self.state.authorized(token):
-            self.state.clear_lock(body.get("session_id"), body.get("lock_id"), self._channel_process)
+            self.state.clear_lock(body.get("session_id"), body.get("lock_id"), process)
         return {"cleared": True}
 
     def _channel_process(self, pid: int, start: str) -> ChannelProcess:
         return process_presence(self.config.proc_dir, pid, start)
+
+    def _lock_presence(self, session_id, lock_id, surface: LinkWaitSurface) -> Callable[[int, str], ChannelProcess]:
+        """The presence check `clear_lock` makes. For a Mac lock the answer
+        is fetched first, outside every lock, from the host's current link
+        only when its key and machine are the lock's, within the link-wait
+        cap; `clear_lock` then uses that answer (`gone` is final)."""
+        found = self.state.lock_info(session_id, lock_id)
+        if found is None or found[0].host == HOST:
+            return self._channel_process
+        lock, needed = found
+        if not needed:
+            return lambda pid, start: ChannelProcess.UNVERIFIABLE
+        link = self.links.link_for_lock(lock)
+        if link is None:
+            def not_connected(pid, start):
+                raise DeskError(503, Refusal.MAC_NOT_CONNECTED)
+            return not_connected
+        with self.links.wait_slot(surface):
+            answer = PRESENCE_PROCESS[self.links.presence(link, lock.channel_pid, lock.channel_start)]
+        return lambda pid, start: answer
 
     def enroll(self, body: dict, token: str) -> dict:
         session_id = body.get("session_id")
@@ -614,7 +694,8 @@ class Hub:
         return {**self.state.status(), "enrolled": sorted(self.enrollment.sessions())}
 
     def _op_clear(self, message: dict) -> dict:
-        self.state.clear_lock(message.get("session_id"), message.get("lock_id"), self._channel_process)
+        process = self._lock_presence(message.get("session_id"), message.get("lock_id"), LinkWaitSurface.OPERATOR)
+        self.state.clear_lock(message.get("session_id"), message.get("lock_id"), process)
         return {"cleared": True}
 
     def _op_enroll(self, message: dict) -> dict:

@@ -224,6 +224,10 @@ class Registration:
     replied: bool = False
     # The session's host: HOST for a Pi channel, the link's host for a Mac one.
     host: str = HOST
+    # A Mac registration's link key fingerprint and machine, which its
+    # locks record (None for a Pi channel).
+    link_key: str | None = None
+    machine: str | None = None
 
 
 @dataclass(frozen=True)

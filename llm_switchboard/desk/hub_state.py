@@ -34,6 +34,7 @@ revoke means no Enter can follow on that token.
 import base64
 from collections import OrderedDict, deque
 import contextlib
+import dataclasses
 import hashlib
 import hmac
 import re
@@ -51,6 +52,7 @@ from .model import (
     valid_channel_identity,
 )
 from .grants import ConversationGrants
+from .link_views import LinkViews
 from .model import ConfirmMode
 from .protocol import MAX_REPLY_TEXT_BYTES, MAX_SPOKEN_BYTES, event_content
 from .refusals import Refusal
@@ -78,7 +80,7 @@ def _is_int(value) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
-class HubState(ConversationGrants):
+class HubState(ConversationGrants, LinkViews):
     def __init__(self, lock_store, *, now: Callable[[], float], elapsed: Callable[[], float],
                  token_bytes: Callable[[int], bytes], epoch: str | None = None):
         # Re-entrant so `authorized()` can hold it around a method that takes it too.
@@ -196,13 +198,17 @@ class HubState(ConversationGrants):
 
     # -- channel registrations ----------------------------------------------
 
-    def register(self, conn_id: int, session_id: str, identity) -> int:
-        """Record a verified channel connection; returns its generation."""
+    def register(self, conn_id: int, session_id: str, identity, *, host: str = HOST,
+                 link_key: str | None = None, machine: str | None = None) -> int:
+        """Record a verified channel connection; returns its generation. A
+        Mac registration names its link's host, key fingerprint and machine,
+        which its locks record."""
         with self._mutex:
             if len(self._registrations) >= MAX_REGISTRATIONS:
                 raise DeskError(429, Refusal.TOO_MANY_REGISTRATIONS)
             self._generation += 1
-            self._registrations[conn_id] = Registration(conn_id, session_id, self._generation, identity)
+            self._registrations[conn_id] = Registration(conn_id, session_id, self._generation, identity,
+                                                        host=host, link_key=link_key, machine=machine)
             self._bump()
             return self._generation
 
@@ -229,8 +235,7 @@ class HubState(ConversationGrants):
 
     def registrations(self) -> list[Registration]:
         with self._mutex:
-            return [Registration(r.conn_id, r.session_id, r.generation, r.identity, r.replied)
-                    for r in self._registrations.values()]
+            return [dataclasses.replace(r) for r in self._registrations.values()]
 
     # -- tickets and sends ---------------------------------------------------
 
@@ -287,7 +292,8 @@ class HubState(ConversationGrants):
                 request_id=f"{self.epoch}.{self._token_bytes(REQUEST_ID_RANDOM_BYTES).hex()}",
                 session_id=record.session_id, generation=record.generation,
                 conn_id=registration.conn_id, text=text, created=self._now(),
-                ticket_hash=record.ticket_hash, token_hash=token_hash, confirm=mode, grant_id=grant_id)
+                ticket_hash=record.ticket_hash, token_hash=token_hash, confirm=mode, grant_id=grant_id,
+                host=registration.host)
             self._requests[request.request_id] = request
             self._bump()
             return Request(**vars(request))
@@ -348,11 +354,13 @@ class HubState(ConversationGrants):
                 self._finish(request, RequestState.EXPIRED)
                 self._bump()
                 raise
-            channel = self._registrations[request.conn_id].identity
-            lock = Lock(lock_id=self._token_bytes(LOCK_ID_BYTES).hex(), host=HOST,
+            registration = self._registrations[request.conn_id]
+            channel = registration.identity
+            lock = Lock(lock_id=self._token_bytes(LOCK_ID_BYTES).hex(), host=registration.host,
                         session_id=request.session_id, request_id=request.request_id,
                         ticket_hash=request.ticket_hash, since=self._now(),
-                        channel_pid=channel.channel_pid, channel_start=channel.channel_start)
+                        channel_pid=channel.channel_pid, channel_start=channel.channel_start,
+                        link_key=registration.link_key, machine=registration.machine)
             try:
                 self._lock_store.add(lock)
             except LockStoreError as exc:
@@ -721,7 +729,8 @@ class HubState(ConversationGrants):
             requests = [self._request_view(r) for r in reversed(self._requests.values())]
             return {"version": self._version, "epoch": self.epoch, "sends_enabled": self._sends_enabled,
                     "voice_confirm_enabled": self._voice_enabled,
-                    "lock_store_error": self._store_error(), "targets": targets, "requests": requests}
+                    "lock_store_error": self._store_error(), "targets": targets, "requests": requests,
+                    **self._link_fields()}
 
     def _target(self, session_id: str) -> dict:
         found = self._registrations_for(session_id)
@@ -738,13 +747,14 @@ class HubState(ConversationGrants):
             lock = {"lock_id": locks[0].lock_id, "request_id": locks[0].request_id,
                     "since": locks[0].since, "earlier_run": self._earlier_run(locks[0])}
         label, cwd = self._labels.get(session_id) or (session_id[:8], "")
-        return {"host": HOST, "session_id": session_id, "label": label, "cwd": cwd,
+        host = found[0].host if len(found) == 1 else (locks[0].host if locks else HOST)
+        return {"host": host, "session_id": session_id, "label": label, "cwd": cwd,
                 "enrolled": session_id in self._enrolled,
                 "registration": registration.value, "generation": generation, "lock": lock}
 
     def _request_view(self, request: Request) -> dict:
         reply = self._replies.get(request.request_id)
-        return {"request_id": request.request_id, "session_id": request.session_id,
+        return {"request_id": request.request_id, "host": request.host, "session_id": request.session_id,
                 "state": request.state.value, "text": request.text, "created": request.created,
                 "confirm": request.confirm.value,
                 "reply": {"text": reply.text, "spoken": reply.spoken} if reply else None}
@@ -759,10 +769,10 @@ class HubState(ConversationGrants):
                 "sends_enabled": self._sends_enabled,
                 "lock_store_error": self._store_error(),
                 "registrations": [
-                    {"session_id": r.session_id, "generation": r.generation,
+                    {"host": r.host, "session_id": r.session_id, "generation": r.generation,
                      "state": self._target(r.session_id)["registration"]}
                     for r in sorted(self._registrations.values(), key=lambda r: r.generation)],
-                "locks": [{"lock_id": lock.lock_id, "session_id": lock.session_id,
+                "locks": [{"lock_id": lock.lock_id, "host": lock.host, "session_id": lock.session_id,
                            "request_id": lock.request_id, "since": lock.since,
                            "earlier_run": self._earlier_run(lock)}
                           for lock in sorted(self._locks.values(), key=lambda lock: lock.since)],
@@ -771,4 +781,5 @@ class HubState(ConversationGrants):
                            if now < t.expires_at],
                 "pending_pairings": len(self._pairings),
                 **self._conversation_status(),
+                **self._link_fields(),
             }

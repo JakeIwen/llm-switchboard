@@ -118,6 +118,15 @@ class Refusal(StrEnum):
     CHANNEL_STILL_RUNNING = "the session's channel is still running; stop the session, then clear"
     CHANNEL_UNVERIFIABLE = "the session's channel can't be checked; stop the session, then clear"
 
+    # -- the Mac link (link_hub.py) ------------------------------------------
+    # Given before any handoff, but declared unproven so the page's NOT_SENT
+    # list (static/conversation_answers.js) needs no change in this stage.
+    LINK_BUSY = "desk link busy; try again"
+    LINK_OPERATOR_BUSY = "busy: a Mac link call is in progress"
+    MAC_NOT_CONNECTED = ("the Mac that holds this lock is not connected, so its channel can't be checked; "
+                         "reconnect that Mac, or, once you have seen the session exit there, use desk "
+                         "clear-stopped on the Pi")
+
     # -- pairing and tokens --------------------------------------------------
     PAGE_OUT_OF_DATE = "page out of date; reload it"
     BAD_SECRET_HASH = "bad secret_hash"
