@@ -159,7 +159,7 @@ Sharing the socket would let its supervisor close the real windows.
 | `scripts/setup-mac-desk.sh` | Mac setup of the desk link, after `setup-mac.sh`: checks first (macOS, the names in `local.env`, both machines' `ssh-keygen -Y`, the Pi's `link-authorize --self-test`), then the link key, `link-authorize` over SSH, `mcp.json`, `relay-install`; `--remove`: `relay-install --unload`, `link-revoke` over SSH, the key files deleted |
 | `scripts/check_layout.py`, `scripts/backend_layout/` | Repo-owned read-only layout checker; `.codeshape/config.json` declares its scope |
 | `tests/test_settings.py`, `web/src/settings/settingsFields.test.ts` | Settings persistence, CLI, manual-launch isolation, and page field/polling contracts |
-| `tests/test_architecture.py` | Enforced pure-owner imports, Mac/Pi separation, rendered systemd and launchd targets, checkout wrapper |
+| `tests/test_architecture.py` | Enforced pure-owner imports, Mac/Pi separation, rendered systemd targets and the v1 host-agent and search launchd jobs (the desk relay's launchd target is in `tests/test_desk_relay_launchd.py`), checkout wrapper |
 
 ## Contracts
 
