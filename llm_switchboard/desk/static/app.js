@@ -52,34 +52,17 @@
 
   // ---- HTTP ---------------------------------------------------------------
 
-  function NetworkError(message) { this.message = message; }
+  // hub_api.js: every call the page makes, resolving {status, data}.
+  var api = window.DeskHubApi.create({
+    token: function () { return token; }, session: function () { return session; }, onStatus: statusArrived
+  });
 
-  // Resolves {status, data}; rejects with NetworkError when no response came.
-  // The status line is the hub's answer even if the body never arrives: a
-  // 401 on any protected request drops the token and returns to pairing at
-  // the headers, and a body that can't be read or parsed resolves with data
-  // null (answered, body unavailable), never as no answer.
-  function api(method, path, body, opts) {
-    opts = opts || {};
-    var headers = {};
-    if (opts.auth !== false && token) headers.Authorization = "Bearer " + token;
-    if (body !== undefined) headers["Content-Type"] = "application/json";
-    var init = { method: method, headers: headers, cache: "no-store", credentials: "omit" };
-    if (body !== undefined) init.body = JSON.stringify(body);
-    if (opts.signal) init.signal = opts.signal;
-    var mySession = session;
-    return fetch(path, init).then(function (res) {
-      if (res.status === 401 && opts.auth !== false && mySession === session) {
-        dropToken("The hub no longer accepts this tablet.");
-      }
-      return res.text().then(function (raw) {
-        try { return raw ? JSON.parse(raw) : null; } catch (e) { return null; }
-      }, function () { return null; }).then(function (data) {
-        return { status: res.status, data: data };
-      });
-    }, function () {
-      throw new NetworkError("network");
-    });
+  // A 401 on any protected request drops the token and returns to pairing
+  // at the headers, unless the page has paired again since the call began.
+  function statusArrived(status, opts, startedIn) {
+    if (status === 401 && opts.auth !== false && startedIn === session) {
+      dropToken("The hub no longer accepts this tablet.");
+    }
   }
 
   function errorText(r) {

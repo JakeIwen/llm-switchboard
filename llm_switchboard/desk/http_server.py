@@ -58,6 +58,7 @@ STATIC_ROUTES = {
     "/desk/conversation_view.js": (STATIC_DIR / "conversation_view.js", _JS),
     "/desk/page_audio.js": (STATIC_DIR / "page_audio.js", _JS),
     "/desk/startup.js": (STATIC_DIR / "startup.js", _JS),
+    "/desk/hub_api.js": (STATIC_DIR / "hub_api.js", _JS),
     # The hub's own cases, so the page's mirror of the rule checks the same table.
     "/desk/text_rule_cases.json": (DESK_DIR / "text_rule_cases.json", _JSON),
 }
