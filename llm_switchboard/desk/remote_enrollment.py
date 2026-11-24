@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Callable
 
 from ..session_id import is_session_id
-from .enrollment import CachedJson, Enrollment, check_session_id, valid_since_record
+from .enrollment import Enrollment, ValidatedJson, check_session_id, valid_since_record
 from .locks import inspect_lock_file
 from .model import HOST, MAX_ENROLLED_HOSTS, MAX_HOST_ENROLLED, DeskError, LockStoreError, is_desk_host
 from .refusals import Refusal
@@ -73,7 +73,7 @@ class HostEnrollment:
     """`enrolled-hosts.json`, locked by `enrolled.json`'s lock."""
 
     def __init__(self, path: Path, enrolled_file: Path):
-        self._json = CachedJson(path, valid_host_enrollment, lock_for=enrolled_file)
+        self._json = ValidatedJson(path, valid_host_enrollment, lock_for=enrolled_file)
 
     def hosts(self) -> dict[str, frozenset[str]]:
         """{host: enrolled session ids}, opened and validated now, never from

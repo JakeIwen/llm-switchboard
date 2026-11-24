@@ -109,7 +109,7 @@ class FileLock:
                     os.close(fd)
 
 
-class CachedJson:
+class ValidatedJson:
     """A JsonFile opened, bounded and validated on every read (see the module
     docstring for why nothing is kept from an earlier read)."""
 
@@ -183,7 +183,7 @@ def valid_since_record(record) -> bool:
 
 class Enrollment:
     def __init__(self, path: Path):
-        self._json = CachedJson(path, valid_enrollment)
+        self._json = ValidatedJson(path, valid_enrollment)
 
     def locked(self):
         """Hold `enrolled.json`'s cross-process lock (re-entrant here)."""
@@ -232,7 +232,7 @@ SETTING_KEYS = (SENDS_KEY, VOICE_KEY)
 
 class DeskSettings:
     def __init__(self, path: Path):
-        self._json = CachedJson(path)
+        self._json = ValidatedJson(path)
 
     def locked(self):
         """Hold `desk-settings.json`'s cross-process lock (re-entrant here)."""
