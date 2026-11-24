@@ -75,11 +75,11 @@ def install(pi: str, host: str, identity: Path, *, unload=False, home=None, run=
         plist = agents / f"{label}.plist"
         plist.write_bytes(plistlib.dumps(spec))
         run(["launchctl", "bootout", f"{domain}/{label}"], check=False, capture_output=True)
-        _bootstrap(run, domain, plist)
+        bootstrap(run, domain, plist)
     return path
 
 
-def _bootstrap(run, domain: str, plist: Path, attempts: int = 10) -> None:
+def bootstrap(run, domain: str, plist: Path, attempts: int = 10) -> None:
     # bootout returns before launchd has removed a running job; bootstrapping
     # it again meanwhile fails with "5: Input/output error".
     for _ in range(attempts):

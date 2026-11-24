@@ -144,23 +144,41 @@ def _read_config(argv, env, run):
     return _parse(result.stdout)
 
 
+def _local_values(config, environ) -> dict[str, str]:
+    local = config.repo / LOCAL_ENV.name
+    return load(local) if environ is None else load(local, environ=environ)
+
+
+def _desk_key(config, host: str) -> Path:
+    if not valid_link_host(host):
+        raise ConfigUnsupported()
+    key = config.home / ".ssh" / f"llm-switchboard-desk-{host}"
+    if not key.is_absolute() or any(not c.isprintable() or c in '\"\\%$' for c in str(key)):
+        raise ConfigUnsupported()
+    return key
+
+
+def desk_key(config, *, environ=None) -> Path:
+    """The Mac's link key, `~/.ssh/llm-switchboard-desk-<mac>`, the name from the
+    checkout's local.env (or the environment); ConfigUnsupported for a name or path
+    the relay can't use. `relay-install` checks it exists before loading the job."""
+    return _desk_key(config, _local_values(config, environ)[MAC_NAME])
+
+
 def prepare_ssh(config, *, environ=None, ssh_config: Path | None = None, run=run_bounded) -> SshInvocation:
     """Fresh route on each attempt. `ssh_config` substitutes an isolated config for tests;
     the *connection* always uses `-F none`, never the file passed here.
     """
-    local = config.repo / LOCAL_ENV.name
-    values = load(local) if environ is None else load(local, environ=environ)
+    values = _local_values(config, environ)
     alias, host = values[PI_SSH], values[MAC_NAME]
-    if not _ALIASED_HOST.fullmatch(alias) or not valid_link_host(host):
+    if not _ALIASED_HOST.fullmatch(alias):
         raise ConfigUnsupported()
+    key = _desk_key(config, host)
     env = {"HOME": str(config.home), "PATH": MAC_JOB_PATH}
     configured = () if ssh_config is None else ("-F", str(ssh_config))
     route = _read_config((SSH, "-G", *configured, alias), env, run)
     defaults = _read_config((SSH, "-G", "-F", "none", alias), env, run)
     _route_options(defaults, defaults)  # An incomplete baseline is not evidence of a configured override.
-    key = config.home / ".ssh" / f"llm-switchboard-desk-{host}"
-    if not key.is_absolute() or any(not c.isprintable() or c in '\"\\%$' for c in str(key)):
-        raise ConfigUnsupported()
     # `-i` stats the key and ignores a missing one, restoring all default identities.
     # IdentityFile stays set even if the file disappears just before ssh starts.
     options = [f'IdentityFile="{key}"', *_FIXED, *_route_options(route, defaults)]
