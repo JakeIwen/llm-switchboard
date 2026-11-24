@@ -56,6 +56,10 @@
     MAX_DRAFT_BYTES: 1024
   });
 
+  // The grant id grants.py issues, GRANT_ID_BYTES random bytes in lowercase
+  // hex: an answer naming anything else holds no grant.
+  var GRANT_ID = /^[0-9a-f]{32}$/;
+
   // An utterance gets twice the time estimated from its text before it counts
   // as failed; the same estimate sets the quiet period after a cut-off one.
   var SPEECH_DEADLINE_FACTOR = 2;
@@ -784,7 +788,7 @@
     PHASE: PHASE, CONFIRM: CONFIRM, REQUEST_STATE: REQUEST_STATE, REGISTRATION: REGISTRATION,
     LIMITS: LIMITS, TIMER: TIMER, SAY: SAY, FX: FX, EV: EV, COMMAND: COMMAND, CUE: CUE, REASON: REASON,
     BLOCKER: BLOCKER, SPEECH_DEADLINE_FACTOR: SPEECH_DEADLINE_FACTOR, OWNERSHIP_KEPT: OWNERSHIP_KEPT,
-    ownershipLost: ownershipLost,
+    GRANT_ID: GRANT_ID, ownershipLost: ownershipLost,
     initial: initial, reduce: reduce, active: active, fresh: fresh, renew: renew, withDetail: withDetail,
     startBlocker: startBlocker, currentReply: currentReply, forget: forget,
     command: command, appendDraft: appendDraft, draftProblem: draftProblem, estimateMs: estimateMs

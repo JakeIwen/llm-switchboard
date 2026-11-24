@@ -11,7 +11,7 @@ const L = require("../../llm_switchboard/desk/static/conversation_logic.js");
 const C = require("../../llm_switchboard/desk/static/conversation.js");
 const { REASON, CUE, LIMITS } = L;
 const { PATH } = C;
-const { flush, harness, listening, texts, releases } = require("./controller_harness.js");
+const { DEST, flush, snap, harness, listening, texts, releases } = require("./controller_harness.js");
 
 const cue = (reason) => [CUE.ENDED + ": " + reason + "."];
 
@@ -106,4 +106,37 @@ test("an ended conversation's send POST is aborted at its deadline and delivery 
   assert.equal(post.aborted, true);
   assert.equal(h.view().reason, REASON.END_TAPPED + "; " + REASON.UNKNOWN);
   assert.equal(h.said.length, 1);
+});
+
+test("an acquisition's 200 without a grant in the hub's shape fails silently and never opens the mic", async () => {
+  for (const data of [{ grant: " " }, { grant: G.g1.toUpperCase().replace(/1/g, "A") }, { grant: G.g1 + "0" },
+    { grant: 7 }, {}, null]) {
+    const h = harness();
+    assert.equal(h.ctl.start(DEST), true);
+    await flush();
+    await h.answer(PATH.STATE, 200, snap());
+    await h.answer(PATH.GRANT, 200, data);
+    await h.advance(LIMITS.GUARD_MS);
+    assert.equal(h.phase(), L.PHASE.ENDED, JSON.stringify(data));
+    assert.equal(h.view().reason, L.withDetail(REASON.REFUSED, "HTTP 200"), JSON.stringify(data));
+    assert.equal(h.recs.length, 0, JSON.stringify(data));
+    assert.equal(h.said.length, 0, JSON.stringify(data));
+  }
+});
+
+test("a beat's 200 that doesn't name the grant beaten renews nothing: the conversation ends as lost", async () => {
+  for (const data of [null, {}, { grant: G.g2, expires_in: 15 }]) {
+    const h = await listening(harness());
+    await h.advance(LIMITS.BEAT_MS);
+    await h.answer(PATH.BEAT, 200, data);
+    assert.equal(h.phase(), L.PHASE.ENDED, JSON.stringify(data));
+    assert.equal(h.view().reason, REASON.GRANT_LOST, JSON.stringify(data));
+    assert.equal(h.view().lost, true, JSON.stringify(data));
+    assert.equal(h.said.length, 0, JSON.stringify(data));
+    assert.deepEqual(releases(h), [G.g1], JSON.stringify(data));
+  }
+  // The hub's real renewal still renews.
+  const h = await listening(harness());
+  await h.alive(LIMITS.FRESH_MS + 200);
+  assert.equal(h.phase(), L.PHASE.LISTENING);
 });

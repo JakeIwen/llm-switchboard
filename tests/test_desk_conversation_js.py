@@ -4,6 +4,7 @@ values the page mirrors from the hub have not drifted, and feeds the hub's
 own refusals of a ticket or a send to the controller."""
 
 import json
+import re
 import secrets
 import shutil
 import subprocess
@@ -34,7 +35,7 @@ process.stdout.write(JSON.stringify({
   paths: C.PATH,
   confirm: L.CONFIRM, request: L.REQUEST_STATE, registration: L.REGISTRATION, limits: L.LIMITS,
   tooLong: L.draftProblem("a".repeat(L.LIMITS.MAX_DRAFT_BYTES + 1)), refusals: D.REFUSALS,
-  ownershipKept: L.OWNERSHIP_KEPT, notSent: A.NOT_SENT,
+  ownershipKept: L.OWNERSHIP_KEPT, notSent: A.NOT_SENT, grantId: L.GRANT_ID.source,
 }));
 """
 
@@ -79,6 +80,10 @@ class ConversationMirrorTests(unittest.TestCase):
         self.assertLess(limits["FRESH_MS"], grants.GRANT_TTL_SECONDS * 1000)
         self.assertLess(limits["BEAT_ABORT_MS"], limits["BEAT_MS"])
         self.assertLess(limits["BEAT_MS"], limits["FRESH_MS"])
+
+    def test_the_page_accepts_exactly_the_grant_ids_the_hub_issues(self):
+        self.assertEqual(self.js["grantId"], f"^[0-9a-f]{{{grants.GRANT_ID_BYTES * 2}}}$")
+        self.assertTrue(re.match(self.js["grantId"], _Hub(self).grant))
 
     def test_the_controller_calls_routes_the_hub_serves(self):
         paths = dict(self.js["paths"])

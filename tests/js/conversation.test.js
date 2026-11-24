@@ -101,7 +101,7 @@ test("a new Start never races an abandoned grant acquisition", async () => {
   assert.equal(h.ctl.canStart(), true);
   assert.equal(L.startBlocker(snap(), "s1", page()), null);
   // Only now does the next acquisition go out.
-  const grantArrives = await startUntilGrant(h, "new");
+  const grantArrives = await startUntilGrant(h, G.g2);
   assert.equal(h.all(PATH.GRANT).length, 2);
   await grantArrives();
   await h.advance(LIMITS.GUARD_MS);

@@ -754,7 +754,11 @@ may still be speaking; wait until it is quiet.
   answer only settles the reason shown), and at that deadline it is
   aborted with delivery unknown.
 - The grant is beaten every 5 s, one beat at a time, each abandoned after
-  4 s. The page treats it as good until 10 s after the *start* of the last
+  4 s. A grant request succeeds only with a 200 naming a grant in the hub's
+  shape (32 lowercase hex digits); any other answer fails Start like a
+  refused grant, silently. A beat succeeds only with a 200 naming the very
+  grant it beat; any other 200, like a refusal, means the grant is gone.
+  The page treats it as good until 10 s after the *start* of the last
   beat that succeeded (the grant request counts as the first), on a
   monotonic clock, and checks that before every mic opening and before
   using any result; past it the conversation ends. That is how a pulled USB

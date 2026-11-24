@@ -325,7 +325,7 @@
       var d = c.dest;
       setTimer(TIMER.STEP, LIMITS.STEP_MS);
       api("POST", PATH.GRANT, { session_id: d.session_id, generation: d.generation, epoch: d.epoch }, {}).then(function (r) {
-        var got = r.status === 200 && r.data && typeof r.data.grant === "string" ? r.data.grant : null;
+        var got = A.grantOf(r);
         if (!settle(FETCH.GRANT, id)) return straggled(id, got);
         clearTimer(TIMER.STEP);
         if (unauthorized(r)) return;
@@ -377,20 +377,22 @@
     }
 
     // One beat in flight, every BEAT_MS, abandoned after BEAT_ABORT_MS; only
-    // the current beat's success renews freshness. A refusal means the grant
-    // is gone; no answer at all is left to the freshness deadline.
+    // the current beat's success renews freshness. A refusal, or a 200 that
+    // doesn't name the grant beaten, means the grant is gone; no answer at
+    // all is left to the freshness deadline.
     function beat() {
       setTimer(TIMER.BEAT, LIMITS.BEAT_MS);
       if (fetches[FETCH.BEAT] || !grant) return;
       var id = begin(FETCH.BEAT, true);
       var startedAt = env.now();
+      var named = grant;
       setTimer(TIMER.BEAT_ABORT, LIMITS.BEAT_ABORT_MS);
-      api("POST", PATH.BEAT, { grant: grant }, signal(FETCH.BEAT)).then(function (r) {
+      api("POST", PATH.BEAT, { grant: named }, signal(FETCH.BEAT)).then(function (r) {
         if (!settle(FETCH.BEAT, id)) return;
         clearTimer(TIMER.BEAT_ABORT);
         if (unauthorized(r)) return;
-        if (r.status === 200) beatOk(startedAt);
-        else if (r.status >= 400 && r.status < 500) grantLost(REASON.GRANT_LOST);
+        if (A.renewed(r, named)) beatOk(startedAt);
+        else if (r.status === 200 || (r.status >= 400 && r.status < 500)) grantLost(REASON.GRANT_LOST);
       }, function () {
         if (settle(FETCH.BEAT, id)) clearTimer(TIMER.BEAT_ABORT);
       });

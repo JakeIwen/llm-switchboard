@@ -1,7 +1,8 @@
 // What the hub's answers to a conversation's calls establish, for the
 // controller (conversation.js): the reason an answer shows, the refusal its
-// words make, and a send's answer as a reducer event, including whether a
-// refusal proves the prompt was not sent. Pure, so node can
+// words make, whether a grant or a beat succeeded, and a send's answer as a
+// reducer event, including whether a refusal proves the prompt was not
+// sent. Pure, so node can
 // load it; the controller's tests in tests/js/ drive it.
 (function (root) {
   "use strict";
@@ -39,6 +40,19 @@
     return r && r.data && typeof r.data.error === "string" ? r.data.error : "";
   }
 
+  // A 200 is an operation's success only in the shape that success has;
+  // anything else is an answer that failed, never a success. Acquisition
+  // needs a grant the hub could have issued:
+  function grantOf(r) {
+    var g = r.status === 200 && r.data ? r.data.grant : null;
+    return typeof g === "string" && L.GRANT_ID.test(g) ? g : null;
+  }
+
+  // and a beat renews only the very grant it named.
+  function renewed(r, grant) {
+    return r.status === 200 && !!r.data && r.data.grant === grant;
+  }
+
   // A send answer proves nothing was handed off when it is a 401 (the token
   // is checked before anything else) or a refusal on NOT_SENT. Words the
   // page doesn't know leave delivery unknown.
@@ -55,7 +69,9 @@
     return ev;
   }
 
-  var api = { NOT_SENT: NOT_SENT, detail: detail, refusalOf: refusalOf, sendEvent: sendEvent };
+  var api = {
+    NOT_SENT: NOT_SENT, detail: detail, refusalOf: refusalOf, grantOf: grantOf, renewed: renewed, sendEvent: sendEvent
+  };
   root.DeskConversationAnswers = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof window !== "undefined" ? window : globalThis);
