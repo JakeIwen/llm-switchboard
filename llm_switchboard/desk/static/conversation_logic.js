@@ -64,7 +64,7 @@
   // so one name can't mean two timers.
   var TIMER = Object.freeze({
     GUARD: "guard", WATCHDOG: "watchdog", IDLE: "idle", TURN: "turn", ACK: "ack", REPLY: "reply",
-    BEAT: "beat", BEAT_ABORT: "beat_abort", TICK: "tick", SPEECH: "speech", STEP: "step", SEND_ABORT: "send_abort"
+    BEAT: "beat", BEAT_ABORT: "beat_abort", TICK: "tick", SPEECH: "speech", STEP: "step"
   });
 
   // What an utterance is for; the end of the conversation's own last cue is

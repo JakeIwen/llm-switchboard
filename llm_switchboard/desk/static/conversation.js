@@ -195,9 +195,6 @@
     ON_TIMER[TIMER.BEAT] = beat;
     ON_TIMER[TIMER.BEAT_ABORT] = function () { abandon(FETCH.BEAT, true); };
     ON_TIMER[TIMER.STEP] = stepTimedOut;
-    ON_TIMER[TIMER.SEND_ABORT] = function () {
-      if (abandon(FETCH.SEND, true)) dispatch({ type: EV.SEND_UNKNOWN });
-    };
     ON_TIMER[TIMER.SPEECH] = speechTimedOut;
 
     function onTimer(name) {
@@ -433,19 +430,27 @@
 
     // Unknown is never retried; a refusal before handoff is final. The
     // answer is dispatched even after an end, and after a 401 has ended the
-    // conversation, so the end reason keeps what it establishes.
+    // conversation, so the end reason keeps what it establishes. The POST
+    // keeps its own deadline, apart from the conversation's timers, whatever
+    // becomes of the conversation: at it the POST is aborted, and delivery
+    // stays unknown for whichever conversation still listens for it.
     function postSend(ticket, text) {
       var id = begin(FETCH.SEND, true);
-      setTimer(TIMER.SEND_ABORT, LIMITS.SEND_DEADLINE_MS);
+      var ctl = fetches[FETCH.SEND].ctl;
+      var deadline = env.setTimeout(function () {
+        var mine = settle(FETCH.SEND, id) || settleLate(id);
+        if (ctl) ctl.abort();
+        if (mine) dispatch({ type: EV.SEND_UNKNOWN });
+      }, LIMITS.SEND_DEADLINE_MS);
       var body = { ticket: ticket, text: text, confirm: L.CONFIRM.VOICE, grant: grant };
       api("POST", PATH.SEND, body, signal(FETCH.SEND)).then(function (r) {
+        env.clearTimeout(deadline);
         if (!settle(FETCH.SEND, id) && !settleLate(id)) return;
-        clearTimer(TIMER.SEND_ABORT);
         unauthorized(r);
         dispatch(sendEvent(r));
       }, function () {
+        env.clearTimeout(deadline);
         if (!settle(FETCH.SEND, id) && !settleLate(id)) return;
-        clearTimer(TIMER.SEND_ABORT);
         dispatch({ type: EV.SEND_UNKNOWN });
       });
     }
@@ -608,7 +613,8 @@
       lateSend = c.deliveryOpen && fetches[FETCH.SEND] ? fetches[FETCH.SEND].id : null;
       Object.keys(timers).forEach(function (name) { if (!(cue && CLOSING_TIMERS[name])) clearTimer(name); });
       // The grant request stays open so a late grant is released; a late
-      // ticket or send answer is dropped; the beat goes on under the cue.
+      // ticket answer is dropped; the send POST runs on to its own deadline,
+      // its answer only settling the reason; the beat goes on under the cue.
       Object.keys(fetches).forEach(function (kind) {
         if (kind === FETCH.GRANT) abandonGrant();
         else if (!(cue && kind === FETCH.BEAT)) abandon(kind, kind !== FETCH.SEND);

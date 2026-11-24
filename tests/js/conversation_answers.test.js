@@ -78,3 +78,31 @@ test("an unusable 200 for a send an end left open settles nothing and speaks not
   assert.equal(f.view().reason, unknown(REASON.HUB_LOST));
   assert.equal(f.said.length, 0);
 });
+
+test("a send POST keeps its own deadline after the conversation ends; a newer conversation is untouched", async () => {
+  const h = await turn(true);
+  const post = h.pending(PATH.SEND)[0];
+  const deadline = h.t + LIMITS.SEND_DEADLINE_MS;
+  await h.advance(LIMITS.FRESH_MS + LIMITS.TICK_MS);
+  assert.equal(h.view().active, false);
+  assert.equal(h.view().reason, REASON.HUB_LOST + "; " + REASON.UNKNOWN);
+  await listening(h);
+  await h.alive(deadline - h.t - 1);
+  assert.equal(post.aborted, undefined, "aborted before its deadline");
+  await h.alive(1);
+  assert.equal(post.aborted, true);
+  assert.equal(h.phase(), L.PHASE.LISTENING);
+  assert.equal(h.view().reason, null);
+  assert.equal(h.view().serial, 2);
+});
+
+test("an ended conversation's send POST is aborted at its deadline and delivery stays unknown", async () => {
+  const h = await turn(true);
+  const post = h.pending(PATH.SEND)[0];
+  h.ctl.endTap();
+  await h.finish();
+  await h.advance(LIMITS.SEND_DEADLINE_MS);
+  assert.equal(post.aborted, true);
+  assert.equal(h.view().reason, REASON.END_TAPPED + "; " + REASON.UNKNOWN);
+  assert.equal(h.said.length, 1);
+});

@@ -746,7 +746,10 @@ may still be speaking; wait until it is quiet.
 - After the send is acknowledged, the request must appear in a snapshot
   within 30 s, and its reply must come within ten minutes.
 - Each start step (the snapshot, the wake lock, the grant) and the ticket
-  get 10 s; the send POST gets 20 s.
+  get 10 s; the send POST gets 20 s from when it is issued, whatever
+  becomes of the conversation: an end leaves it open until then (its
+  answer only settles the reason shown), and at that deadline it is
+  aborted with delivery unknown.
 - The grant is beaten every 5 s, one beat at a time, each abandoned after
   4 s. The page treats it as good until 10 s after the *start* of the last
   beat that succeeded (the grant request counts as the first), on a
