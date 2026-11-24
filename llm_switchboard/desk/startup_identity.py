@@ -22,11 +22,11 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import re
 
 from .config import DeskConfig
 from .model import DeskError
 from .peer import ProcessRecord
+from .session_identity import installed_claude_path
 
 
 class StartupRefusal(str, Enum):
@@ -88,8 +88,6 @@ def refused(refusal: StartupRefusal) -> DeskError:
 SESSION_OPTIONS = frozenset({"--resume", "--session-id"})
 _SESSION_CHOOSERS = SESSION_OPTIONS | {"-r", "-c", "--continue", "--fork-session", "--from-pr", "--teleport",
                                        "--cloud"}
-# The installer names each executable for its version (`2.1.330`).
-_VERSION_NAME = re.compile(r"[0-9]+(?:\.[0-9]+)+")
 
 
 @dataclass(frozen=True)
@@ -126,10 +124,7 @@ def is_installed_claude(process: ProcessRecord, versions_dir: Path) -> bool:
     its version. The name in argv is the program's to choose; the resolved
     /proc/<pid>/exe is the kernel's. A deleted executable reads as
     `<path> (deleted)` and fails the name."""
-    if process.exe is None:
-        return False
-    exe = Path(process.exe)
-    return exe.parent == versions_dir and _VERSION_NAME.fullmatch(exe.name) is not None
+    return installed_claude_path(process.exe, versions_dir)
 
 
 def foreground_claude(pane: ProcessRecord, children: list[ProcessRecord],

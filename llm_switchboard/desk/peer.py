@@ -19,16 +19,9 @@ import struct
 import sys
 from typing import Callable
 
-from .bounded_read import read_bounded
 from .config import DeskConfig
 from .model import CHANNEL_START_PATTERN, ChannelProcess
-from .shallow_json import loads_shallow
-
-# Claude's session files are a few hundred bytes.
-MAX_SESSION_FILE_BYTES = 64 * 1024
-# Claude's session file is a flat object; the slack keeps a nested field a
-# later Claude Code adds readable, and deeper content reads as no entry.
-MAX_SESSION_FILE_DEPTH = 16
+from .session_identity import MAX_SESSION_FILE_BYTES, MAX_SESSION_FILE_DEPTH, read_session_file
 
 
 @dataclass(frozen=True)
@@ -148,19 +141,6 @@ def process_presence(proc_dir: Path, pid: int, start: str) -> ChannelProcess:
     if len(fields) < 20 or not CHANNEL_START_PATTERN.fullmatch(fields[19]):
         return ChannelProcess.UNVERIFIABLE
     return ChannelProcess.RUNNING if fields[19] == start else ChannelProcess.GONE
-
-
-def read_session_file(sessions_dir: Path, pid: int) -> dict | None:
-    """The session file's object, or None when it is missing, unreadable,
-    not a regular file (a FIFO, a symlink), over `MAX_SESSION_FILE_BYTES`
-    or not a JSON object. The channel's final guard runs this under its
-    stdout lock, so the read must never block or grow with the file."""
-    try:
-        data = read_bounded(Path(sessions_dir) / f"{pid}.json", MAX_SESSION_FILE_BYTES)
-        entry = loads_shallow(data, MAX_SESSION_FILE_DEPTH) if data is not None else None
-    except (OSError, ValueError):
-        return None
-    return entry if isinstance(entry, dict) else None
 
 
 # --- rules over parsed records -----------------------------------------------

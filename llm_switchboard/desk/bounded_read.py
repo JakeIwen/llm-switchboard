@@ -17,7 +17,7 @@ import stat
 _OPEN_FLAGS = os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
 
 
-def read_bounded(path: Path, limit: int) -> bytes | None:
+def read_bounded(path: Path, limit: int, *, min_mtime_ns: int | None = None) -> bytes | None:
     """The file's bytes, or None when it doesn't exist. Raises OSError when
     it can't be opened, isn't a regular file, or holds more than `limit`."""
     try:
@@ -28,6 +28,9 @@ def read_bounded(path: Path, limit: int) -> bytes | None:
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode):
             raise OSError(errno.EINVAL, "not a regular file", str(path))
+        # Check the opened object: a stat by name could describe a replacement.
+        if min_mtime_ns is not None and info.st_mtime_ns < min_mtime_ns:
+            raise OSError(errno.EINVAL, "file predates process", str(path))
         if info.st_size > limit:
             raise OSError(errno.EFBIG, "file too large", str(path))
         data = _read_at_most(fd, limit + 1)
