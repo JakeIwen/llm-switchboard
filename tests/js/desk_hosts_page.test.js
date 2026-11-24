@@ -93,3 +93,91 @@ test("an id two hosts own is badged, and the page offers no send to it", async (
   assert.equal(h.$("detail-badge").textContent, "Enrolled on two hosts");
   assert.equal(h.$("review-btn").disabled, true);
 });
+
+// ---- Candidates, Enroll now, the host choice, unenroll --------------------
+
+const CANDIDATE = { host: "mac", session_id: "c1-0000", label: "asking", folder: "dev/x", seen: 1 };
+const MAC_LINK = { host: "mac", state: "up", since: 1, signer: true };
+const byTestid = (node, id) => node.all((k) => k.getAttribute("data-testid") === id);
+const tap = async (node, id, n) => { byTestid(node, id)[n || 0].click(); await settle(); };
+
+test("a candidate is listed with Enroll now, which asks first and then enrolls on its host", async () => {
+  const h = await paired(snap({ candidates: [CANDIDATE], links: [MAC_LINK] }));
+  const list = h.$("candidate-list");
+  assert.equal(h.$("candidates").hidden, false);
+  assert.deepEqual(badges(list), ["mac"]);
+  assert.match(list.textContent, /asking/);
+  assert.match(list.textContent, /dev\/x/);
+  await tap(list, "enroll-now");
+  assert.equal(h.pending("/desk/api/enroll-host").length, 0, "enrolled before the confirmation");
+  assert.equal(byTestid(list, "enroll-now-text")[0].textContent, Hosts.ENROLL_NOW_NOTICE);
+  assert.equal(byTestid(list, "enroll-now-yes")[0].textContent, "Enroll now");
+  await tap(list, "enroll-now-yes");
+  const [call] = h.pending("/desk/api/enroll-host");
+  assert.deepEqual(call.body, { session_id: "c1-0000", host: "mac" });
+  await h.answer("/desk/api/enroll-host", 200, { session_id: "c1-0000", host: "mac", enrolled: true });
+  assert.equal(h.$("candidates-note").textContent, "Enrolled.");
+  await h.answer(POLL, 200, snap({ links: [MAC_LINK] }));
+  assert.equal(h.$("candidates").hidden, false, "the outcome went with the candidate");
+});
+
+test("Cancel, or the candidate leaving the list, drops the confirmation without an edit", async () => {
+  const h = await paired(snap({ candidates: [CANDIDATE] }));
+  await tap(h.$("candidate-list"), "enroll-now");
+  await tap(h.$("candidate-list"), "enroll-now-no");
+  assert.equal(byTestid(h.$("candidate-list"), "enroll-now-text").length, 0);
+  await tap(h.$("candidate-list"), "enroll-now");
+  await h.answer(POLL, 200, snap());
+  assert.equal(h.$("candidates").hidden, true);
+  await h.answer(POLL, 200, snap({ candidates: [CANDIDATE] }));
+  assert.equal(byTestid(h.$("candidate-list"), "enroll-now-text").length, 0, "the confirmation outlived its candidate");
+  assert.equal(h.all("/desk/api/enroll-host").length, 0);
+});
+
+test("the typed form's host choice: pi and the hosts in links; a Mac host asks Enroll now first", async () => {
+  const h = await paired(snap({ links: [MAC_LINK] }));
+  const select = h.$("enroll-host");
+  assert.deepEqual(select.children.map((k) => k.getAttribute("value")), ["pi", "mac"]);
+  assert.equal(select.value, "pi");
+  h.$("enroll-input").value = "s9";
+  h.$("enroll-form").dispatch("submit");
+  await settle();
+  assert.deepEqual(h.pending("/desk/api/enroll")[0].body, { session_id: "s9" });
+  select.value = "mac";
+  h.$("enroll-input").value = "s8";
+  h.$("enroll-form").dispatch("submit");
+  await settle();
+  const confirm = h.$("enroll-form-confirm");
+  assert.equal(byTestid(confirm, "enroll-now-text")[0].textContent, Hosts.ENROLL_NOW_NOTICE);
+  await tap(confirm, "enroll-now-yes");
+  assert.deepEqual(h.pending("/desk/api/enroll-host")[0].body, { session_id: "s8", host: "mac" });
+  await h.answer(POLL, 200, snap({ links: [MAC_LINK] }));
+  assert.equal(select.value, "mac", "the chosen host was not kept");
+  await h.answer(POLL, 200, snap());
+  assert.equal(select.value, "pi");
+});
+
+test("a Mac target unenrolls on its host; a phase 1 hub's 404 says it is older", async () => {
+  const h = await paired(snap({ targets: [target("s1"), onMac({ session_id: "s2" })] }));
+  const row = h.$("enroll-list").all((k) => k.getAttribute("data-host") === "mac")[0];
+  assert.deepEqual(badges(row), ["mac"]);
+  await tap(row, "unenroll-btn");
+  assert.deepEqual(h.pending("/desk/api/unenroll-host")[0].body, { session_id: "s2", host: "mac" });
+  await h.answer("/desk/api/unenroll-host", 404, { error: "not found" });
+  assert.equal(h.$("settings-note").textContent, Hosts.OLDER_HUB);
+});
+
+test("an id two hosts own offers an unenroll on each host; an unenrolled Mac target offers Enroll now", async () => {
+  const h = await paired(snap({ links: [MAC_LINK], targets: [
+    target("s1", { enrolled: false, enrolled_on_two_hosts: true, registration: "none", generation: null }),
+    onMac({ session_id: "s2", enrolled: false, lock: { lock_id: "k", request_id: "r", since: 1 } })] }));
+  const rows = h.$("enroll-list").children;
+  assert.deepEqual(byTestid(rows[0], "unenroll-btn").map((k) => k.textContent), ["Unenroll on Pi", "Unenroll on mac"]);
+  await tap(rows[0], "unenroll-btn", 1);
+  assert.deepEqual(h.pending("/desk/api/unenroll-host")[0].body, { session_id: "s1", host: "mac" });
+  assert.deepEqual(byTestid(rows[1], "enroll-btn").map((k) => k.textContent), ["Enroll now"]);
+  await tap(rows[1], "enroll-btn");
+  assert.equal(h.all("/desk/api/enroll-host").length, 0);
+  await tap(h.$("enroll-form-confirm"), "enroll-now-yes");
+  assert.deepEqual(h.pending("/desk/api/enroll-host")[0].body, { session_id: "s2", host: "mac" });
+});

@@ -104,6 +104,12 @@ textarea { resize: vertical; min-height: 7rem; }
 .reply-text { white-space: pre-wrap; overflow-wrap: anywhere; margin: .3rem 0; }
 .reply-text.sent { color: var(--muted); }
 .pick { padding: 1rem; }
+.candidates { margin-top: 1rem; }
+.candidates h2 { font-size: 1rem; margin: 0 0 .4rem; }
+.candidates li + li { margin-top: .6rem; }
+.candidates .name { font-weight: 600; overflow-wrap: anywhere; }
+.candidates .folder { display: block; color: var(--muted); font-size: .8rem; overflow-wrap: anywhere; margin-bottom: .3rem; }
+.host-choice { min-height: var(--tap); font: inherit; background: var(--surface); color: var(--text); border: 2px solid var(--line); border-radius: var(--radius); padding: 0 .6rem; }
 #enroll-list li { display: flex; gap: .7rem; align-items: center; justify-content: space-between; padding: .3rem 0; overflow-wrap: anywhere; }
 .startup-outcomes > li { margin-top: .6rem; }
 .startup-item + .startup-item { border-top: 1px solid var(--line); margin-top: .8rem; padding-top: .4rem; }

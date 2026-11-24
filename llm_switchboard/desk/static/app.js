@@ -28,6 +28,7 @@
   var tapSends = 0;
   var startup = null; // startup.js's blocked-session view, created in wire()
   var linkView = null; // link_view.js: the Mac link's lines and host badges, created in wire()
+  var enrollView = null; // enroll_view.js: enrollment, candidates and Enroll now, created in wire()
   var conv = null, convView = null; // conversation.js's controller and conversation_view.js, created in wire()
   var audio = null; // page_audio.js: reply speech, Play and one-shot Dictate, created in wire()
 
@@ -107,8 +108,7 @@
       $("draft").value = "";
       $("interim").textContent = "";
       hideResult();
-      clear($("enroll-list"));
-      $("settings-note").textContent = "";
+      enrollView.reset();
       $("desk").hidden = true;
       startup.stop();
       $("banner-sends").hidden = true;
@@ -338,7 +338,8 @@
 
   function render() {
     if (held) return;
-    runAll([renderTargets, renderDetail, renderSettings, function () { linkView.render(state); }, function () { convView.render(conv.view(), startBlocker()); }]);
+    runAll([renderTargets, renderDetail, function () { enrollView.render(state); }, function () { linkView.render(state); },
+      function () { convView.render(conv.view(), startBlocker()); }]);
   }
 
   // The controller's onChange and page_audio's changed: a fault in the
@@ -669,7 +670,7 @@
     });
   }
 
-  // ---- Clear, enroll ------------------------------------------------------
+  // ---- Clear --------------------------------------------------------------
 
   function doClear() {
     // Submit only the pair the operator confirmed, never the current lock.
@@ -692,26 +693,6 @@
     });
   }
 
-  function enrollCall(kind, id) {
-    var note = $("settings-note");
-    api("POST", "/desk/api/" + kind, { session_id: id }).then(function (r) {
-      note.textContent = r.status === 200 ? (kind === "enroll" ? "Enrolled." : "Unenrolled.") : "Failed: " + errorText(r) + ".";
-    }, function () {
-      note.textContent = "Could not reach the hub.";
-    });
-  }
-
-  function renderSettings() {
-    var list = $("enroll-list");
-    clear(list);
-    (state ? state.targets : []).forEach(function (t) {
-      var kind = t.enrolled ? "unenroll" : "enroll";
-      var btn = el("button", { type: "button", "class": "btn", "data-testid": kind + "-btn", text: t.enrolled ? "Unenroll" : "Enroll" });
-      btn.addEventListener("click", function () { enrollCall(kind, t.session_id); });
-      list.appendChild(el("li", {}, [el("span", { text: (t.label || t.session_id) + " (" + t.session_id + ")" }), btn]));
-    });
-  }
-
   // ---- Wiring -------------------------------------------------------------
 
   function wire() {
@@ -721,6 +702,8 @@
       lateSound: function () { return audio.lateSound(); } } });
     audio = window.DeskPageAudio.create({ win: window, $: $, conv: conv, note: setNote, changed: renderForController });
     linkView = window.DeskLinkView.create(document);
+    enrollView = window.DeskEnrollView.create({ doc: document, api: api, hostBadge: linkView.hostBadge,
+      paired: function () { return !!token; } });
     convView = window.DeskConversationView.create(document, { start: startConversation, end: conv.endTap });
     startup = window.DeskStartup.create({
       api: api,
@@ -732,13 +715,6 @@
       var open = $("settings").hidden;
       $("settings").hidden = !open;
       $("settings-toggle").setAttribute("aria-expanded", String(open));
-    });
-    $("enroll-form").addEventListener("submit", function (e) {
-      e.preventDefault();
-      var id = $("enroll-input").value.trim();
-      if (!id || !token) return;
-      enrollCall("enroll", id);
-      $("enroll-input").value = "";
     });
     $("draft").addEventListener("input", function () {
       resetAfterResult();

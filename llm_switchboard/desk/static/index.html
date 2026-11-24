@@ -31,9 +31,11 @@
   <h2>Enrollment</h2>
   <ul id="enroll-list" class="plain"></ul>
   <form id="enroll-form" class="row">
+    <select id="enroll-host" class="host-choice" data-testid="enroll-host" aria-label="Host"></select>
     <input id="enroll-input" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Session id to enroll" aria-label="Session id to enroll">
     <button id="enroll-btn" type="submit" class="btn">Enroll</button>
   </form>
+  <div id="enroll-form-confirm"></div>
   <p id="settings-note" class="note" role="status"></p>
 </section>
 
@@ -52,6 +54,11 @@
     <ul id="link-refusals" class="plain links" data-testid="link-refusals" hidden></ul>
     <ul id="targets" class="plain" data-testid="targets"></ul>
     <p id="targets-empty" class="note" hidden>No targets. Enroll a session in Settings.</p>
+    <section id="candidates" class="candidates" data-testid="candidates" hidden>
+      <h2>Mac sessions asking to join</h2>
+      <ul id="candidate-list" class="plain"></ul>
+      <p id="candidates-note" class="note" data-testid="candidates-note" role="status"></p>
+    </section>
   </nav>
 
   <section id="detail" class="detail" hidden>
@@ -143,6 +150,7 @@
 <script src="/desk/page_audio.js"></script>
 <script src="/desk/startup.js"></script>
 <script src="/desk/link_view.js"></script>
+<script src="/desk/enroll_view.js"></script>
 <script src="/desk/hub_api.js"></script>
 <script src="/desk/app.js"></script>
 </body>

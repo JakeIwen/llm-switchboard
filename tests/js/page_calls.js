@@ -127,6 +127,18 @@ const CALLS = {
   "an unenroll": {
     running: async (h) => { await listen(h); unenroll(h); return h.pending("/desk/api/unenroll")[0]; },
     closing: async (h) => { await listen(h); await cue(h); unenroll(h); return h.pending("/desk/api/unenroll")[0]; }
+  },
+  "an Enroll now": {
+    running: async (h) => { await enrollNow(h); await listen(h); return h.pending("/desk/api/enroll-host")[0]; },
+    closing: async (h) => {
+      await enrollNow(h); await listen(h); await cue(h); return h.pending("/desk/api/enroll-host")[0];
+    }
+  },
+  "a Mac target's unenroll": {
+    running: async (h) => { await macUnenroll(h); await listen(h); return h.pending("/desk/api/unenroll-host")[0]; },
+    closing: async (h) => {
+      await macUnenroll(h); await listen(h); await cue(h); return h.pending("/desk/api/unenroll-host")[0];
+    }
   }
 };
 
@@ -143,6 +155,24 @@ async function clearLock(h) {
   h.$("clear-yes").click();
   await settle();
   await h.answer(POLL, 200, snap());
+}
+
+const CANDIDATE = { host: "mac", session_id: "c1", label: "asking", folder: "", seen: 1 };
+const tapIn = (node, id) => node.all((k) => k.getAttribute("data-testid") === id)[0].click();
+
+// A candidate's Enroll now, confirmed: its POST is left open.
+async function enrollNow(h) {
+  await h.answer(POLL, 200, snap({ candidates: [CANDIDATE] }));
+  tapIn(h.$("candidate-list"), "enroll-now");
+  tapIn(h.$("candidate-list"), "enroll-now-yes");
+  await settle();
+}
+
+// A Mac target's unenroll: its POST is left open.
+async function macUnenroll(h) {
+  await h.answer(POLL, 200, snap({ targets: [target("s1"), target("s2", { host: "mac" })] }));
+  tapIn(h.$("enroll-list").all((k) => k.getAttribute("data-host") === "mac")[0], "unenroll-btn");
+  await settle();
 }
 
 function unenroll(h) {
