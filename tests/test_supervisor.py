@@ -89,7 +89,8 @@ class SupervisorTest(unittest.TestCase):
             sup.reconcile()
         self.assertIn("--mcp-config", self.tmux.started[-1][1])
 
-        with patch.object(Path, "stat", side_effect=PermissionError):
+        # The read itself refused, as a file without read permission is.
+        with patch("llm_switchboard.desk.enrollment.read_bounded", side_effect=PermissionError):
             sup.request_restart(SID)
             sup.reconcile()
         self.assertNotIn("--mcp-config", self.tmux.started[-1][1])

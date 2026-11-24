@@ -6,12 +6,14 @@ supervisor reads `enrolled.json` on every launch, and a FIFO or a huge file
 in its place must not stall its one thread (or an acknowledgement holding
 the file's lock); either reads as unreadable.
 
-The hub rereads them only when their mtime, size or inode changes, so an
-`llm-switchboard desk enroll|unenroll|sends` from the CLI is seen at the
-hub's next recheck without a restart. Anything unreadable reads as "nothing
-enrolled" and "sends off": the desk fails closed. The startup
-acknowledgement's strict read skips that cache and opens the file every
-time, since a permission change alters none of the three. Editing is stricter: an
+`enrolled.json` is opened and validated on every read, never answered from
+an earlier one: a permission change or an in-place rewrite can leave its
+mtime, size and inode as they were, and routing must not outlive a read that
+fails. The sends switch in `desk-settings.json` is reread only when one of
+those three changes. Either way an `llm-switchboard desk
+enroll|unenroll|sends` from the CLI is seen at the hub's next recheck
+without a restart. Anything unreadable reads as "nothing enrolled" and
+"sends off": the desk fails closed. Editing is stricter: an
 enroll or unenroll over an unreadable or malformed `enrolled.json` is
 refused (503) rather than overwriting the sessions it may still hold.
 `desk-settings.json` holds two switches, `sends_enabled` and
@@ -207,14 +209,12 @@ class Enrollment:
         return self._json.lock.held()
 
     def sessions(self, *, strict: bool = False) -> dict[str, dict]:
-        """The enrolled sessions; an unreadable or malformed file reads as
-        none, or raises (503) with `strict`, for callers that must not report
-        a failed read as "nothing enrolled". Routing reads the cache; `strict`
-        (the startup acknowledgement) opens the file every time."""
-        if not strict:
-            return dict(self._json.read().get("sessions", {}))
+        """The enrolled sessions, from the file opened and validated now (see
+        the module docstring); an unreadable or malformed file reads as none,
+        or raises (503) with `strict`, for callers that must not report a
+        failed read as "nothing enrolled"."""
         data, unreadable = self._json.read_fresh()
-        if unreadable:
+        if unreadable and strict:
             raise DeskError(503, f"{self._json.file.path.name} unreadable")
         return dict(data.get("sessions", {}))
 

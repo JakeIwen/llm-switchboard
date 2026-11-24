@@ -13,8 +13,12 @@ limit the Mac can verify ("Who the design defends against").
 One owner per session id, enforced: `owners` maps every id in either file
 to the hosts listing it, and `published_view` routes an id with one owner
 to that host and puts an id with more in `conflicts`, routed nowhere until
-an unenroll leaves one owner. An unreadable `enrolled-hosts.json` publishes
-no Mac enrollment; Pi enrollment stays.
+an unenroll leaves one owner. `routing_view` reads both files now, never
+from an earlier read (a permission change or an in-place rewrite can leave
+mtime, size and inode as they were). An unreadable `enrolled-hosts.json`
+publishes no Mac enrollment; Pi enrollment stays. An unreadable
+`enrolled.json` publishes none at all: no Mac id's single owner can then be
+checked.
 
 Edits, from the hub and offline, take one rule (`enroll_checked`): under
 `enrolled.json`'s lock both files are read fresh and validated before
@@ -72,16 +76,16 @@ class HostEnrollment:
         self._json = CachedJson(path, valid_host_enrollment, lock_for=enrolled_file)
 
     def hosts(self) -> dict[str, frozenset[str]]:
-        """{host: enrolled session ids} from the cache; an unreadable or
-        malformed file reads as none."""
-        return {host: frozenset(sessions) for host, sessions in self._json.read().get(HOSTS_KEY, {}).items()}
+        """{host: enrolled session ids}, opened and validated now, never from
+        an earlier read; an unreadable or malformed file reads as none."""
+        return _host_sets(self._json.read_fresh()[0])
 
     def hosts_fresh(self) -> dict[str, frozenset[str]]:
-        """Opened and validated now, for an edit's checks; 503 when it can't be."""
+        """The same read for an edit's checks; 503 when it fails."""
         data, unreadable = self._json.read_fresh()
         if unreadable:
             raise DeskError(503, Refusal.ENROLLMENT_FILES_UNREADABLE)
-        return {host: frozenset(sessions) for host, sessions in data.get(HOSTS_KEY, {}).items()}
+        return _host_sets(data)
 
     def enroll(self, host: str, session_id: str, now: float) -> bool:
         """True when newly enrolled; the caller holds the lock and has checked."""
@@ -110,6 +114,10 @@ class HostEnrollment:
             return True
 
 
+def _host_sets(data: dict) -> dict[str, frozenset[str]]:
+    return {host: frozenset(sessions) for host, sessions in data.get(HOSTS_KEY, {}).items()}
+
+
 def owners(pi_sessions, hosts: dict[str, frozenset[str]]) -> dict[str, frozenset[str]]:
     """{session id: the hosts that list it}, from both files."""
     found: dict[str, set[str]] = {session_id: {HOST} for session_id in pi_sessions}
@@ -123,6 +131,22 @@ def published_view(owner_map: dict[str, frozenset[str]]) -> tuple[dict[str, str]
     """({session id: its one host}, the ids with more than one owner)."""
     enrollment = {sid: next(iter(found)) for sid, found in owner_map.items() if len(found) == 1}
     return enrollment, frozenset(sid for sid, found in owner_map.items() if len(found) > 1)
+
+
+def routing_view(enrollment: Enrollment, host_enrollment: HostEnrollment
+                 ) -> tuple[dict[str, str], frozenset[str], frozenset[str]]:
+    """({session id: its one host}, conflicts, the hosts enrolled-hosts.json
+    lists sessions for), from both files read now by a caller holding
+    `enrolled.json`'s lock. A failed read of `enrolled.json` routes nothing:
+    an id it may also list must not become a Mac's."""
+    hosts = host_enrollment.hosts()
+    listed = frozenset(host for host, ids in hosts.items() if ids)
+    try:
+        pi_sessions = enrollment.sessions(strict=True)
+    except DeskError:
+        return {}, frozenset(), listed
+    view, conflicts = published_view(owners(pi_sessions, hosts))
+    return view, conflicts, listed
 
 
 def enroll_checked(enrollment: Enrollment, host_enrollment: HostEnrollment, host: str, session_id,

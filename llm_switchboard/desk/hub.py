@@ -58,7 +58,7 @@ from .model import (
 from .operator import OperatorOp, OperatorServer, bind_private_socket
 from .peer import process_presence
 from .refusals import Refusal
-from .remote_enrollment import HostEnrollment, owners, published_view
+from .remote_enrollment import HostEnrollment, routing_view
 from .run_lock import HeldRunLock
 from .protocol import (
     HEARTBEAT_SECONDS, IDLE_TIMEOUT_SECONDS, FrameError, MessageType, decode, encode, read_line,
@@ -259,12 +259,12 @@ class Hub(HubEnrollment, HubLinkOps):
             yield
 
     def refresh_files(self) -> None:
-        """Both enrollment files, read under enrolled.json's lock, published
-        as one view: an id with two owners is enrolled nowhere."""
+        """Both enrollment files, read now under enrolled.json's lock,
+        published as one view: an id with two owners is enrolled nowhere,
+        and a file that fails this read routes nothing it governs."""
         with self._policy_files(), self._policy_lock:
-            hosts = self.host_enrollment.hosts()
-            enrollment, conflicts = published_view(owners(self.enrollment.sessions(), hosts))
-            self._published = (enrollment, conflicts, frozenset(h for h, ids in hosts.items() if ids))
+            enrollment, conflicts, listed = routing_view(self.enrollment, self.host_enrollment)
+            self._published = (enrollment, conflicts, listed)
             self.state.set_enrollment(enrollment, conflicts)
             self.state.set_sends_enabled(self.settings.sends_enabled())
             self.state.set_voice_enabled(self.settings.voice_confirm_enabled())
@@ -579,7 +579,8 @@ class Hub(HubEnrollment, HubLinkOps):
             self.state.expire_request(request.request_id)
             self._drop_connection(request.conn_id, f"dispatch recheck: {reason}")
             raise DeskError(409, Refusal.TARGET_CHANGED_NOT_SENT)
-        # A CLI unenroll or sends change since the last 5 s pass counts too.
+        # A CLI unenroll or sends change since the last 5 s pass counts too,
+        # and so does an enrollment file that no longer reads.
         # The file locks stay held until the target lock is persisted, so an
         # offline edit either lands before this reread or waits for the handoff.
         # A Mac target's handoff passes the link's handoff gate (counted until

@@ -216,6 +216,98 @@ class OwnershipTest(MacTargetCase):
         self.assertEqual([r.session_id for r in self.hub.state.registrations() if r.host == "pi"], [SESSION_A])
 
 
+def unreadable(path: Path):
+    """Takes read permission away; returns the restore."""
+    path.chmod(0)
+    return lambda: path.chmod(0o600)
+
+
+def corrupt_keeping_stat_key(path: Path):
+    """Rewrites `path` in place as same-length garbage with its mtime put
+    back, so its mtime, size and inode are what they were; returns the restore."""
+    original, before = path.read_bytes(), path.stat()
+    path.write_bytes(b"x" + original[1:])
+    os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+    return lambda: path.write_bytes(original)
+
+
+@unittest.skipIf(os.geteuid() == 0, "root reads a file whatever its mode")
+class RoutingReadTest(MacTargetCase):
+    """Routing reads both enrollment files now, never content kept from an
+    earlier read: a file that fails its read routes nothing it governs, and
+    the next good read routes again without a restart."""
+
+    def ticket(self, session_id: str) -> str:
+        return self.hub.ticket({"session_id": session_id, "generation": self.target(session_id)["generation"],
+                                "epoch": self.hub.epoch}, self.token)["ticket"]
+
+    def refused_send(self, ticket: str) -> DeskError:
+        with self.assertRaises(DeskError) as caught:
+            self.hub.send({"ticket": ticket, "text": "x"}, self.token)
+        return caught.exception
+
+    def test_a_file_that_fails_its_read_routes_nothing_it_governs_until_read_again(self):
+        self.assertEqual(self.channel(SESSION_A).first[0], MessageType.WELCOME)
+        governed = ((self.config.remote_enrolled_file, SESSION_M), (self.config.enrolled_file, SESSION_A))
+        for path, session_id in governed:
+            for breaker in (unreadable, corrupt_keeping_stat_key):
+                with self.subTest(file=path.name, how=breaker.__name__):
+                    self.hub.refresh_files()
+                    ticket = self.ticket(session_id)
+                    restore = breaker(path)
+                    try:
+                        error = self.refused_send(ticket)
+                        self.assertEqual((error.status, error.reason), (409, Refusal.NOT_ENROLLED))
+                        self.assertEqual(self.hub.state_view()["requests"][-1]["state"], "expired")
+                        self.assertEqual(LockStore(self.config.lock_file).load(), [])
+                        self.assertIsNone(self.hub.remote_owner(session_id))
+                        with self.assertRaises(DeskError) as caught:
+                            self.ticket(session_id)
+                        self.assertEqual(caught.exception.reason, Refusal.NOT_ENROLLED)
+                    finally:
+                        restore()
+                    # The next good read routes again, with no restart.
+                    self.hub.refresh_files()
+                    self.assertIn(self.hub.remote_owner(session_id), ("pi", MAC))
+                    self.ticket(session_id)
+        self.assertEqual(self.send_m()["state"], "handed_off")
+        self.assertEqual(self.mac.expect(LinkType.EVENT)["chan"], 1)
+
+    def test_an_unreadable_pi_file_routes_no_id_to_a_mac(self):
+        """Without `enrolled.json` no Mac id's single owner can be checked:
+        an id listed in both files must not become the Mac's."""
+        self.remote[SESSION_A] = MAC
+        self.hub.refresh_files()
+        self.assertTrue(self.hub.enrolled_on_two_hosts(SESSION_A))
+        ticket = self.ticket(SESSION_M)
+        self.config.enrolled_file.write_text(CORRUPTIONS[0])
+        self.hub.refresh_files()
+        self.assertEqual((self.hub.remote_owner(SESSION_A), self.hub.remote_owner(SESSION_M)), (None, None))
+        self.assertEqual(self.mac.register(2, SESSION_A)["reason"], "not_enrolled")
+        self.assertEqual(self.refused_send(ticket).reason, Refusal.NOT_ENROLLED)
+        enroll_file(self.config, SESSION_A, SESSION_B)
+        self.hub.refresh_files()
+        self.assertTrue(self.hub.enrolled_on_two_hosts(SESSION_A))
+        self.assertEqual(self.hub.remote_owner(SESSION_M), MAC)
+
+    def test_a_failed_read_keeps_the_lock_of_a_prompt_that_may_still_run(self):
+        sent = self.send_m()
+        self.assertEqual(self.mac.expect(LinkType.EVENT)["request_id"], sent["request_id"])
+        [lock] = LockStore(self.config.lock_file).load()
+        restore = unreadable(self.config.remote_enrolled_file)
+        try:
+            self.hub.recheck_now()
+            # The registration goes as an unenroll's would; the lock stays.
+            self.assertEqual(self.mac.expect(LinkType.DROP)["chan"], 1)
+            self.assertEqual(LockStore(self.config.lock_file).load(), [lock])
+            self.assertNotIn(self.hub.state.request_state(sent["request_id"]), ("expired", None))
+        finally:
+            restore()
+        self.hub.refresh_files()
+        self.assertEqual(LockStore(self.config.lock_file).load(), [lock])
+        self.assertEqual(self.target(SESSION_M)["lock"]["lock_id"], lock.lock_id)
+
+
 class EnrollEditTest(MacTargetCase):
     """The edit rule, online through the hub and offline through the CLI."""
 
