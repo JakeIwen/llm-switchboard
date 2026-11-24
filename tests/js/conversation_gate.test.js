@@ -10,47 +10,12 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { G } = require("./grant_ids.js");
 const {
-  STATIC, L, PATH, REASON, POLL, settle, paired, snap, target, ended, releases, voiceSend
+  STATIC, L, PATH, REASON, POLL, settle, paired, snap, target, ended, releases, voiceSend, listen, cue, over, drafted,
+  abandonedSnapshot, abandonedGrant, tapTicket, tapRefresh
 } = require("./page_harness.js");
 const { LIMITS } = L;
 
 const failed = (status) => L.withDetail(REASON.CALL_FAILED, "HTTP " + status);
-const last = (h, p) => h.pending(p)[h.pending(p).length - 1];
-
-// A Start tap through to the open mic, answering the newest Start snapshot
-// and grant request, so older calls on the same paths stay open.
-async function listen(h, grant, s) {
-  if (h.$("conv-end").textContent === "Close") h.$("conv-end").click();
-  h.$("conv-start").click();
-  await settle();
-  last(h, PATH.STATE).answer(200, s || snap());
-  await settle();
-  last(h, PATH.GRANT).answer(200, { grant: grant || G.g1, expires_in: 15 });
-  await settle();
-  assert.equal(h.state(), "Listening.");
-}
-
-// End tapped: the closing cue plays.
-async function cue(h) {
-  h.$("conv-end").click();
-  await settle();
-  assert.match(h.utt().text, /^Conversation ended: End was tapped/);
-  assert.equal(h.synth.speaking, true);
-}
-
-// A conversation ended by its closing cue's own end, the guard passed.
-async function over(h) {
-  await cue(h);
-  h.utt().fire("end");
-  await settle();
-  await h.advance(LIMITS.GUARD_MS);
-}
-
-async function drafted(h) {
-  h.rec().hear("check the logs");
-  h.rec().hear("send it");
-  await settle();
-}
 
 // For every call the page can make, how to have it open while a closing
 // cue plays (`closing`) and while a conversation runs (`running`), as the
@@ -172,46 +137,6 @@ const CALLS = {
     closing: async (h) => { await listen(h); await cue(h); unenroll(h); return h.pending("/desk/api/unenroll")[0]; }
   }
 };
-
-// A Start snapshot given up on at the step deadline, its abort lost.
-async function abandonedSnapshot(h) {
-  h.honorAbort = false;
-  h.$("conv-start").click();
-  await settle();
-  const s = h.pending(PATH.STATE)[0];
-  await h.advance(LIMITS.STEP_MS);
-  assert.equal(h.state(), ended(REASON.HUB_UNREACHABLE));
-  h.honorAbort = true;
-  return s;
-}
-
-// A grant request given up on at the step deadline, let go when a poll
-// showed a new hub epoch.
-async function abandonedGrant(h) {
-  h.$("conv-start").click();
-  await settle();
-  await h.answer(PATH.STATE, 200, snap());
-  const g = h.pending(PATH.GRANT)[0];
-  await h.advance(LIMITS.STEP_MS);
-  await h.answer(POLL, 200, snap({ epoch: "e2" }));
-  return g;
-}
-
-function tapTicket(h) {
-  h.$("draft").value = "hello";
-  h.$("draft").dispatch("input");
-}
-
-// A tapped send handed off: its state refresh is left open.
-async function tapRefresh(h) {
-  tapTicket(h);
-  await h.answer("/desk/api/ticket", 200, { ticket: "tap-ticket" });
-  h.$("review-btn").click();
-  h.$("send-btn").click();
-  await settle();
-  await h.answer("/desk/api/send", 200, { request_id: "tap1", state: "handed_off" });
-  return h.pending(PATH.STATE)[0];
-}
 
 async function ack(h) {
   await h.answer("/desk/api/startup", 200, { sessions: [{ session_id: "s1", digest: "d1", capture: "warning",
