@@ -148,6 +148,7 @@ Sharing the socket would let its supervisor close the real windows.
 | `python -m scripts.api_parity` | Developer HTTP parity checks | `scripts/api_parity/__main__.py` |
 | `bin/desk-channel` | Claude Code, through the pinned `mcp.json` that `desk install-config` writes; its argv is pinned by `DeskConfig.channel_argv` and checked by `desk/peer.py`, so moving it breaks enrolled sessions | `llm_switchboard/desk/channel.py` |
 | `bin/desk-link` | sshd, through the `authorized_keys` forced command `desk link-authorize` writes; its argv is pinned by `DeskConfig.link_argv`, so moving it breaks the link | `llm_switchboard/desk/link_pump.py` |
+| `config_dir/run/hub.lock` (Pi) | `desk serve` (`cli._serve` takes it before constructing the hub and holds it until the process exits; `Hub.serve` requires it); the Mac link's offline decisions | `llm_switchboard/desk/hub.py`, through `desk/run_lock.py` |
 | `bin/desk-adb-link` | `systemd/llm-switchboard-desk-adb.service` | `llm_switchboard/desk/` (see `docs/voice-desk.md`) |
 | `systemd/llm-switchboard-desk.service`, `systemd/llm-switchboard-desk-adb.service` | `install.sh` template inputs | `install.sh` |
 | `scripts/desk-ca.sh` | Mac operator, one-off (the desk's local CA) | `docs/voice-desk.md` |

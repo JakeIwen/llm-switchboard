@@ -54,6 +54,7 @@ from .model import (
 from .operator import OperatorOp, OperatorServer, bind_private_socket
 from .peer import process_presence
 from .refusals import Refusal
+from .run_lock import HeldRunLock
 from .protocol import (
     HEARTBEAT_SECONDS, IDLE_TIMEOUT_SECONDS, FrameError, MessageType, decode, encode, read_line,
 )
@@ -213,8 +214,12 @@ class Hub:
         for thread in self._threads:
             thread.join(timeout=5)
 
-    def serve(self) -> int:
-        """Run until SIGTERM or SIGINT."""
+    def serve(self, run_lock: HeldRunLock) -> int:
+        """Run until SIGTERM or SIGINT, holding `run_lock` (taken by `desk
+        serve` before this hub was constructed; released only by the
+        process's exit, which ends every thread still running a request)."""
+        if not isinstance(run_lock, HeldRunLock):
+            raise TypeError("a hub is served only under its held run lock")
         stop = threading.Event()
         for sig in (signal.SIGTERM, signal.SIGINT):
             signal.signal(sig, lambda *_: stop.set())

@@ -26,6 +26,9 @@ from .protocol import SERVER_NAME
 EXIT_REFUSED = 1
 EXIT_SETUP = 2
 EXIT_NO_HUB = 3
+# `desk serve` found the run lock held past its start wait; systemd starts it
+# again 5 s later.
+EXIT_RUN_LOCK_HELD = 3
 # The request may or may not have been applied (for `revoke`: the tokens
 # are gone, but an acknowledgement on one may still press its Enter).
 EXIT_UNKNOWN = 4
@@ -76,8 +79,20 @@ def _serve(args, config: DeskConfig) -> int:
     from .http_server import TlsSetupError
     from .hub import Hub
     from .operator import SocketInUse
+    from .run_lock import START_WAIT_SECONDS, RunLockHeld, RunLockUnusable, hold_for_process
+    # The run lock comes before anything of the hub is constructed, so no hub
+    # state (the lock table first) is read while another hub could still
+    # write it, and an offline command holding it knows no hub runs.
     try:
-        return Hub(config).serve()
+        run_lock = hold_for_process(config.hub_run_lock, wait_seconds=START_WAIT_SECONDS)
+    except RunLockHeld:
+        print("desk: another desk hub or a desk command holds hub.lock", file=sys.stderr)
+        return EXIT_RUN_LOCK_HELD
+    except RunLockUnusable as exc:
+        print(f"desk: {exc}", file=sys.stderr)
+        return EXIT_SETUP
+    try:
+        return Hub(config).serve(run_lock)
     except (TlsSetupError, SocketInUse) as exc:
         print(f"desk: {exc}", file=sys.stderr)
         return EXIT_SETUP
