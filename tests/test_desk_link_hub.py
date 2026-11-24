@@ -92,28 +92,39 @@ class RealProofTest(LinkHubCase, HubCase):
         self.assertIs(verify_proof(pair.signer, **good), ProofCheck.PROOF_OK)
         self.assertIs(verify_proof(Signer(MAC2, pair.signer.blob), **good), ProofCheck.PROOF_BAD)
 
+
+class PublicationTest(LinkHubCase, HubCase):
+    def setUp(self):
+        def verify(signer, **fields):
+            result = verify_proof(signer, **fields)
+            write_signers(self.config.link_signers_file, self.key("mac2").signer, *self.replacement)
+            return result
+        self.link_options = {"verify": verify}
+        super().setUp()
+
     def test_publication_rechecks_signer_line(self):
         # The line is revoked, or rotated, between the verify and publication.
-        for replacement in ((), (self.key("mac-rotated").signer,)):
-            def verify(signer, **fields):
-                write_signers(self.config.link_signers_file, self.key("mac2").signer, *replacement)
-                return verify_proof(signer, **fields)
+        for self.replacement in ((), (self.key("mac-rotated").signer,)):
             write_signers(self.config.link_signers_file, self.key("mac").signer, self.key("mac2").signer)
-            self.hub.links._verify = verify
-            fields = self._refused(self.link_peer(), lambda message, _: self.key("mac").sign(message))
-            self.assertEqual(fields["reason"], RefusedCode.NOT_AUTHORIZED)
+            peer = self.link_peer()
+            fields = peer.handshake(self.key("mac"))
+            self.assertEqual((fields["type"], fields["reason"]), (LinkType.LINK_REFUSED, RefusedCode.NOT_AUTHORIZED))
+            self.assertTrue(peer.closed())
             self.assertNotEqual(self.links().get(MAC, {}).get("state"), "up")
 
 
-class AdmissionTest(LinkHubCase, HubCase):
+class OtherUidTest(LinkHubCase, HubCase):
+    link_options = {"peer_uid": lambda sock: os.getuid() + 1}
+
     def test_other_uid_refused(self):
-        self.hub.links._peer_uid = lambda sock: os.getuid() + 1
         peer = self.link_peer()
         peer.send(LinkType.LINK_HELLO, versions=[1], relay_build="", host=MAC, machine=MACHINE)
         self.assertTrue(peer.closed())
         self.assertEqual(self.refusals(), {})
         self.assertNotEqual(self.links()[MAC]["state"], "up")
 
+
+class AdmissionTest(LinkHubCase, HubCase):
     def test_version_refusal_counted_unattributed(self):
         self.connect()
         since = self.links()[MAC]["since"]
@@ -152,8 +163,10 @@ class AdmissionTest(LinkHubCase, HubCase):
         self.assertEqual((kind, fields["reason"]), (LinkType.LINK_REFUSED, RefusedCode.ADMISSION_TIMEOUT))
 
     def test_pending_admissions_capped(self):
-        held = [self.link_peer(), self.link_peer()]  # two silent admissions hold both slots
-        wait_until(lambda: self.hub.links._pending._value == 0)
+        held = [self.link_peer(), self.link_peer()]
+        for peer in held:
+            # Each challenge witnesses a pending admission, without submitting its proof.
+            self.assertIs(peer.hello()[0], LinkType.LINK_CHALLENGE)
         third = self.link_peer()
         self.assertTrue(third.closed())
         for peer in held:

@@ -117,6 +117,8 @@ class MacSendTest(MacTargetCase):
         self.mac.register(1, SESSION_M)
         sent = self._send_with(lambda link: link.sock.shutdown(socket.SHUT_WR))
         self.assertEqual(sent["state"], "unknown")
+        # The writer decides the frame before it reports the failed link.
+        wait_until(lambda: self.hub.links.live_link(MAC) is None)
         with self.assertRaises(DeskError) as raised:
             self.clear_m()  # a presence check, and that link is gone
         self.assertEqual(raised.exception.reason, Refusal.MAC_NOT_CONNECTED)
