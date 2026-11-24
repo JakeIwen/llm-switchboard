@@ -206,6 +206,19 @@ function rq(id, state, spoken, confirm) {
 }
 const voiceRq = (id, state, spoken) => rq(id, state, spoken, L.CONFIRM.VOICE);
 
+// A 401 on another call drops the token; the page pairs again and takes the
+// new pairing's first snapshot. Returns the poll left open from the earlier
+// pairing.
+async function repaired(h) {
+  const old = h.pending(POLL)[0];
+  assert.ok(old, "no poll open");
+  await h.answer("/desk/api/startup", 401, { error: "unauthorized" });
+  await h.advance(2000);
+  assert.ok(h.$("pairing").hidden, "the page did not pair again");
+  await h.answer(PATH.STATE, 200, snap());
+  return old;
+}
+
 // Pairs the page and delivers its first snapshot.
 async function paired(first, opts) {
   const h = page(opts);
@@ -328,5 +341,5 @@ async function tapRefresh(h) {
 module.exports = {
   STATIC, L, PATH, REASON, BLOCKER, CUE, POLL, settle, page, snap,
   target, rq, voiceRq, paired, converse, ended, releases, playFor, slowCancel, voiceSend,
-  last, listen, cue, over, drafted, abandonedSnapshot, abandonedGrant, tapTicket, tapRefresh
+  last, listen, cue, over, drafted, abandonedSnapshot, abandonedGrant, tapTicket, tapRefresh, repaired
 };

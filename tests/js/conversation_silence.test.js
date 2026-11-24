@@ -10,24 +10,11 @@ const assert = require("node:assert/strict");
 const { G } = require("./grant_ids.js");
 const {
   L, PATH, REASON, POLL, settle, paired, snap, ended, releases, voiceSend, listen, cue, over, drafted,
-  abandonedSnapshot, abandonedGrant, tapRefresh
+  abandonedSnapshot, abandonedGrant, tapRefresh, repaired
 } = require("./page_harness.js");
 const { LIMITS } = L;
 
 const gone = () => snap({ targets: [] });
-
-// A 401 on another call drops the token; the page pairs again and takes the
-// new pairing's first snapshot. Returns the poll left open from the earlier
-// pairing.
-async function repaired(h) {
-  const old = h.pending(POLL)[0];
-  assert.ok(old, "no poll open");
-  await h.answer("/desk/api/startup", 401, { error: "unauthorized" });
-  await h.advance(2000);
-  assert.ok(h.$("pairing").hidden, "the page did not pair again");
-  await h.answer(PATH.STATE, 200, snap());
-  return old;
-}
 
 // `data` may be a function, called at delivery, so a snapshot made for it is the newest yet.
 const answer = (status, data) => async (h, call) => {
