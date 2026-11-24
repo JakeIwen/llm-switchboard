@@ -60,13 +60,32 @@ class TimedLockStore(LockStore):
         super().remove(lock_id)
 
 
+class SteppingClock(Clock):
+    """A wall clock that can also move on by itself after a given number of
+    reads: time passing inside one call, between two of its readings."""
+
+    _step = None
+
+    def step_after(self, reads: int, seconds: float) -> None:
+        self._step = [reads, seconds]
+
+    def __call__(self) -> float:
+        value = self.now
+        if self._step:
+            self._step[0] -= 1
+            if not self._step[0]:
+                self.now += self._step[1]
+                self._step = None
+        return value
+
+
 class GrantStateCase(unittest.TestCase):
     def setUp(self):
         self.home = make_home(self)
         self.config = desk_config(self.home)
         # The wall clock (timestamps, tokens, tickets) and the elapsed-time
         # clock the grant lease runs on; `wait` moves both, as real time does.
-        self.clock = Clock()
+        self.clock = SteppingClock()
         self.elapsed = Clock(1000.0)
         self.store = TimedLockStore(self.config.lock_file)
         self.state = HubState(self.store, now=self.clock, elapsed=self.elapsed, token_bytes=secrets.token_bytes)
@@ -130,6 +149,18 @@ class GrantTest(GrantStateCase):
         self.assertFalse(self.state.authenticate(self.token))
         self.assertEqual(len(self.state.status()["tokens"]), 1)
         self.refused(401, "unauthorized", self.state.beat_grant, self.token, grant)
+        self.assertEqual(self.state.beat_grant(second, grant)["grant"], grant)
+
+    def test_a_requester_whose_token_expires_during_its_grant_request_is_refused(self):
+        self.wait(60)
+        second = new_token(self.state)
+        # One second left on the first token when its request is authorized;
+        # expired by the clock's next reading, when tokens are pruned.
+        self.clock.advance(TOKEN_TTL_SECONDS - 60 - 1)
+        self.clock.step_after(1, 2)
+        self.refused(401, "unauthorized", self.grant)
+        self.assertEqual(len(self.state.status()["tokens"]), 1)
+        grant = self.grant(token=second)
         self.assertEqual(self.state.beat_grant(second, grant)["grant"], grant)
 
     def test_beats_renew_and_an_expired_grant_is_never_revived(self):

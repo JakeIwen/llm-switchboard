@@ -112,6 +112,10 @@ class ConversationGrants:
             # token during this grant.
             if self._prune_tokens(self._now()):
                 self._changed.notify_all()
+            # The prune reads the clock again: the requester's own token may
+            # have expired since it was authorized, leaving another as the one.
+            if token_hash not in self._tokens:
+                raise DeskError(401, Refusal.UNAUTHORIZED)
             if len(self._tokens) != 1:
                 raise DeskError(409, Refusal.ANOTHER_PAGE)
             if not self._voice_enabled:
