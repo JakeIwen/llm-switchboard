@@ -3,17 +3,20 @@ and "Switching it off, revocation and rollback"): the order of its steps,
 its checks before any change, and `--remove`'s order.
 
 The script runs from a copy in a temporary checkout, under an isolated HOME
-and a PATH whose `ssh`, `ssh-keygen`, `launchctl`, `llm-switchboard` and
-`uname` are stand-ins that log their arguments (the checkout's `.venv/bin/python`
-is one too), so nothing here reaches the Pi, launchd or the real ~/.ssh. The
+and a PATH whose `ssh`, `ssh-keygen`, `launchctl` and `uname` are stand-ins.
+The checkout's `.venv/bin/python` is a stand-in too, optionally delegating to
+Python to exercise its module lookup. Nothing reaches the Pi, launchd or the real ~/.ssh. The
 Pi alias in the stand-in local.env is under `.invalid`, so even a real ssh
 could resolve nothing.
 """
 
+import fnmatch
 import os
 from pathlib import Path
+import shlex
 import shutil
 import subprocess
+import sys
 import unittest
 
 from desk_fixtures import make_home
@@ -39,7 +42,6 @@ STANDINS = {
         "if [ $sign = 1 ]; then echo signature > \"$last.sig\"; fi\n"
     ),
     "launchctl": "",
-    "llm-switchboard": "",
 }
 
 
@@ -69,7 +71,7 @@ class SetupMacDeskTest(unittest.TestCase):
         environ = {"HOME": str(self.home), "PATH": f"{self.bin}:/usr/bin:/bin", "STANDIN_LOG": str(self.log),
                    **env}
         result = subprocess.run([str(self.repo / "scripts" / SCRIPT.name), *args], env=environ,
-                                capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
+                                cwd=self.home, capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
         calls = self.log.read_text().splitlines() if self.log.exists() else []
         return result, [call for call in calls if not call.startswith("uname ")]
 
@@ -80,10 +82,30 @@ class SetupMacDeskTest(unittest.TestCase):
 
     def assert_changed_nothing(self, calls):
         changes = (f"ssh-keygen -q -t ed25519 -N  -C llm-switchboard-desk-mac -f {self.key}",
-                   f"ssh {PI} {PI_CLI} desk link-authorize mac", "llm-switchboard ", "python ", "launchctl ")
+                   f"ssh {PI} {PI_CLI} desk link-authorize mac", "python ", "launchctl ")
         for call in calls:
             self.assertFalse(call.startswith(changes), call)
         self.assertFalse(self.key.exists())
+
+    def test_setup_uses_its_checkout_outside_cwd_and_ignores_pythonpath(self):
+        package = self.repo / "llm_switchboard"
+        package.mkdir()
+        (package / "__init__.py").touch()
+        (package / "__main__.py").write_text("import sys\nprint('fixture module:', *sys.argv[1:])\n")
+        self._standin(self.repo / ".venv" / "bin" / "python", "python",
+                      f'exec {shlex.quote(sys.executable)} "$@"\n')
+        poison = self.home / "foreign-pythonpath"
+        poison.mkdir()
+        (poison / "sitecustomize.py").write_text("import os\nos._exit(97)\n")
+        for pythonpath in ("", str(poison)):
+            for args in ((), ("--remove",)):
+                with self.subTest(pythonpath=pythonpath, args=args):
+                    result, _ = self.run_script(*args, PYTHONPATH=pythonpath)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    if not args:
+                        self.assertIn("fixture module: desk install-config", result.stdout)
+                    self.assertIn("fixture module: desk relay-install" + (" --unload" if args else ""),
+                                  result.stdout)
 
     def test_setup_steps_in_order(self):
         result, calls = self.run_script()
@@ -98,8 +120,8 @@ class SetupMacDeskTest(unittest.TestCase):
             f"ssh-keygen -q -t ed25519 -N  -C llm-switchboard-desk-mac -f {self.key}",
             f"ssh {PI} {PI_CLI} desk link-authorize mac",
             f"stdin ssh-ed25519 AAAAfake {self.key.name}",
-            "llm-switchboard desk install-config",
-            "python -m llm_switchboard desk relay-install",
+            "python -E -m llm_switchboard desk install-config",
+            "python -E -m llm_switchboard desk relay-install",
             f"launchctl print gui/{os.getuid()}/dev.llm-switchboard.desk-relay",
         ])
         self.assertFalse(Path(throwaway).parent.exists(), "the throwaway key's directory is deleted")
@@ -166,7 +188,7 @@ class SetupMacDeskTest(unittest.TestCase):
         mcp.write_text("{}\n")
         result, calls = self.run_script("--remove")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(calls, ["python -m llm_switchboard desk relay-install --unload",
+        self.assertEqual(calls, ["python -E -m llm_switchboard desk relay-install --unload",
                                  f"ssh {PI} {PI_CLI} desk link-revoke mac"])
         self.assertFalse(self.key.exists())
         self.assertFalse(self.key.with_name(self.key.name + ".pub").exists())
@@ -174,9 +196,9 @@ class SetupMacDeskTest(unittest.TestCase):
 
     def test_remove_stops_at_a_failed_step(self):
         cases = {
-            "unload not confirmed": ("python * --unload", ["python -m llm_switchboard desk relay-install --unload"],
+            "unload not confirmed": ("python * --unload", ["python -E -m llm_switchboard desk relay-install --unload"],
                                      "the relay's unload is not confirmed"),
-            "link-revoke failed": ("ssh * link-revoke mac", ["python -m llm_switchboard desk relay-install --unload",
+            "link-revoke failed": ("ssh * link-revoke mac", ["python -E -m llm_switchboard desk relay-install --unload",
                                                              f"ssh {PI} {PI_CLI} desk link-revoke mac"],
                                    "link-revoke on the Pi failed"),
         }
@@ -189,6 +211,41 @@ class SetupMacDeskTest(unittest.TestCase):
                 self.assertEqual(calls, expected)
                 self.assertIn(message, result.stderr)
                 self.assertTrue(self.key.exists())
+
+    def test_setup_reports_which_install_steps_completed_on_failure(self):
+        cases = {
+            "ssh * link-authorize mac": ("Pi authorization not confirmed", "no mcp.json or relay changes attempted"),
+            "python * install-config": ("its Pi authorization succeeded", "relay installation was not attempted"),
+            "python * relay-install": ("mcp.json was written", "relay installation is not confirmed"),
+            "launchctl print *": ("relay-install succeeded", "current launchd status was not confirmed"),
+        }
+        for pattern, messages in cases.items():
+            with self.subTest(pattern):
+                pub = self.key.with_suffix(".pub")
+                self.key.unlink(missing_ok=True)
+                pub.unlink(missing_ok=True)
+                self.log.unlink(missing_ok=True)
+                result, calls = self.run_script(STANDIN_FAIL=pattern, STANDIN_FAIL_CODE="7")
+                self.assertEqual(result.returncode, 1 if pattern.startswith("ssh") else 7, result.stderr)
+                self.assertIn(f"the new key was saved to {self.key}", result.stderr)
+                for message in messages:
+                    self.assertIn(message, result.stderr)
+                self.assertNotIn("done:", result.stdout)
+                self.assertTrue(self.key.exists())
+                self.assertTrue(pub.exists())
+                self.assertTrue(fnmatch.fnmatchcase(calls[-1], pattern), calls)
+
+    def test_remove_reports_partial_key_file_deletion_after_cutoff(self):
+        self.add_key()
+        pub = self.key.with_suffix(".pub")
+        pub.unlink()
+        pub.mkdir()  # rm -f refuses a directory but removes the private key.
+        result, _ = self.run_script("--remove")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("the relay is unloaded and Pi revocation is confirmed", result.stderr)
+        self.assertIn(f"files still found: {pub}", result.stderr)
+        self.assertFalse(self.key.exists())
+        self.assertTrue(pub.is_dir())
 
     def test_script_is_executable_and_names_no_machine(self):
         self.assertTrue(os.access(SCRIPT, os.X_OK))
