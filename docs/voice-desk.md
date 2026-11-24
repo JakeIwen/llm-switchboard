@@ -733,7 +733,8 @@ may still be speaking; wait until it is quiet.
   conversation ends with the voice failed. That deadline belongs to the
   utterance playing: one the page replaced or cancelled (a Play tapped
   again) loses it at once, and its late `end` or `error` counts toward the
-  guard but never cancels newer speech. Every cancel the page issues goes
+  guard but never cancels newer speech. The first `error` of the Play or
+  reply speech playing cancels speech too, and makes sound uncertain. Every cancel the page issues goes
   through the one tracker (`sound_tracker.js`), which marks what it stopped.
 - A recognizer that hasn't reported audio 5 s after `start()`, any
   recognition error but `no-speech`, a failed `start()`, or three restarts

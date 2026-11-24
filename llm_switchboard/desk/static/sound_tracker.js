@@ -122,8 +122,13 @@
         if (entry === latest && sounding.indexOf(entry) !== -1) overdue();
       }, entry.estimate * L.SPEECH_DEADLINE_FACTOR);
       function done(error) {
+        var current = entry === latest && sounding.indexOf(entry) !== -1;
         disarm(entry);
         heard(error);
+        // The first error of the utterance the engine plays asks synthesis to
+        // stop, as the conversation's own speech does on one; a superseded or
+        // written-off utterance's error has no authority over newer speech.
+        if (error && current) cancel();
         changed();
       }
       u.addEventListener("end", function () { done(false); });

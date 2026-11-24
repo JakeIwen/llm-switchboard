@@ -263,6 +263,18 @@ test("the page's own Play utterance is tracked toward Start's quiet rule", async
   assert.equal(h.$("conv-start").disabled, false);
 });
 
+test("a Play's own error asks synthesis to stop, and sound stays uncertain", async () => {
+  const h = await paired(snap({ requests: [rq("old", "answered", "Earlier reply.")] }));
+  slowCancel(h);
+  h.plays()[0].click();
+  await settle();
+  const cancels = h.synth.cancels;
+  h.utt().fire("error", { error: "synthesis-failed" });
+  await settle();
+  assert.equal(h.synth.cancels, cancels + 1);
+  assert.equal(h.$("conv-why").textContent, "Start conversation is unavailable: " + BLOCKER.NOT_QUIET + ".");
+});
+
 test("a reply that removes the lock under an open Clear confirmation is spoken and polling goes on", async () => {
   const lock = { lock_id: "L1", request_id: "r1", since: 1, earlier_run: false };
   const h = await paired(snap({ targets: [target("s1", { lock })], requests: [rq("r1", "handed_off")] }));
