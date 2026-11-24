@@ -152,7 +152,7 @@ Sharing the socket would let its supervisor close the real windows.
 | `web/vite.config.ts` | Dev server on 127.0.0.1:5173 proxying `/api` to `SWITCHBOARD_API` (default the Pi's 8777 through an SSH tunnel), read-only unless `SWITCHBOARD_WRITES=1` |
 | `llm_switchboard/cli.py` | argparse entry point |
 | `tests/fake_codex.py` | In-memory Codex daemon for the unit and browser tests |
-| `tests/relay_fixture.py` | The Mac relay's surroundings for tests: an isolated Mac home with a fake libproc reader (`MacHome`, `FakeKernel`) and the hub's end of a link as the relay's channel socket sees it (`FakeUplink`) |
+| `tests/relay_fixture.py` | The Mac relay's surroundings for tests: an isolated Mac home with a fake libproc reader (`MacHome`, `FakeKernel`) and the hub's end of a link as the relay's channel socket sees it (`FakeUplink`); the hub, the real pump, the relay and the real channel joined for end-to-end tests (`JoinedCase`) |
 | `tests/link_peer.py` | The relay's half of the Mac link for tests (`LinkPeer`, throwaway `KeyPair`s, a fake verifier, `LinkHubCase`), written from `link_protocol` alone; reused by the Mac stage |
 | `systemd/`, `install.sh` | User unit template and installer |
 | `scripts/setup-mac.sh` | Mac setup: key, `host-authorize` over SSH, one push, `.venv`, the `llm-switchboard` link, launchd jobs |
