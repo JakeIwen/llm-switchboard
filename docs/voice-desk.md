@@ -244,7 +244,7 @@ headers. The status line is the hub's answer even when its body then fails
 to arrive or doesn't parse: it is the status with no body, never "the hub
 could not be reached". For a non-200 the gate has already acted on the
 status line; for a 200 the lost body silences the page (see "The gate"
-under Limits). So a ticket is refused, a send's delivery is unknown unless
+under Cues and end reasons). So a ticket is refused, a send's delivery is unknown unless
 the status settles it (a tapped send's 401 is not sent), and a startup
 acknowledgement's 5xx is unknown, since the outcome that may have typed
 the key shares that status.
