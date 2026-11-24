@@ -12,6 +12,26 @@
 (function (root) {
   "use strict";
 
+  var L = root.DeskConversationLogic || require("./conversation_logic.js");
+  var LIMITS = L.LIMITS;
+
+  // The fetches a conversation can have in flight, one of each at most.
+  var FETCH = Object.freeze({
+    SNAPSHOT: "snapshot", WAKE: "wake", GRANT: "grant", BEAT: "beat", TICKET: "ticket", SEND: "send"
+  });
+
+  // Each fetch's own limit, which it keeps whatever becomes of the
+  // conversation (deadline below), and whether the conversation aborts it
+  // when it gives up on it: never the grant request (conversation.js,
+  // abandonGrant).
+  var SPEC = {};
+  SPEC[FETCH.SNAPSHOT] = { abort: true, ms: LIMITS.STEP_MS };
+  SPEC[FETCH.WAKE] = { abort: false };
+  SPEC[FETCH.GRANT] = { abort: false, ms: LIMITS.STEP_MS };
+  SPEC[FETCH.BEAT] = { abort: true, ms: LIMITS.BEAT_ABORT_MS };
+  SPEC[FETCH.TICKET] = { abort: true, ms: LIMITS.STEP_MS };
+  SPEC[FETCH.SEND] = { abort: true, ms: LIMITS.SEND_DEADLINE_MS };
+
   // `nextId` is the controller's one id counter; `AbortCtl` the page's
   // AbortController, or null where there is none; `clock` the
   // conversation's timers (conversation_timers.js); `bodyLost()` the
@@ -151,7 +171,7 @@
     };
   }
 
-  var api = { create: create };
+  var api = { create: create, FETCH: FETCH, SPEC: SPEC };
   root.DeskConversationFetches = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof window !== "undefined" ? window : globalThis);

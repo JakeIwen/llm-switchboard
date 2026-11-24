@@ -94,27 +94,12 @@
   var R = root.DeskConversationRecognition || require("./conversation_recognition.js");
   var PHASE = L.PHASE, FX = L.FX, EV = L.EV, TIMER = L.TIMER, SAY = L.SAY;
   var REASON = L.REASON, CUE = L.CUE, LIMITS = L.LIMITS;
+  var FETCH = F.FETCH, SPEC = F.SPEC;
 
   var PATH = Object.freeze({
     STATE: "/desk/api/state", GRANT: "/desk/api/conversation", BEAT: "/desk/api/conversation/beat",
     RELEASE: "/desk/api/conversation/end", TICKET: "/desk/api/ticket", SEND: "/desk/api/send"
   });
-
-  // The fetches a conversation can have in flight, one of each at most.
-  var FETCH = Object.freeze({
-    SNAPSHOT: "snapshot", WAKE: "wake", GRANT: "grant", BEAT: "beat", TICKET: "ticket", SEND: "send"
-  });
-
-  // Each fetch's own limit, which it keeps whatever becomes of the
-  // conversation (conversation_fetches.js), and whether the conversation
-  // aborts it when it gives up on it: never the grant request (abandonGrant).
-  var SPEC = {};
-  SPEC[FETCH.SNAPSHOT] = { abort: true, ms: LIMITS.STEP_MS };
-  SPEC[FETCH.WAKE] = { abort: false };
-  SPEC[FETCH.GRANT] = { abort: false, ms: LIMITS.STEP_MS };
-  SPEC[FETCH.BEAT] = { abort: true, ms: LIMITS.BEAT_ABORT_MS };
-  SPEC[FETCH.TICKET] = { abort: true, ms: LIMITS.STEP_MS };
-  SPEC[FETCH.SEND] = { abort: true, ms: LIMITS.SEND_DEADLINE_MS };
 
   // Where a snapshot the page received came from (snapshot()): the page's
   // poll, any other fetch of the current pairing, or a call made before the
