@@ -154,6 +154,7 @@ Sharing the socket would let its supervisor close the real windows.
 | `tests/link_peer.py` | The relay's half of the Mac link for tests (`LinkPeer`, throwaway `KeyPair`s, a fake verifier, `LinkHubCase`), written from `link_protocol` alone; reused by the Mac stage |
 | `systemd/`, `install.sh` | User unit template and installer |
 | `scripts/setup-mac.sh` | Mac setup: key, `host-authorize` over SSH, one push, `.venv`, the `llm-switchboard` link, launchd jobs |
+| `scripts/setup-mac-desk.sh` | Mac setup of the desk link, after `setup-mac.sh`: checks first (macOS, the names in `local.env`, both machines' `ssh-keygen -Y`, the Pi's `link-authorize --self-test`), then the link key, `link-authorize` over SSH, `mcp.json`, `relay-install`; `--remove`: `relay-install --unload`, `link-revoke` over SSH, the key files deleted |
 | `scripts/check_layout.py`, `scripts/backend_layout/` | Repo-owned read-only layout checker; `.codeshape/config.json` declares its scope |
 | `tests/test_settings.py`, `web/src/settings/settingsFields.test.ts` | Settings persistence, CLI, manual-launch isolation, and page field/polling contracts |
 | `tests/test_architecture.py` | Enforced pure-owner imports, Mac/Pi separation, rendered systemd and launchd targets, checkout wrapper |
@@ -167,6 +168,7 @@ Sharing the socket would let its supervisor close the real windows.
 | `systemd/llm-switchboard.service` | `install.sh` template input | `install.sh` |
 | `install.sh` | Pi operator installation | `systemd/llm-switchboard.service` and `bin/llm-switchboard` |
 | `scripts/setup-mac.sh` | Mac operator setup | `llm_switchboard/host_cli.py`, `host_launchd.py` |
+| `scripts/setup-mac-desk.sh [--remove]` | Mac operator | itself; it calls `desk link-authorize --self-test`, `link-authorize <host>` and `link-revoke <host>` on the Pi over SSH, and `desk install-config` and `relay-install [--unload]` on the Mac |
 | `scripts/check_layout.py` | Developer checks and unittest bridge | `scripts/backend_layout/cli.py` |
 | `python -m llm_switchboard openapi` | `web/` type generation (`npm run gen:api`) and the stale-types test | `llm_switchboard/cli.py`, `web.py` |
 | `/`, `/index.html`, `/assets/*`, `/theme.js` | Picker browsers; extensionless client routes also use the index | `llm_switchboard/page.py`, `web/dist` |
