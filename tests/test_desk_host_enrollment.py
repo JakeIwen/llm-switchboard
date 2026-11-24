@@ -242,6 +242,16 @@ def wrong_shape(path: Path):
 ROOT_READS_ANY_MODE = os.geteuid() == 0, "root reads a file whatever its mode"
 
 
+def request_ids(hub) -> set[str]:
+    return {r["request_id"] for r in hub.state_view()["requests"]}
+
+
+def new_request_states(hub, seen: set[str]) -> list[str]:
+    """States of the requests created since `seen`; the snapshot lists newest
+    first, so asking by id keeps a check on the send's own request."""
+    return [r["state"] for r in hub.state_view()["requests"] if r["request_id"] not in seen]
+
+
 class RoutingReadTest(MacTargetCase):
     """Routing reads both enrollment files now, never content kept from an
     earlier read: a file that fails its read routes nothing it governs, and
@@ -268,9 +278,10 @@ class RoutingReadTest(MacTargetCase):
                     ticket = self.ticket(session_id)
                     restore = breaker(path)
                     try:
+                        seen = request_ids(self.hub)
                         error = self.refused_send(ticket)
                         self.assertEqual((error.status, error.reason), (409, Refusal.NOT_ENROLLED))
-                        self.assertEqual(self.hub.state_view()["requests"][-1]["state"], "expired")
+                        self.assertEqual(new_request_states(self.hub, seen), ["expired"])
                         self.assertEqual(LockStore(self.config.lock_file).load(), [])
                         self.assertIsNone(self.hub.remote_owner(session_id))
                         with self.assertRaises(DeskError) as caught:
@@ -359,11 +370,12 @@ class SendsReadTest(MacTargetCase):
                     body = self.send_body(session_id, confirm)
                     restore = breaker(self.config.settings_file)
                     try:
+                        seen = request_ids(self.hub)
                         with self.assertRaises(DeskError) as caught:
                             self.hub.send(body, self.token)
                         self.assertEqual((caught.exception.status, caught.exception.reason),
                                          (403, Refusal.SENDS_OFF))
-                        self.assertEqual(self.hub.state_view()["requests"][-1]["state"], "expired")
+                        self.assertEqual(new_request_states(self.hub, seen), ["expired"])
                         self.assertEqual(LockStore(self.config.lock_file).load(), [])
                         self.assertEqual(self.switches(), (False, False, False))
                     finally:
