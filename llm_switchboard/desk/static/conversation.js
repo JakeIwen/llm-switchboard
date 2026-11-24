@@ -79,6 +79,7 @@
   var L = root.DeskConversationLogic || require("./conversation_logic.js");
   var A = root.DeskConversationAnswers || require("./conversation_answers.js");
   var T = root.DeskSoundTracker || require("./sound_tracker.js");
+  var F = root.DeskConversationFetches || require("./conversation_fetches.js");
   var PHASE = L.PHASE, FX = L.FX, EV = L.EV, TIMER = L.TIMER, SAY = L.SAY;
   var REASON = L.REASON, CUE = L.CUE, LIMITS = L.LIMITS;
 
@@ -104,7 +105,8 @@
     var rec = null;          // {id, r}
     var utt = null;          // {id, u, kind, estimate}
     var timers = {};         // TIMER name -> {id, handle}
-    var fetches = {};        // FETCH kind -> {id, ctl}
+    var fetches = F.create(nextId, env.AbortController); // FETCH kind -> the one in flight
+    var begin = fetches.begin, signal = fetches.signal, settle = fetches.settle, abandon = fetches.abandon;
     var wake = null;         // {id, sentinel}
     var grant = null;        // the grant id this conversation holds
     // {freshUntil} while the closing cue plays: the grant is still held, and
@@ -204,37 +206,10 @@
 
     // ---- fetches ----------------------------------------------------------
 
-    function begin(kind, abortable) {
-      var id = nextId();
-      fetches[kind] = { id: id, ctl: abortable && env.AbortController ? new env.AbortController() : null };
-      return id;
-    }
-
-    function signal(kind) {
-      var f = fetches[kind];
-      return f && f.ctl ? { signal: f.ctl.signal } : {};
-    }
-
-    // True once for the current fetch of that kind; its answer is then used.
-    function settle(kind, id) {
-      if (!fetches[kind] || fetches[kind].id !== id) return false;
-      delete fetches[kind];
-      return true;
-    }
-
     // True once for the send POST the last end left open; a newer start forgets it.
     function settleLate(id) {
       if (lateSend === null || lateSend !== id) return false;
       lateSend = null;
-      return true;
-    }
-
-    // Forgets the current fetch of a kind (its answer will be dropped), then aborts it.
-    function abandon(kind, abort) {
-      var f = fetches[kind];
-      if (!f) return false;
-      delete fetches[kind];
-      if (abort && f.ctl) f.ctl.abort();
       return true;
     }
 
@@ -338,7 +313,7 @@
         // No response is no proof the hub never read the request: the
         // acquisition is unknown, like one the page gave up on, so it
         // stays a straggler whether this or the step deadline came first.
-        if (!fetches[FETCH.GRANT] || fetches[FETCH.GRANT].id !== id) return;
+        if (!fetches.isCurrent(FETCH.GRANT, id)) return;
         clearTimer(TIMER.STEP);
         abandonGrant();
         dispatch({ type: EV.FAIL, reason: REASON.HUB_UNREACHABLE });
@@ -356,9 +331,9 @@
     // after the page gave up on it, leaves Start refused until the epoch
     // changes or the page is reloaded.
     function abandonGrant() {
-      var f = fetches[FETCH.GRANT];
+      var f = fetches.get(FETCH.GRANT);
       if (!f) return false;
-      delete fetches[FETCH.GRANT];
+      abandon(FETCH.GRANT, false);
       straggler = { id: f.id, epoch: c.dest.epoch };
       return true;
     }
@@ -382,7 +357,7 @@
     // all is left to the freshness deadline.
     function beat() {
       setTimer(TIMER.BEAT, LIMITS.BEAT_MS);
-      if (fetches[FETCH.BEAT] || !grant) return;
+      if (fetches.get(FETCH.BEAT) || !grant) return;
       var id = begin(FETCH.BEAT, true);
       var startedAt = env.now();
       var named = grant;
@@ -438,7 +413,7 @@
     // stays unknown for whichever conversation still listens for it.
     function postSend(ticket, text) {
       var id = begin(FETCH.SEND, true);
-      var ctl = fetches[FETCH.SEND].ctl;
+      var ctl = fetches.get(FETCH.SEND).ctl;
       var deadline = env.setTimeout(function () {
         var mine = settle(FETCH.SEND, id) || settleLate(id);
         if (ctl) ctl.abort();
@@ -612,12 +587,12 @@
       // A page that lost its grant, is leaving, cut a sound off, can't be
       // heard or has no voice speaks nothing: a successor may be listening.
       var cue = !!held && !lost && !silent && !cut && L.fresh(c, env.now()) && deps.visible() && deps.voiceAvailable();
-      lateSend = c.deliveryOpen && fetches[FETCH.SEND] ? fetches[FETCH.SEND].id : null;
+      lateSend = c.deliveryOpen && fetches.get(FETCH.SEND) ? fetches.get(FETCH.SEND).id : null;
       Object.keys(timers).forEach(function (name) { if (!(cue && CLOSING_TIMERS[name])) clearTimer(name); });
       // The grant request stays open so a late grant is released; a late
       // ticket answer is dropped; the send POST runs on to its own deadline,
       // its answer only settling the reason; the beat goes on under the cue.
-      Object.keys(fetches).forEach(function (kind) {
+      fetches.kinds().forEach(function (kind) {
         if (kind === FETCH.GRANT) abandonGrant();
         else if (!(cue && kind === FETCH.BEAT)) abandon(kind, kind !== FETCH.SEND);
       });

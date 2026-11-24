@@ -53,6 +53,7 @@ STATIC_ROUTES = {
     "/desk/conversation_logic.js": (STATIC_DIR / "conversation_logic.js", _JS),
     "/desk/sound_tracker.js": (STATIC_DIR / "sound_tracker.js", _JS),
     "/desk/conversation_answers.js": (STATIC_DIR / "conversation_answers.js", _JS),
+    "/desk/conversation_fetches.js": (STATIC_DIR / "conversation_fetches.js", _JS),
     "/desk/conversation.js": (STATIC_DIR / "conversation.js", _JS),
     "/desk/conversation_view.js": (STATIC_DIR / "conversation_view.js", _JS),
     "/desk/page_audio.js": (STATIC_DIR / "page_audio.js", _JS),
