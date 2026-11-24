@@ -59,6 +59,9 @@ def run_process(config: DeskConfig, *, launched: bool) -> int:
     """The whole relay process; its exit status. Takes process-wide state
     (the run lock, the root logger, the exception hooks, signal handlers,
     fd 2 under launchd), so it runs once per process, on the main thread."""
+    if reason := config.mac_relay_location_error():
+        print(f"desk relay: {reason}", file=sys.stderr)
+        return EXIT_SETUP
     try:
         hold_for_process(config.relay_lock, wait_seconds=START_WAIT_SECONDS)
     except RunLockHeld:

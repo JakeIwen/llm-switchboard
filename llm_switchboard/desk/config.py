@@ -13,6 +13,7 @@ from pathlib import Path
 DEFAULT_DESK_PORT = 8796
 PORT_ENV = "LLM_SWITCHBOARD_DESK_PORT"
 REPO = Path(__file__).resolve().parents[2]
+_DEFAULT_CONFIG_SUBDIR = ".config"
 
 
 @dataclass(frozen=True)
@@ -54,7 +55,7 @@ class DeskConfig:
     def from_env(cls, environ=None, home: Path | None = None, repo: Path = REPO) -> "DeskConfig":
         environ = os.environ if environ is None else environ
         home = Path(home or environ.get("HOME") or Path.home())
-        config_home = Path(environ.get("XDG_CONFIG_HOME") or home / ".config")
+        config_home = Path(environ.get("XDG_CONFIG_HOME") or home / _DEFAULT_CONFIG_SUBDIR)
         state_home = Path(environ.get("XDG_STATE_HOME") or home / ".local" / "state")
         state_dir = state_home / "llm-switchboard" / "desk"
         config_dir = config_home / "llm-switchboard" / "desk"
@@ -124,6 +125,20 @@ class DeskConfig:
         return (str(self.repo / ".venv" / "bin" / "python"), "-I", "-B", str(self.repo / "bin" / "desk-channel"))
 
     # -- the Mac link (docs/voice-desk.md, "Mac link") ------------------------------
+
+    @property
+    def mac_relay_config_home(self) -> Path:
+        """Pin the Mac relay's XDG root independently of launchd's environment."""
+        return self.home / _DEFAULT_CONFIG_SUBDIR
+
+    def mac_relay_location_error(self) -> str | None:
+        """A shell or channel must not use a different socket or run lock."""
+        expected = self.for_launch(environ={}, home=self.home)
+        if self.config_dir == expected.config_dir and self.runtime_dir == expected.runtime_dir:
+            return None
+        return (f"the Mac desk relay uses {expected.channel_socket} and {expected.relay_lock}; "
+                "unset XDG_CONFIG_HOME or set it to the Mac relay's config home "
+                f"({self.mac_relay_config_home})")
 
     @property
     def link_socket(self) -> Path:

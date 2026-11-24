@@ -128,8 +128,9 @@ class RelayLaunchdCase(unittest.TestCase):
         if child.poll() is None:
             child.kill()
         child.wait(timeout=30)
-        for stream in (child.stdin, child.stdout):
-            stream.close()
+        for stream in (child.stdin, child.stdout, child.stderr):
+            if stream is not None:
+                stream.close()
 
     def install_loaded(self):
         self.agents.mkdir()
@@ -138,6 +139,25 @@ class RelayLaunchdCase(unittest.TestCase):
 
 
 class RelayJobTest(RelayLaunchdCase):
+    def test_mac_channel_and_foreground_relay_refuse_other_config_home(self):
+        env = {"HOME": str(self.home), "XDG_CONFIG_HOME": str(self.home / "other")}
+        commands = (
+            ["-c", "import sys; from llm_switchboard.desk.channel import main; "
+                   "sys.platform = 'darwin'; sys.exit(main())"],
+            ["-m", "llm_switchboard", "desk", "relay"],
+        )
+        for args in commands:
+            with self.subTest(args):
+                child = subprocess.Popen([sys.executable, "-E", *args], cwd=REPO, env=env,
+                                         stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                         text=True)
+                self.addCleanup(self._end, child)
+                out, err = child.communicate(timeout=30)
+                self.assertEqual(child.returncode, relay_cli_setup_exit(), err)
+                self.assertIn("XDG_CONFIG_HOME", err)
+                self.assertIn(str(self.config.channel_socket), err)
+                self.assertFalse((self.home / "other").exists())
+
     def test_relay_job_runs_the_checkout_relay(self):
         """The rendered launchd target exists: the checkout's interpreter and
         bin/desk-relay, the same argv DeskConfig pins."""
@@ -151,7 +171,11 @@ class RelayJobTest(RelayLaunchdCase):
         self.assertTrue(Path(script).is_file())
         self.assertEqual(spec["Label"], relay_launchd.LABEL)
         v1 = host_launchd.job("pi", "mac", Path("/k"), Path("/Users/me"), "/python3", REPO)
-        self.assertEqual(spec["EnvironmentVariables"], v1["EnvironmentVariables"])
+        self.assertEqual(spec["EnvironmentVariables"], {**v1["EnvironmentVariables"],
+                                                        "XDG_CONFIG_HOME": "/Users/me/.config"})
+        job_config = DeskConfig.from_env(environ=spec["EnvironmentVariables"])
+        self.assertEqual((job_config.channel_socket, job_config.relay_lock),
+                         (config.channel_socket, config.relay_lock))
         self.assertEqual((spec["RunAtLoad"], spec["KeepAlive"], spec["ThrottleInterval"], spec["ProcessType"]),
                          (True, True, 10, "Standard"))
         self.assertEqual((spec["StandardOutPath"], spec["StandardErrorPath"]), ("/dev/null", "/dev/null"))
@@ -161,6 +185,16 @@ class RelayJobTest(RelayLaunchdCase):
 
 
 class RelayInstallTest(RelayLaunchdCase):
+    def test_relay_install_refuses_mismatched_config_home(self):
+        self.add_key()
+        config = DeskConfig.from_env(home=self.home, environ={"XDG_CONFIG_HOME": str(self.home / "other")})
+        code, out, err = self.cli(unload=False, config=config)
+        self.assertEqual(code, relay_cli_setup_exit(), out)
+        self.assertIn("XDG_CONFIG_HOME", err)
+        self.assertIn(str(self.config.channel_socket), err)
+        self.assertEqual(self.fake.calls, [])
+        self.assertFalse(self.agents.exists())
+
     def test_relay_install_writes_plist_then_loads_only_its_label(self):
         self.add_key()
         code, out, err = self.cli(unload=False)
@@ -209,6 +243,17 @@ class RelayInstallTest(RelayLaunchdCase):
 
 
 class RelayUnloadTest(RelayLaunchdCase):
+    def test_relay_unload_refuses_mismatched_config_home_with_default_lock_held(self):
+        self.install_loaded()
+        self.hold_relay_lock()
+        config = DeskConfig.from_env(home=self.home, environ={"XDG_CONFIG_HOME": str(self.home / "other")})
+        code, out, err = self.cli(unload=True, config=config)
+        self.assertEqual(code, relay_cli_setup_exit(), out)
+        self.assertIn("XDG_CONFIG_HOME", err)
+        self.assertIn(str(self.config.relay_lock), err)
+        self.assertEqual(self.fake.calls, [])
+        self.assertTrue(self.launchd.plist.exists())
+
     def test_relay_install_unload_boots_out_only_its_label(self):
         self.install_loaded()
         other = self.agents / f"{host_launchd.LABEL}.plist"

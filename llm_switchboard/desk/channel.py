@@ -440,9 +440,12 @@ def read_capped_line(stream) -> bytes | None:
 
 
 def main() -> int:
+    config = DeskConfig.from_env()
+    if sys.platform == "darwin" and (reason := config.mac_relay_location_error()):
+        log(reason)
+        return 2
     for signum in (signal.SIGTERM, signal.SIGHUP):
         signal.signal(signum, lambda *_: sys.exit(0))
-    config = DeskConfig.from_env()
     writer = StdoutWriter(sys.stdout.buffer)
     link = HubLink(config, os.environ.get("CLAUDE_CODE_SESSION_ID", ""), writer)
     link.start()

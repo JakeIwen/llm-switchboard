@@ -79,12 +79,12 @@ class Launchd:
 
 
 def job(config: DeskConfig) -> dict:
-    """The plist: the relay's argv and nothing in its environment but HOME
-    and PATH. Its output goes to /dev/null: bin/desk-relay keeps its own
-    launch log, capped, so launchd's files can't grow."""
+    """Pin the config home even if the GUI domain has its own XDG setting.
+    Output goes to /dev/null: bin/desk-relay keeps its own capped launch log."""
     return {"Label": LABEL, "ProgramArguments": list(config.relay_argv), "RunAtLoad": True, "KeepAlive": True,
             "ThrottleInterval": 10, "ProcessType": "Standard",
-            "EnvironmentVariables": {"HOME": str(config.home), "PATH": MAC_JOB_PATH},
+            "EnvironmentVariables": {"HOME": str(config.home), "PATH": MAC_JOB_PATH,
+                                     "XDG_CONFIG_HOME": str(config.mac_relay_config_home)},
             "StandardOutPath": os.devnull, "StandardErrorPath": os.devnull}
 
 
@@ -94,7 +94,7 @@ def install(config: DeskConfig, *, launchd: Launchd | None = None, platform: str
     (nothing changed) off macOS, without the link key, or without the
     checkout's interpreter or bin/desk-relay; CalledProcessError when
     launchctl never accepted the bootstrap (the plist is written)."""
-    _require_mac(platform)
+    _require_mac_config(platform, config)
     try:
         key = desk_key(config, environ=environ)
     except ConfigUnsupported:
@@ -121,7 +121,7 @@ def unload(config: DeskConfig, *, launchd: Launchd | None = None, platform: str 
     """Boot out the job, delete its plist and confirm no relay is left; the
     plist's path. Idempotent: an unloaded job is confirmed the same way.
     RelayUnloadUnconfirmed when it can't confirm within `wait_seconds`."""
-    _require_mac(platform)
+    _require_mac_config(platform, config)
     launchd = launchd or Launchd.for_user(config.home)
     launchd.launchctl("bootout", launchd.service)
     launchd.plist.unlink(missing_ok=True)
@@ -149,9 +149,11 @@ def _still_running(config: DeskConfig, launchd: Launchd) -> str | None:
         return f"{exc}; it can't confirm that no relay is running"
 
 
-def _require_mac(platform: str) -> None:
+def _require_mac_config(platform: str, config: DeskConfig) -> None:
     if platform != "darwin":
         raise RelayInstallRefused("desk relay-install runs only on the Mac; nothing changed")
+    if reason := config.mac_relay_location_error():
+        raise RelayInstallRefused(f"{reason}; nothing changed")
 
 
 def _write_plist(path: Path, spec: dict) -> None:
