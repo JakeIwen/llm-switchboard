@@ -25,6 +25,10 @@ from llm_switchboard.web import App, create_http_app, openapi_schema
 from fakes import Clock, FakeConnectivity, FakeIndex, FakeTmux, SID, transcript
 
 
+# A cold start that imports the web framework takes over 10 s on a loaded Pi; the bound only matters on failure.
+SUBPROCESS_FAILURE_BOUND_SECONDS = 60
+
+
 class HttpBoundaryTest(unittest.TestCase):
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
@@ -177,6 +181,6 @@ class HttpBoundaryTest(unittest.TestCase):
     def test_openapi_cli_is_deterministic_without_runtime_side_effects(self):
         command = [sys.executable, "-m", "llm_switchboard", "openapi"]
         outputs = [subprocess.run(command, cwd=Path(__file__).resolve().parents[1], capture_output=True,
-                                  check=True, timeout=10).stdout for _ in range(2)]
+                                  check=True, timeout=SUBPROCESS_FAILURE_BOUND_SECONDS).stdout for _ in range(2)]
         self.assertEqual(outputs[0], outputs[1])
         self.assertEqual(json.loads(outputs[0]), openapi_schema())
