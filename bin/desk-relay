@@ -1,0 +1,48 @@
+#!/usr/bin/env python3
+"""The desk relay's entry point: the launchd job dev.llm-switchboard.desk-relay
+runs it as `DeskConfig.relay_argv` (`.venv/bin/python -I -B bin/desk-relay`),
+so moving this file breaks the link. -I drops the script directory and
+PYTHONPATH, so the repo root is added here from this file's resolved path.
+
+Before importing anything of the package, stderr becomes the launch log
+(`DeskConfig.relay_launch_log`, derived here from HOME because a package
+that fails to import is what this log is for), opened O_APPEND and first
+truncated when over 256 KiB, so a failed start leaves its traceback there.
+desk/relay.py points stderr at /dev/null once its own log and exception
+hooks run: the launch log holds at most 256 KiB plus one failed start's
+output, however often launchd restarts the relay. Standard library only."""
+import os
+import stat
+import sys
+
+LAUNCH_LOG_CAP_BYTES = 256 * 1024
+
+
+def _launch_log_to_stderr():
+    home = os.environ.get("HOME") or os.path.expanduser("~")
+    directory = os.path.join(home, "Library", "Logs", "llm-switchboard")
+    try:
+        os.makedirs(directory, exist_ok=True)
+        # Non-blocking so a FIFO in the log's place can't hang the start.
+        fd = os.open(os.path.join(directory, "desk-relay-launchd.log"),
+                     os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, 0o600)
+    except OSError:
+        return  # stderr stays where launchd put it (/dev/null)
+    try:
+        info = os.fstat(fd)
+        if stat.S_ISREG(info.st_mode):
+            if info.st_size > LAUNCH_LOG_CAP_BYTES:
+                os.ftruncate(fd, 0)
+            os.dup2(fd, 2)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
+_launch_log_to_stderr()
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
+
+from llm_switchboard.desk.relay import main  # noqa: E402
+
+sys.exit(main())
