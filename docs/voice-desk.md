@@ -3089,16 +3089,21 @@ isolated policy files, throwaway credentials and a disposable session.
   startup Enter, browser pairing, **Enroll now** and registration for a
   running candidate, the reviewed Test draft sent and answered through
   `reply`, `/clear` dropping the registration, and unenroll from the page.
-  Staging also exercised a separate tapped exchange and unenroll while the
-  registration was still live; the desk event in the session's transcript
-  was captured and scrubbed as the privacy test's fixture. Pairing, tap flow
-  and conversation mode on the physical tablet still need the tablet.
-- **Sleep — waits for the real lid and tablet:** close the lid for about 10 s
-  and make a tapped send while closed (the event waits in the stream); on
-  wake the relay delivers it. At about 90 s the relay instead retires the
-  link without delivering (no such prompt in the session's transcript), the
-  request stays unknown with its lock, and the link comes back. A closure
-  between those times can go either way, consistent with the hub's state.
+  Through the tap-flow API, staging also exercised a separate exchange and
+  unenroll while the registration was still live. The desk event in the
+  session's transcript was captured and scrubbed as the privacy test's
+  fixture. Pairing, tap flow and conversation mode on the physical tablet
+  still need the tablet.
+- **Sleep — waits for the real lid and tablet:** for each trial, prepare
+  **Review** while the Mac is awake, then tap **Send** on the tablet right
+  after closing the lid. At about 10 s, the event waits in the stream and
+  the relay delivers it on wake. At about 90 s, the link is retired and
+  reconnects on wake; the session's transcript must not show the prompt.
+  The Pi retires the link after 45 s without a relay frame, so a late tap
+  can be refused before handoff, leaving no unknown request or lock. If
+  the hub handed off the request before disconnect and received no report,
+  the request stays unknown with its lock. A closure between those times
+  can go either way, consistent with the hub's state.
 - **Relay unload/reload, hub restart, `link-revoke`, and key rotation with a
   lock — staged only:** check that the attached session loses its registration
   on disconnect, the lock survives the hub restart, revoke cuts the link,
