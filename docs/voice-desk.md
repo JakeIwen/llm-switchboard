@@ -25,7 +25,7 @@ conversation mode has not been qualified for driving.
 | `desk/protocol.py` | model | Channel socket framing and messages; the delivery suffix and channel instructions |
 | `desk/text_rule.py` | rules | The prompt text rule (`check_text`, `normalize_text`); mirrored by `static/text_rule.js` over `text_rule_cases.json` |
 | `desk/model.py` | model | `RequestState`, `Registration`, request/ticket/token/pairing records, limits |
-| `desk/refusals.py` | model | `Refusal`: every reason the hub's HTTPS API and operator socket refuse with (hub, state, grants, HTTP layer) and the text rule's reasons, declared once, each with its `Ownership` class (whether the conversation page may speak its closing cue after it) and `OWNERSHIP_KEPT`, and its `Delivery` class (whether a send refused with it was certainly not handed off) and `NOT_SENT`; `tests/test_desk_refusals.py` fails on a refusal raised in those modules without it. The startup acknowledgement keeps its own `StartupRefusal` |
+| `desk/refusals.py` | model | `Refusal`: every reason the hub's HTTPS API and operator socket refuse with (hub, state, grants, HTTP layer) and the text rule's reasons, declared once, each with its `Delivery` class (whether a send refused with it was certainly not handed off) and `NOT_SENT`; `tests/test_desk_refusals.py` fails on a refusal raised in those modules without it. The startup acknowledgement keeps its own `StartupRefusal` |
 | `desk/hub_state.py` | rules | The hub's in-memory state machine; clock and randomness injected, no I/O |
 | `desk/locks.py` | adapter | The target lock file (fsync before handoff; refuses on unreadable, oversize, malformed or full) |
 | `desk/enrollment.py` | adapter | `enrolled.json` and `desk-settings.json` (`sends_enabled`, `voice_confirm_enabled`): read through `bounded_read`, written and locked through `JsonFile` |
@@ -45,7 +45,7 @@ conversation mode has not been qualified for driving.
 | `launcher.py`, `supervisor.py` | runtime | Start a kept Pi session through `claudepd`, adding desk flags only if enrolled at launch |
 | `screen.py`, `supervisor_state.py` | rules | Identify the complete development-channel dialog and its selected option, and report `startup_blocked` without restarting the session |
 | `tmux.py` | adapter | `Tmux.panes()` (pane id, pid, copy mode, by `@car_session`; raises when tmux fails rather than reading as no panes), `capture(..., check=True)`, and `send_enter_if(pane_id, PaneGuard)`, the server-side guarded Enter the acknowledgement uses |
-| `desk/static/` | page | The tablet page: plain HTML/CSS/JS, no build step, Chrome 119. Scripts, in load order: `text_rule.js` (the text rule's mirror), `desk_logic.js` (the tap flow's pure decisions), `conversation_vocabulary.js` (conversation mode's vocabulary, declared once: phases, commands, cues, end reasons, limits, Start's blockers), `conversation_logic.js` (conversation mode's pure reducer, which re-exports that vocabulary, and `startBlocker`), `sound_tracker.js` (the page's own sound: every utterance it submitted until its end, error or the page's cancel, the guard's start, uncertain periods and the overdue watchdog), `conversation_answers.js` (what the hub's answers to a conversation's calls establish, for the controller), `conversation_fetches.js` (the controller's fetches in flight, one of each kind, and which answer is still current), `conversation.js` (the conversation controller: every mic, sound and send effect, no DOM), `conversation_view.js` (the Start control and the overlay; renders only), `page_audio.js` (the tap flow's own sound: reply speech, Play and one-shot Dictate, deferring to the controller), `startup.js` (the startup-blocked view), `app.js` (wiring and the tap flow). Node tests in `tests/js/` |
+| `desk/static/` | page | The tablet page: plain HTML/CSS/JS, no build step, Chrome 119. Scripts, in load order: `text_rule.js` (the text rule's mirror), `desk_logic.js` (the tap flow's pure decisions), `conversation_vocabulary.js` (conversation mode's vocabulary, declared once: phases, commands, cues, end reasons, limits, Start's blockers), `conversation_logic.js` (conversation mode's pure reducer, which re-exports that vocabulary, and `startBlocker`), `sound_tracker.js` (the page's own sound: every utterance it submitted until its end, error or the page's cancel, the guard's start, uncertain periods and the overdue watchdog), `conversation_answers.js` (what the hub's answers to a conversation's calls establish, for the controller), `conversation_fetches.js` (the controller's fetches in flight, one of each kind, and which answer is still current), `conversation.js` (the conversation controller: every mic, sound and send effect, no DOM; `app.js` gives it every poll's snapshot, or calls its `pollUnusable()` when a poll was answered with anything but one, which cuts a closing cue), `conversation_view.js` (the Start control and the overlay; renders only), `page_audio.js` (the tap flow's own sound: reply speech, Play and one-shot Dictate, deferring to the controller), `startup.js` (the startup-blocked view), `app.js` (wiring and the tap flow). Node tests in `tests/js/` |
 | `bin/desk-channel` | entry | Pinned channel server entry (`.venv/bin/python -I -B bin/desk-channel`) |
 | `bin/desk-adb-link` | entry | The USB reverse-forward loop for one tablet serial |
 | `systemd/llm-switchboard-desk.service`, `systemd/llm-switchboard-desk-adb.service` | unit | Hub and adb link user units (templated by `install.sh`) |
@@ -250,12 +250,12 @@ the key shares that status.
 Unauthenticated:
 - `GET /desk`, `/desk/app.js`, `/desk/app.css`, `/desk/text_rule.js`,
   `/desk/desk_logic.js`, `/desk/conversation_vocabulary.js`,
-  `/desk/conversation_logic.js`, `/desk/sound_tracker.js`, `/desk/conversation_answers.js`,
-  `/desk/conversation_fetches.js`,
-  `/desk/conversation.js`, `/desk/conversation_view.js`, `/desk/page_audio.js`,
-  `/desk/startup.js`, `/desk/text_rule_cases.json`: the
-  page (`STATIC_ROUTES`), read once at hub start and served from memory;
-  `/desk` carries the build id.
+  `/desk/conversation_logic.js`, `/desk/sound_tracker.js`,
+  `/desk/conversation_answers.js`, `/desk/conversation_fetches.js`,
+  `/desk/conversation.js`, `/desk/conversation_view.js`,
+  `/desk/page_audio.js`, `/desk/startup.js`, `/desk/text_rule_cases.json`:
+  the page (`STATIC_ROUTES`), read once at hub start and served from
+  memory; `/desk` carries the build id.
 - `POST /desk/pair/start {secret_hash}` -> `{pair_id, code, expires_in}`.
 - `POST /desk/pair/claim {pair_id, secret, build}` -> `{token, expires_at}`; 409
   `{"error": "not confirmed"}` while waiting (the page polls every 2 s); 403
@@ -683,7 +683,7 @@ nothing the hub sent.
 | `starting` | Starting. The mic is closed. | Fetches a fresh snapshot, takes the screen wake lock, asks for the grant, then checks again that the frozen target is still selected and available with no request outstanding and no lock, that sends and voice confirm are on, that the page is visible and the tablet has a voice. Requests the snapshot already holds for the target are history; any other request on the target, in any state, or a lock not tied to this conversation's request is *foreign activity* from then on |
 | `listening` | Listening. | The only state with an open mic. Recognition restarts on each `end`; `no-speech` restarts it |
 | `reading` | Speaking. The mic is closed. | A read-back or a cue inside a turn |
-| `sending` | Sending. The mic is closed. | A ticket for the frozen identity, then `POST /desk/api/send {ticket, text, confirm: "voice", grant}`. No retry: a refusal ends the conversation with its reason, and a send with no usable answer is unknown |
+| `sending` | Sending. The mic is closed. | A ticket for the frozen identity, then `POST /desk/api/send {ticket, text, confirm: "voice", grant}`. No retry: a refusal ends the conversation silently, its reason on screen only ("not sent: <reason>" when the refusal proves nothing was handed off), and a send with no usable answer is unknown |
 | `waiting` | Sent. Waiting for the reply. The mic is closed. | After the "Sent." cue; follows the exact request id the send returned |
 | `speaking` | Reading the reply. The mic is closed. | The reply's `spoken` text exactly as received ("No spoken summary." when it is empty; the full text is in the overlay). On its `end` and the guard, `listening` with an empty draft and a new turn |
 | `ended` | Conversation ended: <reason>. | Mic and speech stopped, draft discarded, wake lock released. The overlay stays, with **Close**, until tapped; only a new tap starts another conversation |
@@ -758,7 +758,10 @@ may still be speaking; wait until it is quiet.
   4 s. A grant request succeeds only with a 200 naming a grant in the hub's
   shape (32 lowercase hex digits); any other answer fails Start like a
   refused grant, silently. A beat succeeds only with a 200 naming the very
-  grant it beat; any other 200, like a refusal, means the grant is gone.
+  grant it beat; any other answer (a refusal, a 5xx, any other 200, a body
+  that never arrived) means the grant is gone and ends the conversation
+  silently, as "the hub ended the conversation". A beat with no answer at
+  all is left to the freshness deadline.
   The page treats it as good until 10 s after the *start* of the last
   beat that succeeded (the grant request counts as the first), on a
   monotonic clock, and checks that before every mic opening and before
@@ -771,48 +774,59 @@ may still be speaking; wait until it is quiet.
 Spoken cues: "Sent.", "Nothing to send.", "Cleared.", "The draft is
 empty.", "Too long. The draft was cleared.", "Can't send that: <reason>.",
 "No spoken summary." and "Conversation ended: <reason>.". What can be told
-without looking: the start tone marks the mic opening; "Sent.", the reply
-and the end are spoken; waiting is the silence after "Sent.". When the
-voice itself fails there is no sound: the mic is closed and the screen says
-why.
+without looking: the start tone marks the mic opening; "Sent." and the
+reply are spoken; waiting is the silence after "Sent."; an end the page
+decided itself is spoken (below). After "send it" on a sendable draft he
+hears "Sent." or nothing, unless he taps End: nothing means the send was
+refused, its answer was unusable or delivery is unknown, and the screen
+says which, so look at it once parked. When the voice itself fails there
+is no sound: the mic is closed and the screen says why.
 
-The end is spoken, and the grant released after it, only when the page is
-visible and not being closed or frozen, has a voice, still holds a fresh grant and cut no utterance off on
-the way. Otherwise the page speaks nothing (a successor may be listening),
-releases any grant it holds at once, and shows the reason only.
+**The closing cue.** "Conversation ended: <reason>." is spoken only for an
+end the page decides itself, `SPOKEN_ENDS` in `conversation_logic.js`: you
+said stop listening; End was tapped; nothing was heard for three minutes;
+the turn took over five minutes; no reply came in ten minutes; speech
+recognition failed (the recognizer's error, a `start()` that threw, or a
+mic that would have opened inside the guard); speech recognition did not
+start (the 5 s watchdog); speech recognition keeps stopping. Even then it
+is spoken only while the page is visible and not being closed or frozen,
+has a voice, still holds a fresh grant and cut no utterance off on the
+way, and the grant is released when it ends. A reason added to the
+vocabulary is silent until it is added to that list.
 
-**The closing cue after a refusal.** When the hub refuses the turn's ticket
-or send, the page keeps the sound slot only if the refusal is on a short
-allow-list, the `Refusal` members whose `Ownership` is `INTACT` in
-`desk/refusals.py`, which the page's `OWNERSHIP_KEPT` must equal. The hub
-gives each of them only after checking, in the same call, the epoch, the
-target's one registration at the frozen generation and, on a send, the
-grant:
+Every other end is silent: the page shows the reason, speaks nothing and
+releases any grant it holds at once. That includes every end the hub
+brings, since once the hub has answered against this page another page
+may own the sound slot and nothing the hub says can prove otherwise: any
+refusal of the ticket, the send, the grant request or a beat, whatever its
+words; an answer of the wrong status or shape, or one whose body never
+arrived; a snapshot that makes the target unusable (another epoch, sends
+or voice confirm off, a lock-store error, the target gone, at another
+generation, unenrolled or unregistered); another request on the session;
+a request that ended without a reply; and the ends the hub's silence
+brings (a lapsed grant, a ticket or send with no answer, the token gone).
+The page's own ends outside the list are silent too: hidden, closed or
+frozen, another session selected, the wake lock released or refused, no
+voice, the voice failed, and the desk may have heard its own speech.
 
-- busy: in `issue_ticket` after the epoch, routing, registration and
-  generation checks; in `begin_send` after those and the grant check;
-- ticket table full: `issue_ticket` only, after its busy check;
-- too many outstanding requests: `begin_send` only, after its busy check.
-
-Every other refusal, one with no words or words the page has never seen
-included, ends the conversation as lost: nothing is spoken. An answer the
-page cannot use (a 200 with no ticket, or a send's 200 that is neither
-handed off nor answered) is treated like a refusal it doesn't know, so it
-ends silently too. That covers the
-refusals the hub can give before those checks, such as sends off, voice
-confirm off, the text rule's reasons and too long for a voice send. Every
-`Refusal` member states its class, so a new one can't be added without
-being classified, and `tests/test_desk_conversation_js.py` drives a real
-hub into each class on both paths and checks what the page does. A ticket
-or send that got no answer at all proves nothing either way: the closing
-cue then depends on freshness, like any other end. The lock store's own
-messages are on no list, so the page treats them as unknown.
-
-The page has also lost the sound slot, whatever end reason it shows, when a
-refused beat or a 401 says the grant is gone, or a snapshot shows another
-hub epoch or the target missing or at another generation, even alongside
-sends or voice confirm turned off. From then on nothing is spoken, and a
-closing cue already playing is cut (sound uncertain) and the grant let go.
+While the closing cue plays, the page still beats the grant and reads
+every poll, and any hub answer that is not its own call's validated
+success cuts the cue at once (sound uncertain) and releases the grant,
+with nothing spoken in its place. That holds on every call: the ticket
+and the send (the current ones, or the send an earlier end left open),
+whose success is a ticket or a send handed off or answered; the beat,
+whose success is the renewal of the grant it named, one given up on whose
+answer still arrives included; a grant request an earlier conversation
+gave up on, for which any answer cuts, even a grant, since it replaced
+the one this page holds; and the poll, which cuts with anything but a
+snapshot, or with a snapshot showing a target problem. A send POST that
+reaches its 20 s deadline with no answer leaves the cue to finish; a
+freshness lapse cuts it. `tests/test_desk_conversation_js.py` drives a
+real hub into each refusal of the ticket, the send, the grant request and
+the beat, and feeds it to the page while the conversation runs and while
+the cue plays; every `Refusal` member is driven there or named as out of
+reach of a conversation's calls, so a new one fails until it is
+classified.
 
 **Uncertain sound.** An utterance stopped before its own `end`, by anything
 (End, hiding, a timeout, an error, the end of the conversation, the page's
@@ -837,33 +851,35 @@ own speech. Its words were discarded.". Either way sound is uncertain again
 for twice that utterance's estimate, and Start and Dictate come back on
 their own once that has passed. Otherwise the late event only moves the guard.
 
-End reasons, as the overlay and the cue word them: you said stop listening;
-End was tapped; the page was hidden; the page was closed or frozen (on
-`pagehide` or `freeze`, whatever the visibility, and always silent); another
-session was selected; this tablet is no longer paired; the screen wake lock
-was released; the screen can't be kept awake; this tablet has no voice;
-nothing was heard for three minutes; the turn took over five minutes; the
-hub stopped answering; the hub ended the conversation; the hub refused the
-conversation: <reason>; the hub could not be reached; speech recognition
-failed (with the recognizer's error); speech recognition did not start;
-speech recognition keeps stopping; the desk may have heard its own speech
-(always silent; see Late sound); the voice failed; the hub restarted;
-the session changed or went away; sends are off; voice confirm is off; the
-hub's lock store failed; the session is busy; another request reached the
-session; not sent: <reason>; delivery is unknown; check the session; the
-request ended without a reply; no reply came in ten minutes. A conversation
-that ended never resumes when the link returns. Whatever ends a
-conversation while its send POST is out with no answer, the reason is
-followed by "; delivery is unknown; check the session" (for example
-"Conversation ended: the hub stopped answering; delivery is unknown; check
-the session."), since the prompt may have been delivered; nothing is
-retried, and nothing is spoken when the grant was lost. An end before any
-POST shows its cause alone. If that POST's own answer still comes (after
-the end, after the freshness deadline, or as the 401 that ended it), it
-settles the reason shown, after the same cause: "; the prompt was handed
-off; check the session for its reply" when the hub accepted it, or "; not
-sent: <reason>" when it refused it. That answer changes the reason only:
-the conversation stays ended, nothing is spoken, no mic opens, and a
+End reasons, as the overlay and the cue word them: you said stop
+listening; End was tapped; the page was hidden; the page was closed or
+frozen (on `pagehide` or `freeze`, whatever the visibility); another
+session was selected; this tablet is no longer paired; the screen wake
+lock was released; the screen can't be kept awake; this tablet has no
+voice; nothing was heard for three minutes; the turn took over five
+minutes; the hub stopped answering; the hub ended the conversation; the
+hub refused the conversation: <reason>; the hub could not be reached;
+speech recognition failed (with the recognizer's error); speech
+recognition did not start; speech recognition keeps stopping; the desk may
+have heard its own speech (see Late sound); the voice failed; the hub
+restarted; the session changed or went away; sends are off; voice confirm
+is off; the hub's lock store failed; the session is busy; another request
+reached the session; not sent: <reason>; delivery is unknown; check the
+session; the request ended without a reply; no reply came in ten minutes.
+Only the eight in the closing cue's list are ever spoken; the screen shows
+every one. A conversation that ended never resumes when the link returns.
+Whatever ends a conversation while its send POST is out with no answer,
+the reason is followed by "; delivery is unknown; check the session" (for
+example "Conversation ended: the hub stopped answering; delivery is
+unknown; check the session."), since the prompt may have been delivered;
+nothing is retried. An end before any POST shows its cause alone. If that
+POST's own answer still comes (after the end, after the freshness
+deadline, or as the 401 that ended it), it settles the reason shown, after
+the same cause: "; the prompt was handed off; check the session for its
+reply" when the hub accepted it, or "; not sent: <reason>" when it refused
+it. That answer changes the reason only: the conversation stays ended,
+nothing is spoken, no mic opens, a closing cue still playing is cut unless
+the answer is the send's success (handed off or answered), and a
 conversation started since never sees it. An answer that settles nothing
 (a 5xx, an unrecognised body) leaves delivery unknown.
 
