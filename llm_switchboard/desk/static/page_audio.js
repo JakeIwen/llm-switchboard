@@ -51,12 +51,13 @@
     // the conversation's, by the hub's own record of the request, so it is
     // never voiced here: not after its conversation ended, and not when the
     // send's answer never reached the page. Play still speaks it.
-    function repliesArrived(next, selectedId) {
+    // selected: the target on screen, {host, session_id} (desk_logic.js, keyOf).
+    function repliesArrived(next, selected) {
       next.requests.forEach(function (rq) {
         if (!rq.reply || spoken.has(rq.request_id)) return;
         spoken.add(rq.request_id);
         if (rq.confirm === L.CONFIRM.VOICE) return;
-        if (primed && rq.session_id === selectedId && win.document.visibilityState === "visible") {
+        if (primed && Logic.sameTarget(rq, selected) && win.document.visibilityState === "visible") {
           speak(rq.reply.spoken);
         }
       });

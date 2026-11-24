@@ -154,7 +154,7 @@ async function sent(h, id, text) {
   await h.hear("send it");
   assert.equal(h.phase(), PHASE.SENDING);
   const ticket = await h.answer(PATH.TICKET, 200, { ticket: "t-" + id });
-  assert.deepEqual(ticket.body, { session_id: "s1", generation: 3, epoch: "e1" });
+  assert.deepEqual(ticket.body, { session_id: "s1", generation: 3, epoch: "e1", host: "pi" });
   const post = await h.answer(PATH.SEND, 200, { request_id: id, state: "handed_off" });
   assert.deepEqual(post.body, { ticket: "t-" + id, text: text || "check the logs", confirm: "voice", grant: G.g1 });
   assert.equal(h.phase(), PHASE.WAITING);

@@ -15,7 +15,7 @@
   var token = null; // never stored anywhere else
   var session = 0; // bumps on every (re)pairing so stale loops stop
   var state = null; // last good /state body
-  var selectedId = null;
+  var selected = null; // {host, session_id}: the target on screen (desk_logic.js, keyOf)
   var clearFrozen = null; // {session_id, lock_id, request_id} while the confirmation is open
   var sentRequestId = null; // request whose "waiting" result is on screen
   var pollSeq = 0; // counts state requests as they start
@@ -98,7 +98,7 @@
       voidCompose(null);
       audio.stopSpeaking();
       // A new pairing starts clean: no old draft, target, result or settings.
-      selectedId = null;
+      selected = null;
       clearFrozen = null;
       sentRequestId = null;
       audio.forgetReplies();
@@ -260,7 +260,7 @@
     batch(function () {
       runAll([
         function () { reconcile(next, startSeq); },
-        function () { audio.repliesArrived(next, selectedId); },
+        function () { audio.repliesArrived(next, selected); },
         function () { conv.snapshot(next); },
         function () { audio.pruneReplies(next.requests); }
       ]);
@@ -277,12 +277,12 @@
     lockErr.textContent = next.lock_store_error
       ? "Lock store error: " + String(next.lock_store_error) + ". Sends are refused."
       : "";
-    if (selectedId === null && next.targets.length === 1) selectedId = next.targets[0].session_id;
-    if (selectedId !== null && !findTarget(selectedId)) selectedId = null;
+    if (selected === null && next.targets.length === 1) selected = Logic.keyOf(next.targets[0]);
+    if (selected !== null && !findTarget(selected)) selected = null;
     if (epochChanged) voidCompose("The hub restarted: the review was discarded.");
     else validateCompose();
     expireWaitingResult(next, startSeq);
-    if (clearFrozen && !Logic.clearStillValid(clearFrozen, findTarget(clearFrozen.session_id))) clearFrozen = null;
+    if (clearFrozen && !Logic.clearStillValid(clearFrozen, findTarget(clearFrozen))) clearFrozen = null;
   }
 
   // "Delivered, waiting" must not outlive the wait.
@@ -298,13 +298,12 @@
     }
   }
 
-  function findTarget(id) {
-    if (!state) return null;
-    for (var i = 0; i < state.targets.length; i++) {
-      if (state.targets[i].session_id === id) return state.targets[i];
-    }
-    return null;
-  }
+  // key: {host, session_id}; a target that moved to another host is another target.
+  function findTarget(key) { return Logic.findTarget(state, key); }
+
+  // The conversation controller and Start's checks name a target by its id
+  // alone; the selection is cleared before the id's host can change under it.
+  function selectedSessionId() { return selected ? selected.session_id : null; }
 
   // ---- Target display -----------------------------------------------------
 
@@ -355,21 +354,22 @@
     $("targets-empty").hidden = targets.length > 0;
     targets.forEach(function (t) {
       var badge = Logic.badgeFor(t);
-      var btn = el("button", { type: "button", "class": "target", "data-testid": "target", "data-session": t.session_id }, [
+      var btn = el("button", { type: "button", "class": "target", "data-testid": "target", "data-session": t.session_id,
+        "data-host": t.host }, [
         el("span", { "class": "name", text: t.label || t.session_id }),
         el("span", { "class": "folder", text: folderOf(t) }),
         el("span", { "class": "badge", "data-tone": badge.tone, text: badge.text })
       ]);
-      if (t.session_id === selectedId) btn.setAttribute("aria-current", "true");
-      btn.addEventListener("click", function () { selectTarget(t.session_id); });
+      if (Logic.sameTarget(t, selected)) btn.setAttribute("aria-current", "true");
+      btn.addEventListener("click", function () { selectTarget(Logic.keyOf(t)); });
       list.appendChild(el("li", {}, [btn]));
     });
   }
 
-  function selectTarget(id) {
-    if (id === selectedId) return;
+  function selectTarget(key) {
+    if (Logic.sameTarget(key, selected)) return;
     batch(function () {
-      conv.targetSelected(id);
+      conv.targetSelected(key.session_id);
       audio.stopDictation();
       audio.stopSpeaking();
       voidCompose(null);
@@ -378,12 +378,12 @@
       clearFrozen = null;
       sentRequestId = null;
       hideResult();
-      selectedId = id;
+      selected = key;
     });
   }
 
   function renderDetail() {
-    var t = selectedId === null ? null : findTarget(selectedId);
+    var t = findTarget(selected);
     $("detail").hidden = !t;
     $("pick-note").hidden = !!t;
     if (!t) return;
@@ -404,7 +404,7 @@
       $("clear-text").textContent =
         "Only clear if you checked the session and the earlier request is finished or lost. Lock " +
         confirm.lock_id + " for request " + confirm.request_id + ", since " +
-        formatTime(t.lock.since) + ".";
+        Logic.formatTime(t.lock.since) + ".";
     }
 
     var composable = Logic.canCompose(t);
@@ -432,12 +432,6 @@
     if (!composable && !t.lock && editing) noteNode.textContent = "This target is not available for sends.";
     renderReview();
     renderReplies(t);
-  }
-
-  function formatTime(since) {
-    if (typeof since !== "number") return "unknown time";
-    var d = new Date(since < 1e12 ? since * 1000 : since);
-    return d.toLocaleString();
   }
 
   // ---- Compose / review ---------------------------------------------------
@@ -469,7 +463,7 @@
   function validateCompose() {
     if (!compose.dest || (compose.phase !== "edit" && compose.phase !== "review")) return;
     var d = compose.dest;
-    var t = findTarget(d.session_id);
+    var t = findTarget(d);
     if (state.epoch !== d.epoch) return voidCompose("The hub restarted: the review was discarded.");
     if (!t) return voidCompose("The target went away: the review was discarded.");
     if (t.generation !== d.generation) return voidCompose("The target reconnected: the review was discarded.");
@@ -480,13 +474,15 @@
   // character, Review, or Test calls this.
   function freezeDestination() {
     if (compose.dest) return true;
-    var t = selectedId === null ? null : findTarget(selectedId);
+    var t = findTarget(selected);
     if (!Logic.canCompose(t) || !state) return false;
     var dest = Logic.destinationOf(t, state.epoch);
     compose.dest = dest;
     compose.ticketPending = true;
     var seq = compose.seq;
-    api("POST", "/desk/api/ticket", { session_id: dest.session_id, generation: dest.generation, epoch: dest.epoch })
+    // The hub refuses the ticket unless the target is still on this host ("wrong host").
+    api("POST", "/desk/api/ticket", { session_id: dest.session_id, generation: dest.generation, epoch: dest.epoch,
+      host: dest.host })
       .then(function (r) {
         if (seq !== compose.seq) return;
         compose.ticketPending = false;
@@ -623,7 +619,7 @@
   function renderReplies(t) {
     var list = $("replies");
     clear(list);
-    var mine = state.requests.filter(function (rq) { return rq.session_id === t.session_id; });
+    var mine = Logic.requestsFor(state.requests, t);
     mine.reverse();
     if (!mine.length) {
       list.appendChild(el("li", { "class": "note", text: "No requests yet." }));
@@ -648,13 +644,13 @@
   }
 
   function describeState(rq) {
-    return Logic.describeRequestState(rq.state) + " - " + formatTime(rq.created);
+    return Logic.describeRequestState(rq.state) + " - " + Logic.formatTime(rq.created);
   }
 
   // ---- Conversation -------------------------------------------------------
 
   function startBlocker() {
-    return window.DeskConversationLogic.startBlocker(state, selectedId, { recognizer: audio.speechInputAvailable(),
+    return window.DeskConversationLogic.startBlocker(state, selectedSessionId(), { recognizer: audio.speechInputAvailable(),
       voice: audio.voiceAvailable(), tapSending: tapSends > 0, canStart: conv.canStart(),
       blocker: conv.blocker() });
   }
@@ -662,7 +658,7 @@
   // A started conversation owns the target: the tap flow's review, ticket and dictation go.
   function startConversation() {
     batch(function () {
-      if (!startBlocker() && conv.start(Logic.destinationOf(findTarget(selectedId), state.epoch))) voidCompose(null);
+      if (!startBlocker() && conv.start(Logic.destinationOf(findTarget(selected), state.epoch))) voidCompose(null);
     });
   }
 
@@ -671,7 +667,7 @@
   function doClear() {
     // Submit only the pair the operator confirmed, never the current lock.
     var frozen = clearFrozen;
-    var t = frozen ? findTarget(frozen.session_id) : null;
+    var t = frozen ? findTarget(frozen) : null;
     if (!frozen || !Logic.clearStillValid(frozen, t)) {
       clearFrozen = null;
       render();
@@ -713,14 +709,15 @@
 
   function wire() {
     conv = window.DeskConversation.create({ api: api, env: window.DeskConversation.browserEnv(window), deps: {
-      selectedId: function () { return selectedId; }, visible: function () { return document.visibilityState === "visible"; },
+      selectedId: selectedSessionId, visible: function () { return document.visibilityState === "visible"; },
       voiceAvailable: function () { return audio.voiceAvailable(); }, onChange: renderForController,
       lateSound: function () { return audio.lateSound(); } } });
     audio = window.DeskPageAudio.create({ win: window, $: $, conv: conv, note: setNote, changed: renderForController });
     convView = window.DeskConversationView.create(document, { start: startConversation, end: conv.endTap });
     startup = window.DeskStartup.create({
       api: api,
-      labelFor: function (id) { var t = findTarget(id); return t ? t.label : null; }
+      // The startup view lists the Pi's supervisor panes only.
+      labelFor: function (id) { var t = findTarget({ host: Logic.PI, session_id: id }); return t ? t.label : null; }
     });
     $("pair-new").addEventListener("click", function () { startPairing(); });
     $("settings-toggle").addEventListener("click", function () {
@@ -758,7 +755,7 @@
       render();
     });
     $("clear-btn").addEventListener("click", function () {
-      clearFrozen = Logic.freezeClear(selectedId === null ? null : findTarget(selectedId));
+      clearFrozen = Logic.freezeClear(findTarget(selected));
       render();
     });
     $("clear-no").addEventListener("click", function () { clearFrozen = null; render(); });

@@ -139,9 +139,10 @@ class _Hub:
     def beat(self, token=None) -> dict:
         return self.state.beat_grant(self.token if token is None else token, self.grant)
 
-    def ticket(self, generation=None, epoch=None, session_id=SESSION_A) -> str:
+    def ticket(self, generation=None, epoch=None, session_id=SESSION_A, host="pi") -> str:
+        """The page's ticket request, naming the target's host as the page does."""
         return self.state.issue_ticket(session_id, self.generation if generation is None else generation,
-                                       self.state.epoch if epoch is None else epoch)["ticket"]
+                                       self.state.epoch if epoch is None else epoch, host)["ticket"]
 
     def reregister(self, identity=None) -> int:
         self.state.drop_registration(1)
@@ -221,6 +222,9 @@ HUB_REFUSALS = {
     "ticket, table full": ("ticket", _fill_tickets),
     "ticket, bad session id": ("ticket", lambda h: h.ticket(session_id="x")),
     "ticket, bad generation": ("ticket", lambda h: h.ticket(generation="3")),
+    # The target the page froze moved to another host under the same id.
+    "ticket, wrong host": ("ticket", lambda h: h.ticket(host="mac")),
+    "ticket, bad host": ("ticket", lambda h: h.ticket(host="")),
     "send, no registration": ("send", _send_after(lambda h: h.state.drop_registration(1))),
     "send, two registrations": ("send", _send_after(lambda h: h.state.register(2, SESSION_A, _identity(200)))),
     "send, stale epoch": ("send", lambda h: h.send("0" * 32 + ".x")),
@@ -274,7 +278,7 @@ HUB_REFUSALS = {
 # every path whatever its class.
 OUT_OF_REACH = {
     # The HTTP layer's own, before or around the state machine.
-    Refusal.WRONG_HOST, Refusal.WRONG_ORIGIN, Refusal.NOT_FOUND, Refusal.BAD_REQUEST, Refusal.METHOD_NOT_ALLOWED,
+    Refusal.WRONG_ORIGIN, Refusal.NOT_FOUND, Refusal.BAD_REQUEST, Refusal.METHOD_NOT_ALLOWED,
     Refusal.NOT_JSON, Refusal.LENGTH_REQUIRED, Refusal.BODY_TOO_LARGE, Refusal.TRUNCATED_BODY, Refusal.BAD_JSON,
     Refusal.INTERNAL_ERROR, Refusal.BAD_AFTER,
     # Need a full lock file or a request table full of outstanding requests.
@@ -289,7 +293,7 @@ OUT_OF_REACH = {
     Refusal.REVOKE_IN_PROGRESS, Refusal.BAD_ENABLED,
     # Need a Mac target or a Mac lock (the Mac link, link_hub.py).
     Refusal.LINK_BUSY, Refusal.LINK_OPERATOR_BUSY, Refusal.MAC_NOT_CONNECTED, Refusal.ENROLLED_ON_TWO_HOSTS,
-    Refusal.ENROLLED_ON_ANOTHER_HOST, Refusal.BAD_HOST,
+    Refusal.ENROLLED_ON_ANOTHER_HOST,
     # Enrollment edits and the operator-only Mac lock override, which a
     # conversation never calls (remote_enrollment.py, hub_enrollment.py).
     Refusal.ENROLLMENT_FILES_UNREADABLE, Refusal.LOCKS_UNREADABLE, Refusal.HOST_ENROLLMENT_FULL,
@@ -368,6 +372,7 @@ class HubRefusalOnThePageTests(unittest.TestCase):
             "beat, after the grant was ended": Refusal.GRANT_NOT_CURRENT,
             "beat, after the target re-registered": Refusal.TARGET_CHANGED,
             "beat, bad token": Refusal.UNAUTHORIZED,
+            "ticket, wrong host": Refusal.WRONG_HOST, "ticket, bad host": Refusal.BAD_HOST,
         }.items():
             self.assertEqual(reasons[name], reason, name)
 

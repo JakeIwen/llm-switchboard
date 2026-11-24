@@ -494,7 +494,8 @@
     function requestTicket() {
       var d = c.dest;
       var id = step(FETCH.TICKET, function (o) {
-        return api("POST", PATH.TICKET, { session_id: d.session_id, generation: d.generation, epoch: d.epoch }, o);
+        return api("POST", PATH.TICKET, { session_id: d.session_id, generation: d.generation, epoch: d.epoch,
+          host: d.host }, o);
       }, { fails: function (r) { return !A.ticketOf(r); }, answer: ticketed, none: function () {
         if (!settle(FETCH.TICKET, id)) return;
         clearTimer(TIMER.STEP);

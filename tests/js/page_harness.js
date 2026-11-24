@@ -215,7 +215,7 @@ function target(id, over) {
     registration: "replied", generation: 3, lock: null }, over);
 }
 function rq(id, state, spoken, confirm) {
-  return { request_id: id, session_id: "s1", state, text: "asked", created: 1, confirm: confirm || "tap",
+  return { request_id: id, host: "pi", session_id: "s1", state, text: "asked", created: 1, confirm: confirm || "tap",
     reply: spoken === undefined ? null : { text: "full", spoken } };
 }
 const voiceRq = (id, state, spoken) => rq(id, state, spoken, L.CONFIRM.VOICE);
