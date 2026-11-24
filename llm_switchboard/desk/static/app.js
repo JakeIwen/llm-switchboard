@@ -6,6 +6,7 @@
 
   var Rule = window.DeskTextRule;
   var Logic = window.DeskLogic;
+  var Hosts = window.DeskHosts;
   var TEST_TEXT = 'Desk test: reply with "desk OK" and nothing else.';
   var POLL_ABORT_MS = 35000;
   var SEND_DEADLINE_MS = 20000;
@@ -26,6 +27,7 @@
   // target change replaces while the POST is still out: Start waits for them.
   var tapSends = 0;
   var startup = null; // startup.js's blocked-session view, created in wire()
+  var linkView = null; // link_view.js: the Mac link's lines and host badges, created in wire()
   var conv = null, convView = null; // conversation.js's controller and conversation_view.js, created in wire()
   var audio = null; // page_audio.js: reply speech, Play and one-shot Dictate, created in wire()
 
@@ -112,7 +114,7 @@
       $("banner-sends").hidden = true;
       $("banner-lock-store").hidden = true;
       // Nothing the hub sent stays in the page, hidden or not.
-      ["detail-title", "detail-folder", "detail-badge", "clear-text", "review-dest", "review-text", "replies",
+      ["detail-title", "detail-folder", "detail-badge", "detail-host", "detail-hint", "clear-text", "review-dest", "review-text", "replies",
         "banner-lock-store"]
         .forEach(function (id) { $(id).textContent = ""; });
     });
@@ -336,7 +338,7 @@
 
   function render() {
     if (held) return;
-    runAll([renderTargets, renderDetail, renderSettings, function () { convView.render(conv.view(), startBlocker()); }]);
+    runAll([renderTargets, renderDetail, renderSettings, function () { linkView.render(state); }, function () { convView.render(conv.view(), startBlocker()); }]);
   }
 
   // The controller's onChange and page_audio's changed: a fault in the
@@ -358,6 +360,7 @@
         "data-host": t.host }, [
         el("span", { "class": "name", text: t.label || t.session_id }),
         el("span", { "class": "folder", text: folderOf(t) }),
+        linkView.hostBadge(t.host),
         el("span", { "class": "badge", "data-tone": badge.tone, text: badge.text })
       ]);
       if (Logic.sameTarget(t, selected)) btn.setAttribute("aria-current", "true");
@@ -393,6 +396,10 @@
     var b = $("detail-badge");
     b.textContent = badge.text;
     b.setAttribute("data-tone", badge.tone);
+    $("detail-host").textContent = Hosts.hostLabel(t.host);
+    var hint = Hosts.macHint(t, state);
+    $("detail-hint").hidden = !hint;
+    $("detail-hint").textContent = hint;
 
     $("clear-area").hidden = !t.lock;
     // Shown only while the target still shows the lock it names, whatever
@@ -713,6 +720,7 @@
       voiceAvailable: function () { return audio.voiceAvailable(); }, onChange: renderForController,
       lateSound: function () { return audio.lateSound(); } } });
     audio = window.DeskPageAudio.create({ win: window, $: $, conv: conv, note: setNote, changed: renderForController });
+    linkView = window.DeskLinkView.create(document);
     convView = window.DeskConversationView.create(document, { start: startConversation, end: conv.endTap });
     startup = window.DeskStartup.create({
       api: api,

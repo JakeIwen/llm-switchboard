@@ -48,6 +48,8 @@
 
 <main id="desk" class="desk" hidden>
   <nav class="targets" aria-label="Targets">
+    <ul id="links" class="plain links" data-testid="links" hidden></ul>
+    <ul id="link-refusals" class="plain links" data-testid="link-refusals" hidden></ul>
     <ul id="targets" class="plain" data-testid="targets"></ul>
     <p id="targets-empty" class="note" hidden>No targets. Enroll a session in Settings.</p>
   </nav>
@@ -55,9 +57,11 @@
   <section id="detail" class="detail" hidden>
     <div class="detail-head">
       <h2 id="detail-title" tabindex="-1"></h2>
+      <span id="detail-host" class="badge host" data-testid="detail-host"></span>
       <span id="detail-badge" class="badge" data-testid="detail-badge"></span>
     </div>
     <p id="detail-folder" class="note"></p>
+    <p id="detail-hint" class="note" data-testid="detail-hint" role="status" hidden></p>
 
     <div class="conv-area">
       <button id="conv-start" type="button" class="btn primary" data-testid="conv-start">Start conversation</button>
@@ -126,6 +130,7 @@
 
 <script src="/desk/text_rule.js"></script>
 <script src="/desk/desk_logic.js"></script>
+<script src="/desk/desk_hosts.js"></script>
 <script src="/desk/conversation_vocabulary.js"></script>
 <script src="/desk/conversation_logic.js"></script>
 <script src="/desk/sound_tracker.js"></script>
@@ -137,6 +142,7 @@
 <script src="/desk/conversation_view.js"></script>
 <script src="/desk/page_audio.js"></script>
 <script src="/desk/startup.js"></script>
+<script src="/desk/link_view.js"></script>
 <script src="/desk/hub_api.js"></script>
 <script src="/desk/app.js"></script>
 </body>

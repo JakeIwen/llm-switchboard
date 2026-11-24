@@ -66,6 +66,13 @@ h3 { font-size: 1rem; margin: 1rem 0 .4rem; }
 .badge[data-tone="ok"] { background: var(--ok-bg); color: var(--ok); }
 .badge[data-tone="warn"] { background: var(--warn-bg); color: var(--warn); }
 .badge[data-tone="bad"] { background: var(--bad-bg); color: var(--bad); }
+/* The host a target or a link line belongs to: outlined, so it never reads as a state. */
+.badge.host { background: transparent; border: 1px solid var(--line); color: var(--text); margin-right: .3rem; }
+.links { margin: 0 0 .8rem; }
+.links li { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; font-size: .9rem; margin: .3rem 0; }
+.links [data-tone="ok"] { color: var(--ok); }
+.links [data-tone="warn"] { color: var(--warn); }
+.links [data-tone="bad"] { color: var(--bad); }
 .detail { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 1rem; }
 .detail-head { display: flex; align-items: center; gap: .8rem; flex-wrap: wrap; }
 .detail-head h2 { overflow-wrap: anywhere; }

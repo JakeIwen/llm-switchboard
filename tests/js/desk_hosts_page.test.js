@@ -43,3 +43,53 @@ test("the tap flow's ticket names the target's host", async () => {
   const [call] = h.pending("/desk/api/ticket");
   assert.deepEqual(call.body, { session_id: "s1", generation: 9, epoch: "e1", host: "mac" });
 });
+
+// ---- Host badges, link and refusal lines, the Mac hint --------------------
+
+const Hosts = require("../../llm_switchboard/desk/static/desk_hosts.js");
+const badges = (node) => node.all((k) => k.getAttribute("data-testid") === "host-badge").map((k) => k.textContent);
+const lines = (h, id) => h.$(id).children.map((k) => k.textContent);
+const DOWN = { host: "mac", state: "down", since: null, signer: true };
+
+test("each target carries its host badge, and the detail shows it", async () => {
+  const h = await paired(snap({ targets: [target("s1"), onMac({ session_id: "s2" })] }));
+  assert.deepEqual(badges(h.target("s1")), ["Pi"]);
+  assert.deepEqual(badges(h.target("s2")), ["mac"]);
+  h.target("s2").click();
+  await settle();
+  assert.equal(h.$("detail-host").textContent, "mac");
+});
+
+test("one line per listed host and one per unattributed refusal, none when the hub lists none", async () => {
+  const h = await paired(snap());
+  assert.equal(h.$("links").hidden, true);
+  assert.equal(h.$("link-refusals").hidden, true);
+  await h.answer(POLL, 200, snap({ links: [{ host: "mac", state: "up", since: 1, signer: true }],
+    admission_refusals: [{ code: "not_authorized", count: 2, last: 1, versions: null, hub_versions: [1] }] }));
+  assert.equal(h.$("links").hidden, false);
+  assert.deepEqual(lines(h, "links"), ["macMac link up"]);
+  assert.deepEqual(badges(h.$("links")), ["mac"]);
+  assert.equal(h.$("link-refusals").hidden, false);
+  assert.match(lines(h, "link-refusals")[0], /^A Mac link was refused: not_authorized, 2 times, last at /);
+  assert.deepEqual(badges(h.$("link-refusals")), [], "a refusal was shown under a host");
+});
+
+test("a Mac target with no registration is not connected, with the hint and its link's state, and takes no sends", async () => {
+  const h = await paired(snap({ targets: [onMac({ registration: "none", generation: null })], links: [DOWN] }));
+  assert.equal(h.$("detail-badge").textContent, "Not connected");
+  assert.equal(h.$("detail-hint").hidden, false);
+  assert.equal(h.$("detail-hint").textContent, Hosts.MAC_HINT + " Mac link down.");
+  for (const id of ["dictate", "review-btn", "test-btn", "draft"]) assert.equal(h.$(id).disabled, true, id);
+  await h.answer(POLL, 200, snap({ targets: [target("s1", { registration: "none", generation: null })] }));
+  h.target("s1").click();
+  await settle();
+  assert.equal(h.$("detail-badge").textContent, "Unavailable");
+  assert.equal(h.$("detail-hint").hidden, true);
+});
+
+test("an id two hosts own is badged, and the page offers no send to it", async () => {
+  const h = await paired(snap({ targets: [target("s1", { enrolled: false, enrolled_on_two_hosts: true,
+    registration: "none", generation: null })] }));
+  assert.equal(h.$("detail-badge").textContent, "Enrolled on two hosts");
+  assert.equal(h.$("review-btn").disabled, true);
+});

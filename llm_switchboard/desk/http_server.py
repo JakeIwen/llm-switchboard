@@ -52,6 +52,7 @@ STATIC_ROUTES = {
     "/desk/app.css": (STATIC_DIR / "app.css", _CSS),
     "/desk/text_rule.js": (STATIC_DIR / "text_rule.js", _JS),
     "/desk/desk_logic.js": (STATIC_DIR / "desk_logic.js", _JS),
+    "/desk/desk_hosts.js": (STATIC_DIR / "desk_hosts.js", _JS),
     "/desk/conversation_vocabulary.js": (STATIC_DIR / "conversation_vocabulary.js", _JS),
     "/desk/conversation_logic.js": (STATIC_DIR / "conversation_logic.js", _JS),
     "/desk/sound_tracker.js": (STATIC_DIR / "sound_tracker.js", _JS),
@@ -63,6 +64,7 @@ STATIC_ROUTES = {
     "/desk/conversation_view.js": (STATIC_DIR / "conversation_view.js", _JS),
     "/desk/page_audio.js": (STATIC_DIR / "page_audio.js", _JS),
     "/desk/startup.js": (STATIC_DIR / "startup.js", _JS),
+    "/desk/link_view.js": (STATIC_DIR / "link_view.js", _JS),
     "/desk/hub_api.js": (STATIC_DIR / "hub_api.js", _JS),
     # The hub's own cases, so the page's mirror of the rule checks the same table.
     "/desk/text_rule_cases.json": (DESK_DIR / "text_rule_cases.json", _JSON),
