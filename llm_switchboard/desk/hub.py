@@ -48,7 +48,7 @@ from .labels import SessionLabels, encodable
 from .locks import LockStore
 from .model import (
     HELLO_TIMEOUT_SECONDS, MAX_PENDING_CHANNEL_CONNECTIONS, RECHECK_SECONDS,
-    STARTUP_TMUX_TIMEOUT_SECONDS, ChannelProcess, ConfirmMode, DeskError, is_request_id,
+    STARTUP_TMUX_TIMEOUT_SECONDS, ChannelProcess, ConfirmMode, DeskError, ReplyRefusal, is_request_id,
 )
 from .operator import OperatorOp, OperatorServer, bind_private_socket
 from .peer import process_presence
@@ -392,7 +392,7 @@ class Hub:
         if recheck:
             log.info("desk: reply for %s refused: recheck: %s", _logged_request_id(request_id), _loggable(recheck))
             connection.send(MessageType.REPLY_RESULT, request_id=request_id if isinstance(request_id, str) else None,
-                            ok=False, reason="session changed")
+                            ok=False, reason=ReplyRefusal.SESSION_CHANGED)
             self._drop_connection(connection.conn_id, f"recheck at reply: {recheck}")
             return
         reason = self.state.handle_reply(connection.conn_id, request_id, message.get("text"), message.get("spoken"))

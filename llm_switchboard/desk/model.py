@@ -5,7 +5,7 @@ named constant here so the state machine, the adapters and the tests agree.
 """
 
 from dataclasses import dataclass
-from enum import Enum
+from enum import Enum, StrEnum
 import re
 
 from .refusals import Refusal
@@ -156,6 +156,21 @@ class RegistrationState(str, Enum):
     REGISTERED = "registered"
     NONE = "none"
     AMBIGUOUS = "ambiguous"
+
+
+class ReplyRefusal(StrEnum):
+    """Why the hub refused a channel's `reply`: the reason its `reply_result`
+    carries back to the channel (never an HTTP answer, so not a `Refusal`).
+    The Mac link maps each to a wire code (link_protocol.LINK_CODES)."""
+    BAD_REPLY = "bad reply"
+    NOT_UTF8 = "reply not valid UTF-8"
+    TOO_LARGE = "reply too large"
+    UNKNOWN_REQUEST = "unknown request"
+    WRONG_CONNECTION = "wrong connection"
+    NOT_OUTSTANDING = "request not outstanding"
+    LOCK_STORE_ERROR = "lock store error"
+    # The connection failed its recheck at reply time (/clear, resume).
+    SESSION_CHANGED = "session changed"
 
 
 class LockStoreError(Exception):

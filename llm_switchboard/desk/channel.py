@@ -9,6 +9,7 @@ text is never logged: stderr carries ids and reasons only.
 Standard library only (`bin/desk-channel` runs it under `python -I`).
 """
 
+from enum import StrEnum
 import json
 import os
 import signal
@@ -54,6 +55,15 @@ REPLY_TOOL_SCHEMA = {
 }
 
 
+class UndeliverableReason(StrEnum):
+    """Why the channel did not write an event to Claude's stdin: the reason
+    its `undeliverable` frame carries to the hub. The Mac relay classifies
+    each into a wire code (link_protocol.LINK_CODES)."""
+    SESSION_FILE = "the parent's session file is missing or unreadable"
+    SESSION_CHANGED = "the parent's session changed since hello"
+    STDOUT_CLOSED = "stdout closed"
+
+
 def log(message: str) -> None:
     print(f"desk-channel: {message}", file=sys.stderr, flush=True)
 
@@ -80,7 +90,7 @@ class StdoutWriter:
                 self._stream.write(data)
                 self._stream.flush()
             except (OSError, ValueError):
-                return "stdout closed"
+                return UndeliverableReason.STDOUT_CLOSED
         return None
 
 
@@ -244,9 +254,9 @@ class HubLink:
         parent = os.getppid()
         entry = read_session_file(self._sessions_dir, parent)
         if entry is None or entry.get("pid") != parent:
-            return "the parent's session file is missing or unreadable"
+            return UndeliverableReason.SESSION_FILE
         if entry.get("sessionId") != self._session_id:
-            return "the parent's session changed since hello"
+            return UndeliverableReason.SESSION_CHANGED
         return None
 
     def _deliver_event(self, sock: socket.socket, message: dict) -> bool:

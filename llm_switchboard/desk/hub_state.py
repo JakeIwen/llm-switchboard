@@ -47,7 +47,7 @@ from .model import (
     OUTSTANDING_STATES, PAIR_CODE_LENGTH,
     PAIR_ID_BYTES, PAIR_TTL_SECONDS, REQUEST_ID_RANDOM_BYTES, TICKET_RANDOM_BYTES, TICKET_TTL_SECONDS,
     STARTUP_REVOKE_WAIT_SECONDS, TOKEN_BYTES, TOKEN_ID_LENGTH, TOKEN_TTL_SECONDS, DeskError, Lock, LockStoreError, Pairing,
-    ChannelProcess, Registration, RegistrationState, Reply, Request, RequestState, Revoked, Ticket, Token,
+    ChannelProcess, Registration, RegistrationState, Reply, ReplyRefusal, Request, RequestState, Revoked, Ticket, Token,
     valid_channel_identity,
 )
 from .grants import ConversationGrants
@@ -434,33 +434,33 @@ class HubState(ConversationGrants):
 
     # -- replies -------------------------------------------------------------
 
-    def handle_reply(self, conn_id: int, request_id, text, spoken) -> str | None:
+    def handle_reply(self, conn_id: int, request_id, text, spoken) -> ReplyRefusal | None:
         """None when this reply is accepted, else why it was dropped."""
         if not all(isinstance(value, str) for value in (request_id, text, spoken)):
-            return "bad reply"
+            return ReplyRefusal.BAD_REPLY
         # Strict UTF-8, before any state changes: a lone surrogate can't be
         # stored, served or sized, so it is refused here, not after the lock is gone.
         try:
             text_bytes, spoken_bytes = len(text.encode("utf-8")), len(spoken.encode("utf-8"))
         except UnicodeEncodeError:
-            return "reply not valid UTF-8"
+            return ReplyRefusal.NOT_UTF8
         if text_bytes > MAX_REPLY_TEXT_BYTES or spoken_bytes > MAX_SPOKEN_BYTES:
-            return "reply too large"
+            return ReplyRefusal.TOO_LARGE
         with self._mutex:
             request = self._requests.get(request_id)
             if request is None:
-                return "unknown request"
+                return ReplyRefusal.UNKNOWN_REQUEST
             if request.conn_id != conn_id or conn_id not in self._registrations:
-                return "wrong connection"
+                return ReplyRefusal.WRONG_CONNECTION
             if request.state is not RequestState.HANDED_OFF:
-                return "request not outstanding"
+                return ReplyRefusal.NOT_OUTSTANDING
             if request.lock_id and request.lock_id in self._locks:
                 try:
                     self._lock_store.remove(request.lock_id)
                 except LockStoreError as exc:
                     self._lock_error = str(exc.args[0] if exc.args else "lock store error")
                     self._bump()
-                    return "lock store error"
+                    return ReplyRefusal.LOCK_STORE_ERROR
                 del self._locks[request.lock_id]
             self._release_delivery(conn_id, request_id)
             self._finish(request, RequestState.ANSWERED)
