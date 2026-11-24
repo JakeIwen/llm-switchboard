@@ -43,6 +43,12 @@ process.stdout.write(JSON.stringify({
 """
 
 
+# A failure-only bound on the node runs that execute whole test files: they
+# take seconds on a desktop and minutes on a Raspberry Pi whose cores are
+# busy with other work, and the bound only matters when node hangs.
+NODE_SUITE_BOUND_SECONDS = 900
+
+
 def node() -> str:
     found = shutil.which("node")
     if found is None:
@@ -54,7 +60,7 @@ class ConversationJsTests(unittest.TestCase):
     def test_node_suites(self):
         self.assertTrue(JS_TESTS, "tests/js/conversation*.test.js is missing")
         proc = subprocess.run([node(), "--test", *map(str, JS_TESTS)], capture_output=True, text=True,
-                              timeout=120, check=False, cwd=ROOT)
+                              timeout=NODE_SUITE_BOUND_SECONDS, check=False, cwd=ROOT)
         self.assertEqual(proc.returncode, 0, proc.stdout[-6000:] + proc.stderr[-2000:])
 
 
@@ -303,7 +309,7 @@ def _refused(case: unittest.TestCase, names) -> list[dict]:
 
 def _probe(case: unittest.TestCase, cases) -> list[dict]:
     proc = subprocess.run([node(), str(PROBE)], input=json.dumps(cases), capture_output=True, text=True,
-                          timeout=120, check=False, cwd=ROOT)
+                          timeout=NODE_SUITE_BOUND_SECONDS, check=False, cwd=ROOT)
     case.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
     return json.loads(proc.stdout)
 
