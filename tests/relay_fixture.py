@@ -139,6 +139,7 @@ class FakeUplink:
         self.frames: list[tuple[LinkType, dict]] = []
         self._generation = 0
         self._changed = threading.Condition()
+        self._dispatch = threading.RLock()
 
     @property
     def retired(self) -> bool:
@@ -172,7 +173,10 @@ class FakeUplink:
         """A hub frame to the relay, checked as the relay's decoder would."""
         line = encode_frame(kind, Side.HUB, v=LINK_VERSIONS[0], **fields)
         decoded_kind, decoded = decode_frame(line, Side.HUB, v=LINK_VERSIONS[0])
-        self.relay.handle_hub_frame(self, decoded_kind, decoded)
+        # Model the real link's single reader, but allow the fake's inline
+        # register answer to re-enter dispatch on the submitting thread.
+        with self._dispatch:
+            self.relay.handle_hub_frame(self, decoded_kind, decoded)
 
     def of(self, kind: LinkType) -> list[dict]:
         with self._changed:
