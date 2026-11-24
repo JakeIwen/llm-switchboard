@@ -48,6 +48,11 @@ class OperatorOp(str, Enum):
     UNENROLL = "unenroll"
     STARTUP_VIEW = "startup_view"
     STARTUP_ACK = "startup_ack"
+    # Mac enrollment and the Mac lock override: a phase 1 hub answers
+    # `unknown op`, so nothing host-qualified is read as a Pi edit there.
+    ENROLL_HOST = "enroll_host"
+    UNENROLL_HOST = "unenroll_host"
+    CLEAR_STOPPED = "clear_stopped"
 
 
 class HubUnavailable(Exception):

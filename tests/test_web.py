@@ -10,6 +10,7 @@ from pathlib import Path
 
 from llm_switchboard import settings
 from llm_switchboard.desk.enrollment import Enrollment
+from llm_switchboard.desk.remote_enrollment import HostEnrollment
 from llm_switchboard.hosts import Hosts
 from llm_switchboard.codex_trash import CodexTrash
 from llm_switchboard.store import Store
@@ -70,6 +71,26 @@ class WebTest(unittest.TestCase):
         # An unreadable file reads as nobody enrolled.
         enrolled.write_text("{not json")
         self.assertFalse(self.call("/api/sessions")[1]["sessions"][0]["desk_enrolled"])
+
+    def test_mac_rows_take_desk_enrolled_from_the_hosts_file(self):
+        self.app.hosts = Hosts(self.root / "hosts")
+        self.app.hosts.exchange("mac", {"version": 1, "rows": [
+            {"id": sid, "tool": "claude", "title": "Remote", "cwd": "/Users/me/x", "mtime": 100, "size": 1,
+             "state": "closed", "mutable": True} for sid in (SID, SID2)]})
+        enrolled, hosts_file = self.root / "enrolled.json", self.root / "enrolled-hosts.json"
+        self.app.enrollment = Enrollment(enrolled)
+        self.app.host_enrollment = HostEnrollment(hosts_file, enrolled)
+
+        def mac_rows():
+            return {row["session_id"]: row["desk_enrolled"] for row in self.call("/api/sessions")[1]["sessions"]
+                    if row["host"] == "mac"}
+        self.assertEqual(mac_rows(), {SID: False, SID2: False})
+        # The Pi's file never marks a Mac row; the hosts file does, for that host only.
+        self.assertTrue(self.app.enrollment.enroll(SID2, 1.0))
+        hosts_file.write_text(json.dumps({"hosts": {"mac": {SID: {"since": 1}}, "mac2": {SID2: {"since": 1}}}}))
+        self.assertEqual(mac_rows(), {SID: True, SID2: False})
+        hosts_file.write_text("{not json")
+        self.assertEqual(mac_rows(), {SID: False, SID2: False})
 
     def test_a_bad_desk_port_setting_does_not_stop_the_picker(self):
         home = self.root / "home"

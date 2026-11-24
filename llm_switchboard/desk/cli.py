@@ -6,8 +6,13 @@ over the operator socket (`ack` only through the hub, which sends its one
 Enter). `sends`, `voice`, `enroll` and `unenroll` go through the hub
 when it runs (so its sends see the change in order) and edit the file
 directly only when the connect proved no hub listens; once connected, a
-missing answer is reported as unknown and nothing is written. `flags` and
-`install-config` work on files only.
+missing answer is reported as unknown and nothing is written. `enroll
+--host` and `unenroll --host` (Mac sessions) go only through the
+host-qualified ops, never the phase 1 ones, so a phase 1 hub refuses them
+(`unknown op`) instead of editing the Pi's file; offline, both forms check
+both enrollment files and `locks.json` first (remote_enrollment.py).
+`clear-stopped` has no offline form: a hub rewrites `locks.json` whole from
+its own list. `flags` and `install-config` work on files only.
 """
 
 import argparse
@@ -18,10 +23,12 @@ import sys
 import time
 
 from .config import DeskConfig
-from .enrollment import DeskSettings, Enrollment, ensure_private_dir
-from .model import DeskError
+from .enrollment import DeskSettings, ensure_private_dir
+from .model import HOST, DeskError
 from .operator import HubAbsent, HubResultUnknown, HubUnavailable, OperatorOp, operator_request
 from .protocol import SERVER_NAME
+from .refusals import Refusal
+from .remote_enrollment import ENROLL_NOW_NOTICE, check_mac_host, enroll_offline, unenroll_offline
 
 EXIT_REFUSED = 1
 EXIT_SETUP = 2
@@ -53,7 +60,14 @@ def main(argv=None) -> int:
     voice = commands.add_parser("voice", help="allow or refuse sends confirmed by voice in a conversation (persisted)")
     voice.add_argument("value", choices=("on", "off"))
     for name, text in (("enroll", "let the desk route to a session"), ("unenroll", "stop routing to a session")):
-        commands.add_parser(name, help=text).add_argument("session_id")
+        command = commands.add_parser(name, help=text)
+        command.add_argument("session_id")
+        command.add_argument("--host", metavar="MAC", help="a Mac session, enrolled for that Mac's host name")
+    stopped = commands.add_parser("clear-stopped", help="release a Mac lock its Mac can't answer for, after "
+                                  "seeing the session exit there")
+    stopped.add_argument("session_id")
+    stopped.add_argument("lock_id")
+    stopped.add_argument("--confirm", metavar="LOCK_ID", help="off a terminal: the lock id again")
     ack = commands.add_parser("ack", help="show a session's startup warning, then press Enter once to accept it")
     ack.add_argument("session_id")
     ack.add_argument("--digest", metavar="HEX", help="the digest a previous `desk ack` printed; sends without asking")
@@ -153,36 +167,101 @@ def _voice(args, config):
     return _switch(args, config, OperatorOp.VOICE, DeskSettings.set_voice_confirm_enabled)
 
 
-def _enrollment_change(config: DeskConfig, op: OperatorOp, session_id: str, edit_file) -> bool | None:
+def _enrollment_change(config: DeskConfig, op: OperatorOp, edit_file, **fields) -> bool | None:
     """Through the running hub, else (no hub, proved at connect) by editing
     the file; whether anything changed, or None when the hub refused
     (already printed)."""
     try:
-        response = operator_request(config.operator_socket, op, session_id=session_id)
+        response = operator_request(config.operator_socket, op, **fields)
     except HubAbsent:
         return edit_file()
     if not response.get("ok"):
-        print(f"desk: {response.get('error', 'refused')}", file=sys.stderr)
+        error = response.get("error", "refused")
+        if error == Refusal.UNKNOWN_OP:
+            error = "the running desk hub is older and can't enroll Mac sessions; nothing changed"
+        print(f"desk: {error}", file=sys.stderr)
         return None
     return bool(response.get("changed"))
 
 
+def _host(args) -> str:
+    """HOST without --host; a Mac's host name with it (never `pi`)."""
+    return HOST if args.host is None else check_mac_host(args.host)
+
+
 def _enroll(args, config):
-    added = _enrollment_change(config, OperatorOp.ENROLL, args.session_id,
-                               lambda: Enrollment(config.enrolled_file).enroll(args.session_id, time.time()))
+    host, session_id = _host(args), args.session_id
+    if host == HOST:
+        added = _enrollment_change(config, OperatorOp.ENROLL,
+                                   lambda: enroll_offline(config, HOST, session_id, time.time()),
+                                   session_id=session_id)
+    else:
+        added = _enrollment_change(config, OperatorOp.ENROLL_HOST,
+                                   lambda: enroll_offline(config, host, session_id, time.time()),
+                                   session_id=session_id, host=host)
     if added is None:
         return EXIT_REFUSED
-    print(f"{args.session_id} {'enrolled' if added else 'was already enrolled'}; "
-          "it takes effect at the session's next launch with the desk flags")
+    if host == HOST:
+        print(f"{session_id} {'enrolled' if added else 'was already enrolled'}; "
+              "it takes effect at the session's next launch with the desk flags")
+    else:
+        print(f"{session_id} {'enrolled' if added else 'was already enrolled'} on {host}. {ENROLL_NOW_NOTICE}")
     return 0
 
 
 def _unenroll(args, config):
-    removed = _enrollment_change(config, OperatorOp.UNENROLL, args.session_id,
-                                 lambda: Enrollment(config.enrolled_file).unenroll(args.session_id))
+    host, session_id = _host(args), args.session_id
+    if host == HOST:
+        removed = _enrollment_change(config, OperatorOp.UNENROLL, lambda: unenroll_offline(config, HOST, session_id),
+                                     session_id=session_id)
+    else:
+        removed = _enrollment_change(config, OperatorOp.UNENROLL_HOST,
+                                     lambda: unenroll_offline(config, host, session_id),
+                                     session_id=session_id, host=host)
     if removed is None:
         return EXIT_REFUSED
-    print(f"{args.session_id} {'unenrolled' if removed else 'was not enrolled'}")
+    where = "" if host == HOST else f" on {host}"
+    print(f"{session_id} {'unenrolled' if removed else 'was not enrolled'}{where}")
+    return 0
+
+
+CLEAR_STOPPED_STATEMENT = "I have seen this Mac session exit and its desk channel is not running"
+
+
+def _clear_stopped(args, config):
+    """Shows the lock and the statement it records, takes the confirmation,
+    then asks the hub, which checks everything again at the mutation."""
+    try:
+        status = operator_request(config.operator_socket, OperatorOp.STATUS)
+    except HubAbsent:
+        print("desk: the desk hub is not running; start it and run clear-stopped again", file=sys.stderr)
+        return EXIT_REFUSED
+    lock = next((found for found in status.get("locks", []) if found.get("lock_id") == args.lock_id
+                 and found.get("session_id") == args.session_id), None) if status.get("ok") else None
+    if lock is None or lock.get("host") in (None, HOST):
+        print("desk: no Mac lock with that session id and lock id; nothing changed", file=sys.stderr)
+        return EXIT_REFUSED
+    print(f"lock {args.lock_id}: host {lock['host']}, session {args.session_id}, since {lock.get('since')}, "
+          f"key {lock.get('link_key')}, machine {lock.get('machine')}...")
+    print(f"this records: {CLEAR_STOPPED_STATEMENT}")
+    confirm = args.confirm
+    if confirm is None:
+        if not sys.stdin.isatty():
+            print("desk: off a terminal, pass --confirm <lock id>; nothing changed", file=sys.stderr)
+            return EXIT_REFUSED
+        if input("Type the session id's first 8 characters to confirm: ").strip() != args.session_id[:8]:
+            print("nothing changed")
+            return EXIT_REFUSED
+        confirm = args.lock_id
+    response = operator_request(config.operator_socket, OperatorOp.CLEAR_STOPPED, session_id=args.session_id,
+                                lock_id=args.lock_id, confirm=confirm)
+    if not response.get("ok"):
+        error = response.get("error", "refused")
+        if error == Refusal.UNKNOWN_OP:
+            error = "the running desk hub is older and has no clear-stopped; nothing changed"
+        print(f"desk: {error}", file=sys.stderr)
+        return EXIT_REFUSED
+    print(f"{args.lock_id} cleared")
     return 0
 
 
@@ -244,5 +323,5 @@ def _install_config(args, config):
 _COMMANDS = {
     "serve": _serve, "pair": _pair, "revoke": _revoke, "status": _status, "clear": _clear,
     "sends": _sends, "voice": _voice, "enroll": _enroll, "unenroll": _unenroll, "ack": _ack, "flags": _flags,
-    "install-config": _install_config,
+    "install-config": _install_config, "clear-stopped": _clear_stopped,
 }

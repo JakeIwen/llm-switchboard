@@ -49,8 +49,9 @@ from .model import (
     PAIR_ID_BYTES, PAIR_TTL_SECONDS, REQUEST_ID_RANDOM_BYTES, TICKET_RANDOM_BYTES, TICKET_TTL_SECONDS,
     STARTUP_REVOKE_WAIT_SECONDS, TOKEN_BYTES, TOKEN_ID_LENGTH, TOKEN_TTL_SECONDS, DeskError, Lock, LockStoreError, Pairing,
     ChannelProcess, Registration, RegistrationState, Reply, ReplyRefusal, Request, RequestState, Revoked, Ticket, Token,
-    valid_channel_identity,
+    is_desk_host, valid_channel_identity,
 )
+from .enrollment_views import EnrollmentViews
 from .grants import ConversationGrants
 from .link_views import LinkViews
 from .model import ConfirmMode
@@ -80,7 +81,7 @@ def _is_int(value) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
-class HubState(ConversationGrants, LinkViews):
+class HubState(ConversationGrants, LinkViews, EnrollmentViews):
     def __init__(self, lock_store, *, now: Callable[[], float], elapsed: Callable[[], float],
                  token_bytes: Callable[[int], bytes], epoch: str | None = None):
         # Re-entrant so `authorized()` can hold it around a method that takes it too.
@@ -101,7 +102,6 @@ class HubState(ConversationGrants, LinkViews):
         self._locks: dict[str, Lock] = {}
         self._lock_error: str | None = None
         self._sends_enabled = False
-        self._enrolled: frozenset[str] = frozenset()
         self._pairings: dict[str, Pairing] = {}
         self._pair_starts: deque[float] = deque()
         self._tokens: dict[str, Token] = {}
@@ -137,6 +137,7 @@ class HubState(ConversationGrants, LinkViews):
             raise DeskError(409, Refusal.NOT_REGISTERED)
         if len(found) > 1:
             raise DeskError(409, Refusal.AMBIGUOUS)
+        self._check_host(found[0])
         return found[0]
 
     def _locks_for(self, session_id: str) -> list[Lock]:
@@ -165,13 +166,13 @@ class HubState(ConversationGrants, LinkViews):
 
     def _check_routing(self, session_id: str, *, sending: bool) -> None:
         """The rules every step of a send rechecks: sends on, a usable lock
-        store, the target still enrolled."""
+        store, the target enrolled on one host (`_routable` and
+        `_check_handoff` then check it is the registration's)."""
         if sending and not self._sends_enabled:
             raise DeskError(403, Refusal.SENDS_OFF)
         if self._store_error():
             raise DeskError(503, self._store_error())
-        if session_id not in self._enrolled:
-            raise DeskError(409, Refusal.NOT_ENROLLED)
+        self._check_enrolled(session_id)
 
     def _prune_history(self, now: float) -> bool:
         old = [request_id for request_id, r in self._requests.items()
@@ -239,11 +240,14 @@ class HubState(ConversationGrants, LinkViews):
 
     # -- tickets and sends ---------------------------------------------------
 
-    def issue_ticket(self, session_id, generation, epoch) -> dict:
+    def issue_ticket(self, session_id, generation, epoch, host=None) -> dict:
+        """A ticket bound to the target's host; `host`, when given, must be it."""
         if not isinstance(session_id, str) or not is_session_id(session_id):
             raise DeskError(400, Refusal.BAD_SESSION_ID)
         if not _is_int(generation) or not isinstance(epoch, str):
             raise DeskError(400, Refusal.BAD_GENERATION_OR_EPOCH)
+        if host is not None and not is_desk_host(host):
+            raise DeskError(400, Refusal.BAD_HOST)
         with self._mutex:
             if epoch != self.epoch:
                 raise DeskError(409, Refusal.STALE_EPOCH)
@@ -251,6 +255,8 @@ class HubState(ConversationGrants, LinkViews):
             registration = self._routable(session_id)
             if registration.generation != generation:
                 raise DeskError(409, Refusal.STALE_GENERATION)
+            if host is not None and host != registration.host:
+                raise DeskError(409, Refusal.WRONG_HOST)
             if self._busy(session_id):
                 raise DeskError(409, Refusal.BUSY)
             now = self._now()
@@ -258,7 +264,8 @@ class HubState(ConversationGrants, LinkViews):
             if len(self._tickets) >= MAX_TICKETS:
                 raise DeskError(429, Refusal.TICKET_TABLE_FULL)
             ticket = f"{self.epoch}.{_b64url(self._token_bytes(TICKET_RANDOM_BYTES))}"
-            record = Ticket(sha256_hex(ticket), session_id, generation, now + TICKET_TTL_SECONDS)
+            record = Ticket(sha256_hex(ticket), session_id, generation, now + TICKET_TTL_SECONDS,
+                            host=registration.host)
             self._tickets[record.ticket_hash] = record
             return {"ticket": ticket, "expires_at": record.expires_at}
 
@@ -284,6 +291,8 @@ class HubState(ConversationGrants, LinkViews):
             registration = self._routable(record.session_id)
             if registration.generation != record.generation:
                 raise DeskError(409, Refusal.STALE_GENERATION)
+            if registration.host != record.host:
+                raise DeskError(409, Refusal.TARGET_CHANGED_NOT_SENT)
             if self._busy(record.session_id):
                 raise DeskError(409, Refusal.BUSY)
             self._make_room_for_request()
@@ -387,6 +396,7 @@ class HubState(ConversationGrants, LinkViews):
         others = self._registrations_for(request.session_id)
         if current is None or current.generation != request.generation or len(others) != 1:
             raise DeskError(409, Refusal.TARGET_CHANGED_NOT_SENT)
+        self._check_host(current)
         # The lock must name the writer, or it could never be cleared safely.
         identity = current.identity
         if not valid_channel_identity(getattr(identity, "channel_pid", None), getattr(identity, "channel_start", None)):
@@ -532,13 +542,6 @@ class HubState(ConversationGrants, LinkViews):
         with self._mutex:
             if self._sends_enabled != bool(enabled):
                 self._sends_enabled = bool(enabled)
-                self._bump()
-
-    def set_enrolled(self, session_ids) -> None:
-        enrolled = frozenset(session_ids)
-        with self._mutex:
-            if enrolled != self._enrolled:
-                self._enrolled = enrolled
                 self._bump()
 
     def set_labels(self, labels: dict[str, tuple[str, str]]) -> None:
@@ -719,7 +722,7 @@ class HubState(ConversationGrants, LinkViews):
     # -- views ---------------------------------------------------------------
 
     def _target_ids(self) -> set[str]:
-        return set(self._enrolled) | {r.session_id for r in self._registrations.values()} \
+        return self._enrollment_ids() | {r.session_id for r in self._registrations.values()} \
             | {lock.session_id for lock in self._locks.values()}
 
     def snapshot(self) -> dict:
@@ -730,7 +733,7 @@ class HubState(ConversationGrants, LinkViews):
             return {"version": self._version, "epoch": self.epoch, "sends_enabled": self._sends_enabled,
                     "voice_confirm_enabled": self._voice_enabled,
                     "lock_store_error": self._store_error(), "targets": targets, "requests": requests,
-                    **self._link_fields()}
+                    **self._link_fields(), **self._candidate_fields(folders=True)}
 
     def _target(self, session_id: str) -> dict:
         found = self._registrations_for(session_id)
@@ -747,9 +750,10 @@ class HubState(ConversationGrants, LinkViews):
             lock = {"lock_id": locks[0].lock_id, "request_id": locks[0].request_id,
                     "since": locks[0].since, "earlier_run": self._earlier_run(locks[0])}
         label, cwd = self._labels.get(session_id) or (session_id[:8], "")
-        host = found[0].host if len(found) == 1 else (locks[0].host if locks else HOST)
+        host = found[0].host if len(found) == 1 else (locks[0].host if locks
+                                                      else self._enrollment.get(session_id, HOST))
         return {"host": host, "session_id": session_id, "label": label, "cwd": cwd,
-                "enrolled": session_id in self._enrolled,
+                "enrolled": session_id in self._enrollment, "enrolled_on_two_hosts": session_id in self._conflicts,
                 "registration": registration.value, "generation": generation, "lock": lock}
 
     def _request_view(self, request: Request) -> dict:
@@ -772,14 +776,12 @@ class HubState(ConversationGrants, LinkViews):
                     {"host": r.host, "session_id": r.session_id, "generation": r.generation,
                      "state": self._target(r.session_id)["registration"]}
                     for r in sorted(self._registrations.values(), key=lambda r: r.generation)],
-                "locks": [{"lock_id": lock.lock_id, "host": lock.host, "session_id": lock.session_id,
-                           "request_id": lock.request_id, "since": lock.since,
-                           "earlier_run": self._earlier_run(lock)}
-                          for lock in sorted(self._locks.values(), key=lambda lock: lock.since)],
+                "locks": [self._lock_status(lock) for lock in sorted(self._locks.values(), key=lambda lock: lock.since)],
                 "tokens": [{"token_id": t.token_id, "expires_at": t.expires_at}
                            for t in sorted(self._tokens.values(), key=lambda t: t.created)
                            if now < t.expires_at],
                 "pending_pairings": len(self._pairings),
                 **self._conversation_status(),
                 **self._link_fields(),
+                **self._candidate_fields(folders=False),
             }

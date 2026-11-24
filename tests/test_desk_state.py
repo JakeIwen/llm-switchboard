@@ -60,7 +60,7 @@ class StateCase(unittest.TestCase):
 
     def new_state(self, store=None) -> HubState:
         state = HubState(store or LockStore(self.config.lock_file), now=self.clock, elapsed=self.clock, token_bytes=secrets.token_bytes)
-        state.set_enrolled([SESSION_A, SESSION_B])
+        state.set_enrollment({SESSION_A: "pi", SESSION_B: "pi"})
         state.set_sends_enabled(True)
         return state
 
@@ -239,7 +239,7 @@ class HandoffTest(StateCase):
     def test_sends_off_unenroll_or_revoke_while_pending_never_reach_handed_off(self):
         changes = [
             (lambda: self.state.set_sends_enabled(False), (403, "sends off")),
-            (lambda: self.state.set_enrolled([SESSION_B]), (409, "not enrolled")),
+            (lambda: self.state.set_enrollment({SESSION_B: "pi"}), (409, "not enrolled")),
             (lambda: self.state.revoke(), (401, "unauthorized")),
         ]
         for change, refusal in changes:

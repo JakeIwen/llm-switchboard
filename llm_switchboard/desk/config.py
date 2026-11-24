@@ -47,6 +47,10 @@ class DeskConfig:
         return cls.for_launch(environ, home).enrolled_file
 
     @classmethod
+    def remote_enrolled_file_from_env(cls, environ=None, home: Path | None = None) -> Path:
+        return cls.for_launch(environ, home).remote_enrolled_file
+
+    @classmethod
     def from_env(cls, environ=None, home: Path | None = None, repo: Path = REPO) -> "DeskConfig":
         environ = os.environ if environ is None else environ
         home = Path(home or environ.get("HOME") or Path.home())

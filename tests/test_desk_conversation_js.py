@@ -123,7 +123,7 @@ class _Hub:
         self.clock = clock = Clock()
         self.state = s = HubState(LockStore(desk_config(make_home(case)).lock_file), now=clock, elapsed=clock,
                                   token_bytes=secrets.token_bytes)
-        s.set_enrolled([SESSION_A])
+        s.set_enrollment({SESSION_A: "pi"})
         s.set_sends_enabled(True)
         s.set_voice_enabled(True)
         self.generation = s.register(1, SESSION_A, _identity(100))
@@ -216,7 +216,7 @@ HUB_REFUSALS = {
     "ticket, two registrations": ("ticket", lambda h: (h.state.register(2, SESSION_A, _identity(200)), h.ticket())),
     "ticket, stale epoch": ("ticket", lambda h: h.ticket(epoch="0" * 32)),
     "ticket, stale generation": ("ticket", lambda h: (h.reregister(), h.ticket())),
-    "ticket, not enrolled": ("ticket", lambda h: (h.state.set_enrolled([]), h.ticket())),
+    "ticket, not enrolled": ("ticket", lambda h: (h.state.set_enrollment({}), h.ticket())),
     "ticket, busy": ("ticket", lambda h: (_tap_pending(h), h.ticket())),
     "ticket, table full": ("ticket", _fill_tickets),
     "ticket, bad session id": ("ticket", lambda h: h.ticket(session_id="x")),
@@ -231,7 +231,7 @@ HUB_REFUSALS = {
         "send", lambda h: h.send(h.ticket(), between=lambda: h.state.register(2, SESSION_A, _identity(200)))),
     "send, grant not current": ("send", _send_after(lambda h: h.state.end_grant(h.token, h.grant))),
     "send, grant for another target": ("send", lambda h: h.send(h.ticket(generation=h.reregister()))),
-    "send, not enrolled": ("send", _send_after(lambda h: h.state.set_enrolled([]))),
+    "send, not enrolled": ("send", _send_after(lambda h: h.state.set_enrollment({}))),
     "send, channel identity unusable": ("send", lambda h: (h.unusable_identity(), h.send(h.ticket()))),
     "send, busy": ("send", _busy_send),
     "send, sends off": ("send", _send_after(lambda h: h.state.set_sends_enabled(False))),
@@ -253,7 +253,7 @@ HUB_REFUSALS = {
     "grant, another page paired": ("grant", lambda h: (h.pair_another_page(), h.acquire())),
     "grant, voice confirm off": ("grant", lambda h: (h.state.set_voice_enabled(False), h.acquire())),
     "grant, sends off": ("grant", lambda h: (h.state.set_sends_enabled(False), h.acquire())),
-    "grant, not enrolled": ("grant", lambda h: (h.state.set_enrolled([]), h.acquire())),
+    "grant, not enrolled": ("grant", lambda h: (h.state.set_enrollment({}), h.acquire())),
     "grant, no registration": ("grant", lambda h: (h.state.drop_registration(1), h.acquire())),
     "grant, two registrations": ("grant", lambda h: (h.state.register(2, SESSION_A, _identity(200)), h.acquire())),
     "grant, stale generation": ("grant", lambda h: (h.reregister(), h.acquire())),
@@ -288,7 +288,13 @@ OUT_OF_REACH = {
     Refusal.BAD_PAIR_CLAIM, Refusal.WRONG_SECRET, Refusal.NOT_CONFIRMED, Refusal.UNKNOWN_OP, Refusal.BAD_TOKEN_ID,
     Refusal.REVOKE_IN_PROGRESS, Refusal.BAD_ENABLED,
     # Need a Mac target or a Mac lock (the Mac link, link_hub.py).
-    Refusal.LINK_BUSY, Refusal.LINK_OPERATOR_BUSY, Refusal.MAC_NOT_CONNECTED,
+    Refusal.LINK_BUSY, Refusal.LINK_OPERATOR_BUSY, Refusal.MAC_NOT_CONNECTED, Refusal.ENROLLED_ON_TWO_HOSTS,
+    Refusal.ENROLLED_ON_ANOTHER_HOST, Refusal.BAD_HOST,
+    # Enrollment edits and the operator-only Mac lock override, which a
+    # conversation never calls (remote_enrollment.py, hub_enrollment.py).
+    Refusal.ENROLLMENT_FILES_UNREADABLE, Refusal.LOCKS_UNREADABLE, Refusal.HOST_ENROLLMENT_FULL,
+    Refusal.USE_ENROLL_HOST, Refusal.CLEAR_STOPPED_NEEDS_CONFIRM, Refusal.CLEAR_STOPPED_PI_LOCK,
+    Refusal.CLEAR_STOPPED_LINK_UP,
 }
 
 PATHS = ("ticket", "send", "grant", "beat")

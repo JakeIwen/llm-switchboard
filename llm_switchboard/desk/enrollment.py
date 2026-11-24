@@ -111,13 +111,14 @@ class FileLock:
 class CachedJson:
     """A JsonFile whose parsed content is reused until the file changes."""
 
-    def __init__(self, path: Path, valid=lambda data: True):
+    def __init__(self, path: Path, valid=lambda data: True, lock_for: Path | None = None):
         self.file = JsonFile(path)
         # A file whose content fails `valid` reads as empty and can't be edited.
         self._valid = valid
         self._key = None
         self._data: dict = {}
-        self.lock = FileLock.for_file(path)
+        # Its own `<name>.lock`, or the lock of the file `lock_for` names.
+        self.lock = FileLock.for_file(lock_for or path)
 
     def read(self) -> dict:
         try:

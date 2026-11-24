@@ -12,6 +12,8 @@ about something other than the proof itself.
 
 import base64
 import hashlib
+import json
+import os
 from pathlib import Path
 import socket
 import subprocess
@@ -166,10 +168,48 @@ class LinkPeer:
             pass
 
 
+def write_host_enrollment(path: Path, enrollment: dict) -> None:
+    """`enrolled-hosts.json` holding {session id: host}, replaced whole (a
+    new inode, so the hub's cache sees it at its next refresh)."""
+    hosts: dict = {}
+    for session_id, host in enrollment.items():
+        hosts.setdefault(host, {})[session_id] = {"since": 1}
+    path = Path(path)
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.test")
+    tmp.write_text(json.dumps({"hosts": hosts}))
+    tmp.chmod(0o600)
+    os.replace(tmp, path)
+
+
+class HostEnrollmentFile(dict):
+    """{session id: host}, written to `enrolled-hosts.json` on every change."""
+
+    def __init__(self, path_of):
+        super().__init__()
+        self._path_of = path_of
+
+    def _write(self):
+        write_host_enrollment(self._path_of(), dict(self))
+
+    def __setitem__(self, key, value):
+        super().__setitem__(key, value)
+        self._write()
+
+    def __delitem__(self, key):
+        super().__delitem__(key)
+        self._write()
+
+    def update(self, *args, **kwargs):
+        super().update(*args, **kwargs)
+        self._write()
+
+
 class LinkHubCase:
     """Mixed into desk_fixtures.HubCase: a hub with its link socket up, the
     test's own throwaway keys listed for `mac` and `mac2`, Mac enrollment
-    from `self.remote` ({session id: host}), and a fake verifier unless
+    written to `enrolled-hosts.json` through `self.remote` ({session id:
+    host}; the hub sees it at its next refresh), and a fake verifier unless
     `real_verifier` is set. `self.link_options` adds LinkHub options."""
 
     real_verifier = False
@@ -192,7 +232,7 @@ class LinkHubCase:
         return LinkHubCase._keys[name]
 
     def setUp(self):
-        self.remote: dict[str, str] = {}
+        self.remote = HostEnrollmentFile(lambda: self.config.remote_enrolled_file)
         self.link_options: dict = getattr(self, "link_options", {})
         self._signers_written = False
         super().setUp()
@@ -205,7 +245,6 @@ class LinkHubCase:
         if not self.real_verifier:
             link["verify"] = fake_verify
         link.update(self.link_options)
-        options.setdefault("remote_enrollment", lambda: dict(self.remote))
         return super().start_hub(link_options=link, **options)
 
     def link_peer(self, host: str = MAC, machine: str = MACHINE) -> LinkPeer:

@@ -89,7 +89,7 @@ class GrantStateCase(unittest.TestCase):
         self.elapsed = Clock(1000.0)
         self.store = TimedLockStore(self.config.lock_file)
         self.state = HubState(self.store, now=self.clock, elapsed=self.elapsed, token_bytes=secrets.token_bytes)
-        self.state.set_enrolled([SESSION_A, SESSION_B])
+        self.state.set_enrollment({SESSION_A: "pi", SESSION_B: "pi"})
         self.state.set_sends_enabled(True)
         self.state.set_voice_enabled(True)
         self.token = token_for(self.state)

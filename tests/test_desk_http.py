@@ -228,7 +228,7 @@ class PairingHttpTest(HttpCase):
         status, _, view = self.call("GET", "/desk/api/state", token=claimed["token"])
         self.assertEqual(status, 200)
         self.assertEqual(set(view), {"version", "epoch", "sends_enabled", "voice_confirm_enabled", "lock_store_error",
-                                     "targets", "requests", "links", "admission_refusals"})
+                                     "targets", "requests", "links", "admission_refusals", "candidates"})
 
 
 class SendHttpTest(HttpCase):

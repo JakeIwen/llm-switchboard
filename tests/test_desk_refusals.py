@@ -1,5 +1,5 @@
 """The hub's refusals are declared once (llm_switchboard/desk/refusals.py):
-every reason hub.py, hub_state.py, grants.py and http_server.py answer with,
+every reason the hub's modules (HUB_MODULES) answer with,
 and every reason the text rule gives, is a `Refusal`, or one of the few
 named pass-throughs of free text from a store. A refusal added anywhere
 else in those modules fails here until it is declared."""
@@ -13,7 +13,8 @@ from llm_switchboard.desk.refusals import NOT_SENT, Delivery, Refusal
 from llm_switchboard.desk.text_rule import check_text
 
 DESK = Path(__file__).resolve().parents[1] / "llm_switchboard" / "desk"
-HUB_MODULES = ("hub.py", "hub_state.py", "grants.py", "http_server.py", "link_hub.py")
+HUB_MODULES = ("hub.py", "hub_state.py", "grants.py", "http_server.py", "link_hub.py", "link_views.py",
+               "enrollment_views.py", "hub_enrollment.py", "remote_enrollment.py")
 
 # (module, function, expression): reasons that are not the hub's own words.
 PASS_THROUGH = {
@@ -22,6 +23,7 @@ PASS_THROUGH = {
     ("hub_state.py", "begin_send", "self._store_error()"),
     ("hub_state.py", "hand_off", "reason"),
     ("hub_state.py", "clear_lock", "self._lock_error"),
+    ("link_views.py", "clear_stopped", "self._lock_error"),
     # check_text's result, itself a Refusal (test_the_text_rule_gives_only_declared_reasons).
     ("hub_state.py", "begin_send", "reason"),
     # A DeskError's reason, answered as it was raised.

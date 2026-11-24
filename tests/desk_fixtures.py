@@ -215,12 +215,13 @@ def write_fake_process(proc_dir: Path, pid: int, start: str) -> None:
     (entry / "cmdline").write_bytes(b"channel\0")
 
 
-def run_desk_cli(home, *args, env=None):
-    """`llm-switchboard desk ...` as a separate process under this HOME."""
+def run_desk_cli(home, *args, env=None, input=None):
+    """`llm-switchboard desk ...` as a separate process under this HOME;
+    `input` makes its stdin a pipe (never the terminal the suite runs in)."""
     environ = {**os.environ, "HOME": str(home), "XDG_CONFIG_HOME": "", "XDG_STATE_HOME": "",
                "XDG_RUNTIME_DIR": "", "LLM_SWITCHBOARD_DESK_PORT": "", **(env or {})}
     return subprocess.run([sys.executable, "-m", "llm_switchboard", "desk", *args], cwd=REPO, env=environ,
-                          capture_output=True, text=True, timeout=30)
+                          capture_output=True, text=True, timeout=30, input=input)
 
 
 def enroll_file(config: DeskConfig, *session_ids: str) -> None:

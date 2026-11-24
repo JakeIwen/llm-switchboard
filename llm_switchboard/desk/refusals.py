@@ -123,9 +123,23 @@ class Refusal(StrEnum):
     # list (static/conversation_answers.js) needs no change in this stage.
     LINK_BUSY = "desk link busy; try again"
     LINK_OPERATOR_BUSY = "busy: a Mac link call is in progress"
+    BAD_HOST = "bad host"
+    # A routing refusal before any handoff (see LINK_BUSY on why unproven).
+    ENROLLED_ON_TWO_HOSTS = "enrolled on two hosts"
+    CLEAR_STOPPED_NEEDS_CONFIRM = "confirm must repeat the lock id"
+    CLEAR_STOPPED_PI_LOCK = "this lock is on the Pi; use desk clear"
+    CLEAR_STOPPED_LINK_UP = ("the Mac that holds this lock is connected with its key; use desk clear, which "
+                             "asks it whether the channel still runs")
     MAC_NOT_CONNECTED = ("the Mac that holds this lock is not connected, so its channel can't be checked; "
                          "reconnect that Mac, or, once you have seen the session exit there, use desk "
                          "clear-stopped on the Pi")
+
+    # -- enrollment edits (remote_enrollment.py, hub_enrollment.py) -----------
+    ENROLLMENT_FILES_UNREADABLE = "enrollment files unreadable; nothing changed"
+    ENROLLED_ON_ANOTHER_HOST = "enrolled on another host"
+    LOCKS_UNREADABLE = "locks.json can't be checked; nothing changed"
+    HOST_ENROLLMENT_FULL = "Mac enrollment full"
+    USE_ENROLL_HOST = "use enroll_host"
 
     # -- pairing and tokens --------------------------------------------------
     PAGE_OUT_OF_DATE = "page out of date; reload it"

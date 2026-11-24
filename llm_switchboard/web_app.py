@@ -19,6 +19,7 @@ from .codex_trash import CodexTrash
 from .conversation import recent_messages
 from .desk.config import DeskConfig
 from .desk.enrollment import Enrollment
+from .desk.remote_enrollment import HostEnrollment
 from .folders import new_session_folders
 from .hosts import Hosts
 from .live_registry import live_processes
@@ -37,7 +38,7 @@ class App:
     def __init__(self, store: Store, index: TranscriptIndex, supervisor: Supervisor, tmux: Tmux, trash: Trash,
                  registry=live_processes, actions: SessionActions | None = None, codex: CodexActions | None = None,
                  hosts: Hosts | None = None, search: SearchHandlers | None = None, settings_file: Path | None = None,
-                 enrolled_file: Path | None = None):
+                 enrolled_file: Path | None = None, host_enrolled_file: Path | None = None):
         self.store = store
         self.index = index
         self.supervisor = supervisor
@@ -53,7 +54,11 @@ class App:
         self.hosts = hosts
         # Read-only: the desk and `llm-switchboard desk enroll` own this file.
         # Only the path: an unrelated desk setting (a bad port) must not stop the picker.
-        self.enrollment = Enrollment(enrolled_file or DeskConfig.enrolled_file_from_env())
+        enrolled_file = enrolled_file or DeskConfig.enrolled_file_from_env()
+        self.enrollment = Enrollment(enrolled_file)
+        # Mac sessions' desk enrollment, shown read-only on their rows.
+        self.host_enrollment = HostEnrollment(host_enrolled_file or DeskConfig.remote_enrolled_file_from_env(),
+                                              enrolled_file)
 
     def desk_enrolled(self) -> set[str]:
         """Enrolled session ids; a missing or unreadable file means none."""
@@ -61,6 +66,13 @@ class App:
             return set(self.enrollment.sessions())
         except Exception:
             return set()
+
+    def desk_enrolled_hosts(self) -> dict[str, frozenset[str]]:
+        """{Mac host: enrolled session ids}; a missing or unreadable file means none."""
+        try:
+            return self.host_enrollment.hosts()
+        except Exception:
+            return {}
 
     def settings_payload(self, partial: dict | None = None) -> dict:
         current = (settings.load(self.settings_file) if partial is None
@@ -89,6 +101,9 @@ class App:
             rows += codex_rows(self.codex.catalog.threads(), current)
             codex["error"] = self.codex.catalog.error
         remote = self.remote(current)
+        enrolled = self.desk_enrolled_hosts()
+        for row in remote["sessions"]:
+            row["desk_enrolled"] = row["session_id"] in enrolled.get(row["host"], ())
         rows += remote["sessions"]
         return {"host": socket.gethostname(), "now": time.time(), "sessions": sort_rows(rows),
                 "notifications": self.supervisor.notifier.enabled, "codex": codex,

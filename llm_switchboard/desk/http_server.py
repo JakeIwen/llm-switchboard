@@ -77,6 +77,8 @@ POST_ROUTES = {
     "/desk/api/clear": ("clear", True),
     "/desk/api/enroll": ("enroll", True),
     "/desk/api/unenroll": ("unenroll", True),
+    "/desk/api/enroll-host": ("enroll_host", True),
+    "/desk/api/unenroll-host": ("unenroll_host", True),
     "/desk/api/startup/ack": ("startup_ack", True),
     "/desk/api/conversation": ("conversation", True),
     "/desk/api/conversation/beat": ("conversation_beat", True),

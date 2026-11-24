@@ -8,7 +8,8 @@ signer line reread, 6 admissions a minute per host, 4 hosts, replacement
 of the host's current link), one reader thread per link (the admission
 thread goes on as the reader) and one writer (`link_session`), the link
 heartbeat and idle rule, presence queries, the signer check, the per-host
-link records, the unattributed refusals and the link-wait caps.
+link records, the unattributed refusals, the link-wait caps and the
+candidates (a `register` refused only as not enrolled, link_candidates).
 
 Lock rules: the links lock covers in-memory work, socket shutdowns and the
 bounded read of `link-signers`; it is never held across link I/O or a wait
@@ -38,6 +39,7 @@ from .labels import encodable
 from .link_admission import (
     AdmissionClosed, AdmissionRefusals, AdmissionRefused, Admitted, admit, refusal_frame,
 )
+from .link_candidates import Candidates
 from .link_proof import SignersUnreadable, read_signers, self_test, verify_proof
 from .link_protocol import (
     ADMISSION_DEADLINE_SECONDS, HEARTBEAT_SECONDS, IDLE_TIMEOUT_SECONDS, LINK_ID_BYTES, MAX_ACCEPTS_PER_MINUTE,
@@ -139,6 +141,7 @@ class LinkHub:
         self._waits = {LinkWaitSurface.HTTP: threading.BoundedSemaphore(MAX_LINK_HTTP_WAITS),
                        LinkWaitSurface.OPERATOR: threading.BoundedSemaphore(MAX_LINK_OPERATOR_WAITS)}
         self.refusals = AdmissionRefusals(now)
+        self.candidates = Candidates(now)
         self._rate_log = _RateLog(clock)
         self._listener: socket.socket | None = None
         self._stopping = threading.Event()
@@ -354,6 +357,11 @@ class LinkHub:
                 state = LinkState.VERIFIER_UNAVAILABLE
             views.append({"host": host, "state": state.value, "since": since, "signer": host in signers})
         self._hub.state.set_links(views)
+        self.publish_candidates()
+
+    def publish_candidates(self) -> None:
+        """The candidates into the state (each pass expires the old ones)."""
+        self._hub.state.set_candidates(self.candidates.view())
 
     # -- the link-wait caps ------------------------------------------------------------------
 
@@ -458,10 +466,10 @@ class LinkHub:
             code = RegisterRefusedCode.TOO_MANY_REGISTRATIONS
         else:
             owner = self._hub.remote_owner(session_id)
-            if owner is None:
-                code = RegisterRefusedCode.NOT_ENROLLED
-            elif owner != link.host:
+            if self._hub.enrolled_on_two_hosts(session_id) or owner not in (None, link.host):
                 code = RegisterRefusedCode.ENROLLED_ON_ANOTHER_HOST
+            elif owner is None:
+                code = RegisterRefusedCode.NOT_ENROLLED
         if code is None:
             generation = self._register(link, fields)
             if generation is None:
@@ -472,6 +480,10 @@ class LinkHub:
         if self._rate_log.due(f"register:{code.value}"):
             log.info("desk link: %s register refused: %s", link.host, code.value)
         link.submit(LinkType.REGISTER_REFUSED, chan=chan, reason=code.value)
+        if code is RegisterRefusedCode.NOT_ENROLLED:
+            # Refused only for not being enrolled: a session asking to join.
+            self.candidates.seen(link.host, session_id, fields["label"], fields["cwd"])
+            self.publish_candidates()
 
     def _register(self, link: LinkSession, fields: dict) -> int | None:
         identity = RemoteIdentity(host=link.host, link_id=link.link_id, chan=fields["chan"],

@@ -18,7 +18,7 @@ _HOST_NAME = re.compile(HOST_PATTERN)
 
 EPOCH_BYTES = 16
 
-# Tickets: one-use, bound to (epoch, session_id, generation).
+# Tickets: one-use, bound to (epoch, host, session_id, generation).
 TICKET_TTL_SECONDS = 10 * 60
 MAX_TICKETS = 32
 TICKET_RANDOM_BYTES = 18
@@ -43,6 +43,16 @@ LOCK_ID_BYTES = 8
 MAX_LOCK_FILE_BYTES = 64 * 1024
 # enrolled.json at MAX_ENROLLED sessions is about 5 KiB, desk-settings.json one key.
 MAX_DESK_FILE_BYTES = 64 * 1024
+# Mac enrollment (enrolled-hosts.json): hosts, and sessions across them.
+MAX_ENROLLED_HOSTS = 4
+MAX_HOST_ENROLLED = 64
+# Mac sessions asking to join (refused only as not enrolled), each forgotten
+# this long after its last attempt; a Mac unenroll keeps its session off the
+# list as long, in a table of the same size.
+MAX_CANDIDATES = 16
+CANDIDATE_TTL_SECONDS = 10 * 60
+MAX_CANDIDATE_LABEL = 80
+MAX_CANDIDATE_FOLDER = 120
 
 # Pairing.
 PAIR_TTL_SECONDS = 5 * 60
@@ -111,6 +121,8 @@ MAX_PID = 2**31 - 1
 LINK_KEY_PATTERN = re.compile(r"SHA256:[A-Za-z0-9+/]{43}")
 MACHINE_HEX_LENGTH = 32
 MACHINE_PATTERN = re.compile(rf"[0-9a-f]{{{MACHINE_HEX_LENGTH}}}")
+# How much of a Mac lock's machine id `desk status` shows.
+MACHINE_PREFIX_LENGTH = 8
 
 
 def is_desk_host(value) -> bool:
@@ -253,6 +265,8 @@ class Ticket:
     generation: int
     expires_at: float
     consumed: bool = False
+    # The target's host when the ticket was issued; a send needs the same.
+    host: str = HOST
 
 
 @dataclass

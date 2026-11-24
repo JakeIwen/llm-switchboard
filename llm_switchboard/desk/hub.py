@@ -42,6 +42,7 @@ from ..session_id import is_session_id
 from ..tmux import Tmux
 from .config import DeskConfig
 from .enrollment import DeskSettings, Enrollment, ensure_private_dir
+from .hub_enrollment import HubEnrollment
 from .hub_state import HubState
 from .http_server import DeskHttpServer, make_tls_context
 from .labels import SessionLabels, encodable
@@ -56,6 +57,7 @@ from .model import (
 from .operator import OperatorOp, OperatorServer, bind_private_socket
 from .peer import process_presence
 from .refusals import Refusal
+from .remote_enrollment import HostEnrollment, owners, published_view
 from .run_lock import HeldRunLock
 from .protocol import (
     HEARTBEAT_SECONDS, IDLE_TIMEOUT_SECONDS, FrameError, MessageType, decode, encode, read_line,
@@ -125,14 +127,13 @@ class ChannelConnection:
             self.sock.close()
 
 
-class Hub:
+class Hub(HubEnrollment):
     def __init__(self, config: DeskConfig, *, peer=None, now: Callable[[], float] = time.time,
                  elapsed: Callable[[], float] = time.monotonic,
                  token_bytes: Callable[[int], bytes] = secrets.token_bytes, lock_store=None,
                  recheck_seconds: float = RECHECK_SECONDS, heartbeat_seconds: float = HEARTBEAT_SECONDS,
                  idle_timeout_seconds: float = IDLE_TIMEOUT_SECONDS, long_poll_seconds: float | None = None,
-                 tmux: Tmux | None = None, remote_enrollment: Callable[[], dict[str, str]] | None = None,
-                 link_options: dict | None = None):
+                 tmux: Tmux | None = None, link_options: dict | None = None):
         self.config = config
         self._peer = peer
         self._now = now
@@ -143,11 +144,12 @@ class Hub:
         # published over a newer change. Lock order, everywhere: the files'
         # cross-process locks (`_policy_files`), this lock, the state's.
         self._policy_lock = threading.RLock()
-        # {session id: Mac host} for Mac enrollment. Until Mac enrollment
-        # lands (remote_enrollment.py) nothing is enrolled for a Mac.
-        self._remote_enrollment = remote_enrollment or dict
-        # (Pi-enrolled ids, {id: Mac host}) as last published, swapped whole.
-        self._owners: tuple[frozenset[str], dict[str, str]] = (frozenset(), {})
+        # Mac enrollment, read only under enrolled.json's lock.
+        self.host_enrollment = HostEnrollment(config.remote_enrolled_file, config.enrolled_file)
+        # ({session id: host}, ids on two hosts, hosts in enrolled-hosts.json)
+        # as last published, swapped whole: reader threads use it and never
+        # read a policy file.
+        self._published: tuple[dict[str, str], frozenset[str], frozenset[str]] = ({}, frozenset(), frozenset())
         self.state = HubState(lock_store or LockStore(config.lock_file), now=now, elapsed=elapsed,
                               token_bytes=token_bytes)
         self.labels = SessionLabels(config)
@@ -172,7 +174,8 @@ class Hub:
             OperatorOp.STATUS: self._op_status, OperatorOp.CLEAR: self._op_clear,
             OperatorOp.SENDS: self._op_sends, OperatorOp.VOICE: self._op_voice, OperatorOp.ENROLL: self._op_enroll,
             OperatorOp.UNENROLL: self._op_unenroll, OperatorOp.STARTUP_VIEW: self._op_startup_view,
-            OperatorOp.STARTUP_ACK: self._op_startup_ack,
+            OperatorOp.STARTUP_ACK: self._op_startup_ack, OperatorOp.ENROLL_HOST: self._op_enroll_host,
+            OperatorOp.UNENROLL_HOST: self._op_unenroll_host, OperatorOp.CLEAR_STOPPED: self._op_clear_stopped,
         }
 
     @property
@@ -254,11 +257,13 @@ class Hub:
             yield
 
     def refresh_files(self) -> None:
+        """Both enrollment files, read under enrolled.json's lock, published
+        as one view: an id with two owners is enrolled nowhere."""
         with self._policy_files(), self._policy_lock:
-            pi, remote = frozenset(self.enrollment.sessions()), dict(self._remote_enrollment())
-            self._owners = (pi, remote)
-            # An id enrolled on the Pi and for a Mac is enrolled nowhere.
-            self.state.set_enrolled(pi.symmetric_difference(remote))
+            hosts = self.host_enrollment.hosts()
+            enrollment, conflicts = published_view(owners(self.enrollment.sessions(), hosts))
+            self._published = (enrollment, conflicts, frozenset(h for h, ids in hosts.items() if ids))
+            self.state.set_enrollment(enrollment, conflicts)
             self.state.set_sends_enabled(self.settings.sends_enabled())
             self.state.set_voice_enabled(self.settings.voice_confirm_enabled())
 
@@ -276,7 +281,7 @@ class Hub:
         labels = {}
         for session_id in self.state.target_session_ids():
             try:
-                if session_id in remote or session_id in self._owners[1]:
+                if session_id in remote or self.remote_owner(session_id) not in (HOST, None):
                     channel = remote.get(session_id)
                     label, cwd = ((channel.label or session_id[:8], channel.cwd) if channel
                                   else (session_id[:8], ""))
@@ -304,7 +309,7 @@ class Hub:
         try:
             if isinstance(identity, RemoteIdentity):
                 return self.links.recheck(identity)
-            return self._peer.recheck(identity, self.config, self.enrollment.is_enrolled)
+            return self._peer.recheck(identity, self.config, self.enrolled_on_pi)
         except Exception:
             log.exception("desk: recheck raised")
             return "recheck error"
@@ -373,7 +378,7 @@ class Hub:
             session_id = message.get("session_id")
             if kind is not MessageType.HELLO or not isinstance(session_id, str) or not is_session_id(session_id):
                 raise refused("bad hello")
-            identity = self._peer.verify_peer(pid, session_id, self.config, self.enrollment.is_enrolled)
+            identity = self._peer.verify_peer(pid, session_id, self.config, self.enrolled_on_pi)
             connection = ChannelConnection(conn_id, sock, session_id)
             with self._connections_lock:
                 self._connections[conn_id] = connection
@@ -475,14 +480,19 @@ class Hub:
 
     def remote_owner(self, session_id) -> str | None:
         """The host `session_id` is enrolled for as last published: HOST,
-        a Mac host, or None (nowhere, or both on the Pi and for a Mac)."""
-        pi, remote = self._owners
-        if session_id in pi:
-            return None if session_id in remote else HOST
-        return remote.get(session_id)
+        a Mac host, or None (nowhere, or on two hosts)."""
+        return self._published[0].get(session_id)
+
+    def enrolled_on_two_hosts(self, session_id) -> bool:
+        return session_id in self._published[1]
+
+    def enrolled_on_pi(self, session_id) -> bool:
+        """Phase 1's `is_enrolled` for a Pi channel: enrolled for `pi` in the view."""
+        return self.remote_owner(session_id) == HOST
 
     def remote_hosts(self) -> set[str]:
-        return set(self._owners[1].values())
+        """The hosts enrolled-hosts.json lists sessions for."""
+        return set(self._published[2])
 
     def _drop_connection(self, conn_id: int, reason: str) -> None:
         with self._connections_lock:
@@ -517,7 +527,8 @@ class Hub:
 
     def ticket(self, body: dict, token: str) -> dict:
         with self.state.authorized(token):
-            return self.state.issue_ticket(body.get("session_id"), body.get("generation"), body.get("epoch"))
+            return self.state.issue_ticket(body.get("session_id"), body.get("generation"), body.get("epoch"),
+                                           body.get("host"))
 
     def send(self, body: dict, token: str) -> dict:
         # Only an omitted `confirm` means a tap; a supplied null is refused.
@@ -619,12 +630,14 @@ class Hub:
         return lambda pid, start: answer
 
     def enroll(self, body: dict, token: str) -> dict:
+        self._refuse_host_key(body)
         session_id = body.get("session_id")
         with self._policy_files(), self._policy_lock, self.state.authorized(token):
             self._enroll(session_id)
         return {"session_id": session_id, "enrolled": True}
 
     def unenroll(self, body: dict, token: str) -> dict:
+        self._refuse_host_key(body)
         session_id = body.get("session_id")
         with self._policy_files(), self._policy_lock, self.state.authorized(token):
             self._unenroll(session_id)
@@ -641,29 +654,6 @@ class Hub:
         a revoke of it waits until the Enter is out (`token_in_use`)."""
         return self.startup.acknowledge(body.get("session_id"), body.get("digest"),
                                         lambda: self.state.token_in_use(token))
-
-    # Enrollment edits, from the page or the operator socket, run under the
-    # file locks and the policy lock: a send's handoff rereads the file under
-    # them too, so an unenroll that has returned is never overtaken by a
-    # handoff that read the file before it.
-
-    def _enroll(self, session_id) -> bool:
-        with self._policy_files(), self._policy_lock:
-            added = self.enrollment.enroll(session_id, self._now())
-            self.refresh_files()
-            return added
-
-    def _unenroll(self, session_id) -> bool:
-        with self._policy_files(), self._policy_lock:
-            removed = self.enrollment.unenroll(session_id)
-            self.refresh_files()
-            return removed
-
-    def _drop_unenrolled(self, session_id) -> None:
-        """Routing stops at once, not at the next recheck."""
-        for registration in self.state.registrations():
-            if registration.session_id == session_id:
-                self._drop_connection(registration.conn_id, "unenrolled")
 
     # -- the operator socket -----------------------------------------------------
 
@@ -691,7 +681,8 @@ class Hub:
         return {"revoked": revoked.count}
 
     def _op_status(self, message: dict) -> dict:
-        return {**self.state.status(), "enrolled": sorted(self.enrollment.sessions())}
+        return {**self.state.status(), "enrolled": sorted(self.enrollment.sessions()),
+                "enrolled_hosts": {host: sorted(ids) for host, ids in sorted(self.host_enrollment.hosts().items())}}
 
     def _op_clear(self, message: dict) -> dict:
         process = self._lock_presence(message.get("session_id"), message.get("lock_id"), LinkWaitSurface.OPERATOR)
@@ -699,10 +690,12 @@ class Hub:
         return {"cleared": True}
 
     def _op_enroll(self, message: dict) -> dict:
+        self._refuse_host_key(message)
         session_id = message.get("session_id")
         return {"session_id": session_id, "enrolled": True, "changed": self._enroll(session_id)}
 
     def _op_unenroll(self, message: dict) -> dict:
+        self._refuse_host_key(message)
         session_id = message.get("session_id")
         removed = self._unenroll(session_id)
         self._drop_unenrolled(session_id)

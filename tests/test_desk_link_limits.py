@@ -18,7 +18,8 @@ from test_desk_link_channels import MacTargetCase, SESSION_M
 from llm_switchboard.desk.link_protocol import MAX_COUNTER, LinkType, RefusedCode
 from llm_switchboard.desk.link_session import LinkSession
 from llm_switchboard.desk.locks import LockStore
-from llm_switchboard.desk.model import MAX_LOCKS, MAX_REGISTRATIONS, Lock
+from llm_switchboard.desk.model import MAX_CANDIDATES, MAX_LOCKS, MAX_REGISTRATIONS, Lock
+from llm_switchboard.session_names import MAX_TITLE_LEN
 from llm_switchboard.desk.operator import OperatorOp, operator_request
 from llm_switchboard.desk.refusals import Refusal
 
@@ -117,11 +118,11 @@ class StatusBoundTest(LinkHubCase, HubCase):
                            self.key('mac').signer.fingerprint, MACHINE))
         enroll_file(self.config, *(numbered_session(i+100) for i in range(64)))
         self.hub = self.start_hub()
-        # Exercise the same response line once B-5 adds candidate records.
-        # A non-BMP character expands to two escapes in the operator's JSON.
+        # The most candidates, each label as long as a frame allows; a
+        # non-BMP character expands to two escapes in the operator's JSON.
         candidate_peer = self.connect()
         for i in range(16):
-            reply = candidate_peer.register(i+1, numbered_session(i+200), label='\U00010000'*80,
+            reply = candidate_peer.register(i+1, numbered_session(i+200), label='\U00010000'*MAX_TITLE_LEN,
                                             cwd='/candidate-folder/' + 'f'*120)
             self.assertEqual(reply['reason'], 'not_enrolled')
         for i in range(MAX_REGISTRATIONS):
@@ -134,5 +135,9 @@ class StatusBoundTest(LinkHubCase, HubCase):
         self.assertEqual(len(status['locks']), MAX_LOCKS)
         self.assertEqual(len(status['registrations']), MAX_REGISTRATIONS)
         self.assertEqual(len(status['admission_refusals']), len(RefusedCode))
+        self.assertEqual(len(status['candidates']), MAX_CANDIDATES)
+        self.assertTrue(all('folder' not in candidate for candidate in status['candidates']))
+        self.assertTrue(all(row['link_key'] == self.key('mac').signer.fingerprint and row['machine'] == MACHINE[:8]
+                            for row in status['locks']))
         self.assertTrue(set(names).issubset({row['host'] for row in status['links']}))
         self.assertLessEqual(len(json.dumps(status, separators=(',', ':')).encode())+1, 64*1024)
