@@ -157,8 +157,10 @@ def admit(sock: socket.socket, *, epoch: str, signers_path, verifier_available: 
 
 class AdmissionRefusals:
     """The unattributed admission refusals: one entry per `link_refused`
-    code, `{code, count, last, versions}`, `versions` only for `version`
-    (the refused relay's list as validated, at most MAX_VERSIONS)."""
+    code, `{code, count, last, versions, hub_versions}`, `versions` only for
+    `version` (the refused relay's list as validated, at most MAX_VERSIONS)
+    and `hub_versions` the versions this hub speaks, which the page's
+    version-mismatch line names beside the relay's."""
 
     def __init__(self, now: Callable[[], float]):
         self._now = now
@@ -167,7 +169,8 @@ class AdmissionRefusals:
 
     def add(self, code: RefusedCode, relay_versions: list[int] | None = None) -> None:
         with self._lock:
-            entry = self._entries.setdefault(code, {"code": code.value, "count": 0, "last": None, "versions": None})
+            entry = self._entries.setdefault(code, {"code": code.value, "count": 0, "last": None, "versions": None,
+                                                    "hub_versions": list(LINK_VERSIONS)})
             entry["count"] += 1
             entry["last"] = self._now()
             if code is RefusedCode.VERSION and relay_versions is not None:

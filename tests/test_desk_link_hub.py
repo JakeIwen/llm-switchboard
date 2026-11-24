@@ -132,7 +132,8 @@ class AdmissionTest(LinkHubCase, HubCase):
         self.assertEqual((kind, fields["reason"], fields["versions"]), (LinkType.LINK_REFUSED, "version", [1]))
         self.assertEqual(self.links()[MAC], {"host": MAC, "state": "up", "since": since, "signer": True})
         entry = self.refusals()["version"]
-        self.assertEqual((entry["count"], entry["versions"]), (1, [2, 3]))
+        # The page's version-mismatch line names both sides' versions.
+        self.assertEqual((entry["count"], entry["versions"], entry["hub_versions"]), (1, [2, 3], [1]))
 
     def test_unattributed_refusals_bounded(self):
         for n in range(12):
