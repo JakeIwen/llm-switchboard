@@ -88,6 +88,7 @@
   var A = root.DeskConversationAnswers || require("./conversation_answers.js");
   var T = root.DeskSoundTracker || require("./sound_tracker.js");
   var F = root.DeskConversationFetches || require("./conversation_fetches.js");
+  var R = root.DeskConversationRecognition || require("./conversation_recognition.js");
   var PHASE = L.PHASE, FX = L.FX, EV = L.EV, TIMER = L.TIMER, SAY = L.SAY;
   var REASON = L.REASON, CUE = L.CUE, LIMITS = L.LIMITS;
 
@@ -110,7 +111,6 @@
     var queue = [];
     var draining = false;
     var seq = 0;
-    var rec = null;          // {id, r}
     var utt = null;          // {id, u, kind, estimate}
     var timers = {};         // TIMER name -> {id, handle}
     var fetches = F.create(nextId, env.AbortController); // FETCH kind -> the one in flight
@@ -127,7 +127,8 @@
     var sound = T.create({ env: env, onChange: notify, onLate: lateSound });
     var cutsAtStart = 0;     // sound.cuts() at the Start tap: more means this conversation cut one off
     var interim = "";
-    var lastFinalAt = -Infinity; // when the conversation's mic last gave a final result
+    var mic = R.create({ env: env, nextId: nextId, dispatch: dispatch,
+      phase: function () { return c.phase; }, quietAt: function () { return sound.quietAt(); } });
 
     function nextId() { return ++seq; }
 
@@ -158,8 +159,8 @@
     function notify() { if (deps.onChange) deps.onChange(view()); }
 
     var RUN = {};
-    RUN[FX.LISTEN] = startRecognizer;
-    RUN[FX.STOP_LISTEN] = stopRecognizer;
+    RUN[FX.LISTEN] = mic.start;
+    RUN[FX.STOP_LISTEN] = mic.stop;
     RUN[FX.SAY] = function (fx) { speak(fx.text, fx.kind); };
     RUN[FX.INTERIM] = function (fx) { interim = fx.text; };
     RUN[FX.TIMER] = function (fx) { setTimer(fx.name, fx.ms); };
@@ -474,60 +475,6 @@
       });
     }
 
-    // ---- recognition ------------------------------------------------------
-
-    function startRecognizer() {
-      // Started only from listening, and never inside the guard: the
-      // reducer promises both; a broken promise fails closed.
-      if (c.phase !== PHASE.LISTENING) return;
-      if (env.now() - sound.quietAt() < LIMITS.GUARD_MS) {
-        return dispatch({ type: EV.END, reason: REASON.REC_FAILED, detail: "guard" });
-      }
-      stopRecognizer();
-      var r;
-      try {
-        r = new env.Recognition();
-      } catch (e) {
-        return dispatch({ type: EV.REC_START_FAILED });
-      }
-      var id = nextId();
-      rec = { id: id, r: r };
-      function mine() { return !!rec && rec.id === id; }
-      r.lang = "en-US";
-      r.continuous = false;
-      r.interimResults = true;
-      r.maxAlternatives = 1;
-      r.onaudiostart = function () { if (mine()) dispatch({ type: EV.REC_AUDIOSTART }); };
-      r.onresult = function (e) {
-        if (!mine()) return;
-        for (var i = e.resultIndex; i < e.results.length; i++) {
-          var result = e.results[i];
-          if (result.isFinal) lastFinalAt = env.now();
-          dispatch({ type: EV.RESULT, text: result[0].transcript, final: !!result.isFinal });
-        }
-      };
-      r.onerror = function (e) { if (mine()) dispatch({ type: EV.REC_ERROR, error: e && e.error }); };
-      r.onend = function () {
-        if (!mine()) return;
-        rec = null;
-        dispatch({ type: EV.REC_END });
-      };
-      try {
-        r.start();
-      } catch (e) {
-        if (!mine()) return;
-        rec = null;
-        dispatch({ type: EV.REC_START_FAILED });
-      }
-    }
-
-    function stopRecognizer() {
-      if (!rec) return;
-      var r = rec.r;
-      rec = null;
-      try { r.abort(); } catch (e) { /* already stopped */ }
-    }
-
     // ---- speech -----------------------------------------------------------
     //
     // `utt` is the conversation utterance's role in the state machine, and
@@ -595,7 +542,7 @@
     // way sound is uncertain again. Otherwise the guard, which the event
     // has moved, is enough.
     function lateSound(entry) {
-      var heard = active() && (!!rec || (!!c.draft && lastFinalAt >= entry.offAt));
+      var heard = active() && (mic.open() || (!!c.draft && mic.lastFinalAt() >= entry.offAt));
       var dictated = !!(deps.lateSound && deps.lateSound());
       if (!heard && !dictated) return;
       sound.markUncertain(entry.estimate);
@@ -626,7 +573,7 @@
       // Every cut ends the conversation, so any cut since the start was on the way here.
       cutSpeech();
       var cut = sound.cuts() !== cutsAtStart;
-      stopRecognizer();
+      mic.stop();
       var held = grant;
       // Even an end the page decided is silent when the grant isn't held
       // and fresh, a sound was cut off, or the page can't be heard or has no
