@@ -239,7 +239,9 @@ def wrong_shape(path: Path):
     return lambda: path.write_bytes(original)
 
 
-@unittest.skipIf(os.geteuid() == 0, "root reads a file whatever its mode")
+ROOT_READS_ANY_MODE = os.geteuid() == 0, "root reads a file whatever its mode"
+
+
 class RoutingReadTest(MacTargetCase):
     """Routing reads both enrollment files now, never content kept from an
     earlier read: a file that fails its read routes nothing it governs, and
@@ -260,6 +262,8 @@ class RoutingReadTest(MacTargetCase):
         for path, session_id in governed:
             for breaker in (unreadable, corrupt_keeping_stat_key):
                 with self.subTest(file=path.name, how=breaker.__name__):
+                    if breaker is unreadable and ROOT_READS_ANY_MODE[0]:
+                        self.skipTest(ROOT_READS_ANY_MODE[1])
                     self.hub.refresh_files()
                     ticket = self.ticket(session_id)
                     restore = breaker(path)
@@ -298,6 +302,7 @@ class RoutingReadTest(MacTargetCase):
         self.assertTrue(self.hub.enrolled_on_two_hosts(SESSION_A))
         self.assertEqual(self.hub.remote_owner(SESSION_M), MAC)
 
+    @unittest.skipIf(*ROOT_READS_ANY_MODE)
     def test_a_failed_read_keeps_the_lock_of_a_prompt_that_may_still_run(self):
         sent = self.send_m()
         self.assertEqual(self.mac.expect(LinkType.EVENT)["request_id"], sent["request_id"])
@@ -347,8 +352,8 @@ class SendsReadTest(MacTargetCase):
         for breaker in (unreadable, corrupt_keeping_stat_key):
             for session_id, confirm in routes:
                 with self.subTest(how=breaker.__name__, session=session_id[:8], confirm=confirm):
-                    if breaker is unreadable and os.geteuid() == 0:
-                        self.skipTest("root reads a file whatever its mode")
+                    if breaker is unreadable and ROOT_READS_ANY_MODE[0]:
+                        self.skipTest(ROOT_READS_ANY_MODE[1])
                     self.hub.refresh_files()
                     self.assertEqual(self.switches(), (True, True, True))
                     body = self.send_body(session_id, confirm)
@@ -411,8 +416,8 @@ class FailedReadLogTest(unittest.TestCase):
         for breaker in (unreadable, corrupt_keeping_stat_key, wrong_shape):
             for path in (self.config.enrolled_file, self.config.remote_enrolled_file, self.config.settings_file):
                 with self.subTest(how=breaker.__name__, file=path.name):
-                    if breaker is unreadable and os.geteuid() == 0:
-                        self.skipTest("root reads a file whatever its mode")
+                    if breaker is unreadable and ROOT_READS_ANY_MODE[0]:
+                        self.skipTest(ROOT_READS_ANY_MODE[1])
                     reads = [read for file, read in self.readers() if file == path]
                     restore = breaker(path)
                     try:
