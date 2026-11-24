@@ -240,9 +240,11 @@ may have typed the key; every other error means nothing was typed.
 
 The page acts on an answer's status line as soon as it arrives: a 401 on
 any protected request drops its token and returns it to pairing at the
-headers. An answer whose body then fails to arrive, or doesn't parse, is
-still the hub's answer, with its status and no body, never "the hub could
-not be reached": a ticket is refused, a send's delivery is unknown unless
+headers. The status line is the hub's answer even when its body then fails
+to arrive or doesn't parse: it is the status with no body, never "the hub
+could not be reached". For a non-200 the gate has already acted on the
+status line; for a 200 the lost body silences the page (see "The gate"
+under Limits). So a ticket is refused, a send's delivery is unknown unless
 the status settles it (a tapped send's 401 is not sent), and a startup
 acknowledgement's 5xx is unknown, since the outcome that may have typed
 the key shares that status.
@@ -751,6 +753,19 @@ may still be speaking; wait until it is quiet.
   prefix can be sent unnoticed.
 - After the send is acknowledged, the request must appear in a snapshot
   within 30 s, and its reply must come within ten minutes.
+- Deadlines are absolute times. Each conversation timer
+  (`conversation_timers.js`) keeps the time it is due, and before an answer,
+  a status line, a lost body, a snapshot or a wake-lock result is used, every
+  timer already due runs first, in due order (`catchUp`). So an answer
+  handled after its call's limit is treated as that limit having passed,
+  whatever order the browser ran the callbacks in: a body that arrives after
+  a deadline that applied late is cut off and counts as lost. This covers
+  the step limit (Start's snapshot, the wake lock, the grant, the ticket),
+  the beat abort, the send deadline, the 30 s wait for the request to appear
+  and the ten-minute reply wait; freshness, the turn limit and the idle limit
+  are absolute too. The recognizer's 5 s `audiostart` watchdog and the
+  speech-end limit are not: each bounds the wait for proof that a browser
+  object is alive, and a late event is that proof.
 - Each start step (the snapshot, the wake lock, the grant) and the ticket
   get 10 s, a beat 4 s (below), and the send POST 20 s, each from when it
   is issued. A hub call keeps its own deadline whatever becomes of it:
@@ -838,8 +853,14 @@ the deadlines cover it. A non-200 to a grant request an earlier
 conversation gave up on proves it granted nothing, so Start stops waiting
 for it.
 
-A 200 is judged by the call that made it, and one that fails that call's
-success check silences the page the same way, whether the call is current
+A 200 whose body is lost in transport (the body read rejects) is reported
+at the same shared boundary: `hub_api.js` calls `onBodyLost`, `app.js`
+passes it to the controller's `bodyLost()`, which silences the page on every
+call the page makes, current or abandoned, before any caller-specific code.
+A body that arrived but is empty or not JSON is not a lost body; it is
+content, judged by the call. A 200 is otherwise judged by the call that
+made it, and one that fails that call's success check silences the page the
+same way, whether the call is current
 or abandoned, and whether a conversation is running or only its closing
 cue plays (the page still beats the grant and reads every poll while the
 cue plays). The one function, `silence` in `conversation.js`, cuts a
@@ -878,7 +899,9 @@ never says "not sent" for what isn't proven. A status on any other call
 is. A 401 to the send proves at its status line that the prompt was not
 sent ("this tablet is no longer paired; not sent: HTTP 401", its body's
 words in place of "HTTP 401" if they arrive), and neither a lost body nor
-the POST's deadline changes that.
+the POST's deadline changes that. A send whose 200 body is lost ends with
+"a hub answer could not be used; delivery is unknown; check the session",
+never "not sent" and never "handed off".
 
 The reason shown is two facts composed: the end's cause, and the outcome
 of a send the end left open. Each is settled once, by its own evidence,
@@ -900,10 +923,10 @@ empty records, a reply of `{}`, a poll body of `{}`) is a hub bug or a
 hostile hub, which could do worse than mislead the page. The page checks a
 200 only for what its calls name as success (above, and the grant id's
 shape, the beat naming its grant, the snapshot checks behind a target
-problem) and validates no further shape. The distinction it rests on: a
-200 whose body was lost in transport did not establish its call's
-success, so it silences the page; the shape of a body that did arrive is
-not second-guessed beyond those checks.
+problem) and validates no further shape. What it trusts is a 200's
+contents: a 200 whose body was lost in transport has no contents, so it
+established nothing about its call and silences the page; the shape of a
+body that did arrive is not second-guessed beyond those checks.
 
 `tests/test_desk_conversation_js.py` drives a
 real hub into each refusal of the ticket, the send, the grant request and
