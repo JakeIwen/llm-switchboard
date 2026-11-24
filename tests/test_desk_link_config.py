@@ -26,6 +26,11 @@ class LinkConfigTest(unittest.TestCase):
         self.assertEqual(self.config.remote_enrolled_file, self.config.config_dir / "enrolled-hosts.json")
         self.assertEqual(self.config.remote_enrolled_file.parent, self.config.enrolled_file.parent)
 
+    def test_relay_logs_live_beside_the_mac_logs(self):
+        logs = Path("/Users/me/Library/Logs/llm-switchboard")
+        self.assertEqual(self.config.relay_log, logs / "desk-relay.log")
+        self.assertEqual(self.config.relay_launch_log, logs / "desk-relay-launchd.log")
+
     def test_entry_points_run_the_checkout_interpreter_isolated(self):
         for argv, script in [(self.config.link_argv, "desk-link"), (self.config.relay_argv, "desk-relay"),
                              (self.config.channel_argv, "desk-channel")]:

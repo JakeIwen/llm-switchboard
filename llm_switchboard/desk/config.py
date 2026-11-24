@@ -160,6 +160,17 @@ class DeskConfig:
         """Mac: held by the relay for its life, so only one runs."""
         return self.runtime_dir / "relay.lock"
 
+    @property
+    def relay_log(self) -> Path:
+        """Mac: the relay's own rotating log (1 MiB x 2), beside v1's Mac logs."""
+        return self.home / "Library" / "Logs" / "llm-switchboard" / "desk-relay.log"
+
+    @property
+    def relay_launch_log(self) -> Path:
+        """Mac: a failed start's traceback. bin/desk-relay derives this path
+        from HOME itself, before it can import this module."""
+        return self.relay_log.with_name("desk-relay-launchd.log")
+
     def _checkout_python(self, script: str) -> tuple[str, ...]:
         return (str(self.repo / ".venv" / "bin" / "python"), "-I", "-B", str(self.repo / "bin" / script))
 
