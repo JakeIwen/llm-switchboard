@@ -169,13 +169,17 @@ Object.assign(ROWS, {
 
 const LONG = ["the idle limit", "the turn limit", "the reply-wait limit"];
 
-// The cells no page can reach, and why: rows (by their start) and the
-// timers they can't be crossed with.
+// The cells this table does not drive, and why: rows (by their start) and
+// the timers they aren't crossed with. Most are cells no page can reach.
+// The poll rows against the long limits are a limit of this fixture, which
+// opens its call before the timer is armed: on a page a poll opened shortly
+// before one of those limits can be answered just after it, and that answer
+// takes the same path through heard() as the other status rows.
 const UNREACHABLE = [
   { rows: /^the poll: /, timers: ["the guard before a new turn's mic", "the reply-wait limit"],
     why: "the open poll is the call that would bring the reply, or show the request the wait needs" },
   { rows: /^(the poll: |an earlier pairing's poll)/, timers: LONG,
-    why: "the page aborts a poll after 35 s" },
+    why: "the fixture's poll is open from before the limit is armed, and the page aborts a poll after 35 s" },
   { rows: /^a startup acknowledgement/, timers: LONG, why: "the page gives up on an acknowledgement first" },
   { rows: /^an earlier conversation's (voice )?send/, timers: LONG, why: "the call's own 20 s limit aborts it first" },
   { rows: /^an abandoned voice ticket's ticket after/, timers: LONG,
