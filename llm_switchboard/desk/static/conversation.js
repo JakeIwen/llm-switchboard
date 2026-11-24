@@ -77,7 +77,7 @@
   "use strict";
 
   var L = root.DeskConversationLogic || require("./conversation_logic.js");
-  var D = root.DeskLogic || require("./desk_logic.js");
+  var A = root.DeskConversationAnswers || require("./conversation_answers.js");
   var T = root.DeskSoundTracker || require("./sound_tracker.js");
   var PHASE = L.PHASE, FX = L.FX, EV = L.EV, TIMER = L.TIMER, SAY = L.SAY;
   var REASON = L.REASON, CUE = L.CUE, LIMITS = L.LIMITS;
@@ -93,29 +93,7 @@
   });
 
   var UNREACHABLE = "the hub could not be reached";
-
-  // A send's outcome from desk_logic.classifySend, as a reducer event.
-  var SEND_EVENT = { handed_off: EV.SEND_OK, answered: EV.SEND_OK, not_sent: EV.SEND_REFUSED };
-
-  function detail(r) {
-    return r && r.data && typeof r.data.error === "string" ? r.data.error : "HTTP " + (r ? r.status : "?");
-  }
-
-  // The hub's refusal in an answer that is not a success: its words, or ""
-  // when it gave none (a 200 the page can't use among them), which the
-  // reducer judges as a refusal it doesn't know.
-  function refusalOf(r) {
-    return r && r.data && typeof r.data.error === "string" ? r.data.error : "";
-  }
-
-  // A send's answer as a reducer event.
-  function sendEvent(r) {
-    var k = D.classifySend(r);
-    var ev = { type: SEND_EVENT[k.outcome] || EV.SEND_UNKNOWN, request_id: k.request_id,
-      state: r.data && r.data.state, reason: detail(r) };
-    if (ev.type !== EV.SEND_OK) ev.refusal = refusalOf(r);
-    return ev;
-  }
+  var detail = A.detail, refusalOf = A.refusalOf, sendEvent = A.sendEvent;
 
   function create(opts) {
     var api = opts.api, env = opts.env, deps = opts.deps;
