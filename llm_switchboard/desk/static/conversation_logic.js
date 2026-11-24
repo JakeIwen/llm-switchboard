@@ -125,8 +125,17 @@
     return null;
   }
 
+  function isRecord(x) { return !!x && typeof x === "object"; }
+
+  // The hub always sends its requests as a list of records. One the page
+  // can't read hides what reached the target, so targetProblem treats it as
+  // no usable target state instead of letting a reader throw on it.
+  function requestsReadable(snap) {
+    return !!snap && Array.isArray(snap.requests) && snap.requests.every(isRecord);
+  }
+
   function requestsFor(snap, id) {
-    return ((snap && snap.requests) || []).filter(function (rq) { return rq.session_id === id; });
+    return requestsReadable(snap) ? snap.requests.filter(function (rq) { return rq.session_id === id; }) : [];
   }
 
   // Ends that hold in every phase: the epoch, the switches and the target
@@ -141,6 +150,7 @@
     if (snap.lock_store_error) return REASON.LOCK_STORE;
     var t = findTarget(snap, dest.session_id);
     if (!t || t.generation !== dest.generation || t.enrolled !== true || !USABLE[t.registration]) return REASON.TARGET;
+    if (!requestsReadable(snap)) return REASON.TARGET;
     return null;
   }
 

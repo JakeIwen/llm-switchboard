@@ -133,6 +133,9 @@ const BAD_SNAPSHOTS = [
   ["the lock store failed", () => snap({ lock_store_error: "lock file full" })],
   ["no targets list", () => ({ version: 999, epoch: "e1", sends_enabled: true, voice_confirm_enabled: true })],
   ["a target entry that is no record", () => snap({ targets: [null] })],
+  ["a request entry that is no record", () => snap({ requests: [null] })],
+  ["a requests list that is no list", () => snap({ requests: 5 })],
+  ["no requests list", () => { const s = snap(); delete s.requests; return s; }],
   ["not a snapshot", () => ({})],
 ];
 
