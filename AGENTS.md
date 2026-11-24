@@ -130,7 +130,7 @@ Sharing the socket would let its supervisor close the real windows.
 | `llm_switchboard/desk/static/desk_hosts.js`, `link_view.js` | The tablet page's Mac link: the words for host badges, the link and unattributed refusal lines, the Mac hint, the host choice and which enrollment route an edit takes (pure, Node-tested in `tests/js/desk_*.test.js`); the link and refusal lines and the host badge (render only) |
 | `llm_switchboard/desk/static/enroll_view.js` | The tablet page's enrollment: the settings list (host badge, enroll or unenroll per host), the typed form's host choice, the Mac sessions asking to join and the Enroll now confirmation every Mac enroll waits for; each edit through `api`, keyed by (host, session_id) |
 | `llm_switchboard/desk/static/page_audio.js` | The tablet page's tap-flow sound: automatic reply speech, Play and one-shot Dictate, tracked by and deferring to the conversation controller |
-| `llm_switchboard/desk/cli.py` | `llm-switchboard desk <command>`: serve, pair, revoke, status, clear, clear-stopped (no offline form), link-authorize, link-revoke and link-fence (their no-hub outcomes under the run lock), sends, voice, enroll and unenroll (`--host` for a Mac session), ack, flags, install-config, relay (Mac, in `desk/relay_cli.py`, which imports the relay only when it runs) (a light command in `__main__`) |
+| `llm_switchboard/desk/cli.py` | `llm-switchboard desk <command>`: serve, pair, revoke, status, clear, clear-stopped (no offline form), link-authorize, link-revoke and link-fence (their no-hub outcomes under the run lock), sends, voice, enroll and unenroll (`--host` for a Mac session), ack, flags (`--lines`: one per line, for `claudep --desk`), install-config, relay and relay-install [--unload] (Mac, in `desk/relay_cli.py`, which imports the relay only when one runs) (a light command in `__main__`) |
 | `llm_switchboard/listen.py` | Where `serve` listens (localhost + Tailscale, bound once Tailscale is up) and which peers it answers |
 | `llm_switchboard/web.py` | FastAPI routes, the root picker and former preview redirects, and the deterministic OpenAPI export; keeps the `App` and `make_app` imports |
 | `llm_switchboard/web_app.py` | HTTP-independent picker operations and the composition of local, Codex and Mac session sources |
@@ -193,6 +193,7 @@ Sharing the socket would let its supervisor close the real windows.
 | `scripts/desk-ca.sh` | Mac operator, one-off (the desk's local CA) | `docs/voice-desk.md` |
 | `scripts/desk-units.sh <repo> <local.env>` | `install.sh` (reconciles the desk hub and adb link units) | `scripts/desk-units.sh` itself; `docs/voice-desk.md` |
 | `llm-switchboard desk ...` | Operator CLI and the hub unit (`desk serve`) | `llm_switchboard/desk/cli.py` |
+| `llm-switchboard desk flags --lines` | `claudep --desk` in the Mac shell config (exactly four lines, put before every other argument) | `llm_switchboard/desk/cli.py` |
 
 The package remains shared by Pi and Mac. Public cross-feature boundaries are
 listed in the ownership map; import records from their pure owner rather than
