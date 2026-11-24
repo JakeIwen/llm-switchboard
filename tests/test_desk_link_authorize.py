@@ -200,6 +200,19 @@ class LinkCommandsTest(CommandsMixin, MacTargetCase):
         self.assert_one_key(MAC)
         self.assertEqual(self.signer_blob(MAC), self.key("mac-rotated").signer.blob)
 
+    def test_offline_signer_check_with_an_error_of_no_text_prints_the_stock_reason(self):
+        # An exception object is always truthy, so the reason must come from
+        # its text; an empty one falls back to the stock wording.
+        with patch.object(link_authorize, "_link_drop", return_value=None), \
+                patch.object(link_authorize, "_offline_signers", side_effect=SignersUnreadable("")):
+            code, out = self.revoke(MAC)
+            self.assertEqual(code, 1, out.text())
+            self.assertIn(f"{UNCONFIRMED} (link-signers unreadable)", out.text())
+            code, out = self.authorize(MAC, pub(self.key("mac-rotated")))
+            self.assertEqual(code, 1, out.text())
+            self.assertIn("not confirmed: link-signers unreadable; the credential edits already made stand",
+                          out.text())
+
     def test_revoke_interrupted_between_files_rerun_completes(self):
         code, out = self.authorize(MAC, pub(self.key("mac")))
         self.assertEqual(code, 0, out.text())

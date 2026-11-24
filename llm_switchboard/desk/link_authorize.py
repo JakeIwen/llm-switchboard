@@ -310,7 +310,7 @@ def _confirm_authorized(config: DeskConfig, signer: Signer, steps: Steps, out) -
         except RunLockHeld:
             return steps.fail(run_lock_refusal(f"link-authorize {host}") + edits_stand)
         except (RunLockUnusable, SignersUnreadable) as exc:
-            return steps.fail(f"not confirmed: {exc or SIGNERS_UNREADABLE}{edits_stand}")
+            return steps.fail(f"not confirmed: {str(exc) or SIGNERS_UNREADABLE}{edits_stand}")
         if listed.get(host) != signer:
             return steps.fail(_not_listed(host))
         steps.done("no hub running: no link to drop")
@@ -390,7 +390,7 @@ def _confirm_revoked(config: DeskConfig, host: str, steps: Steps) -> int:
         except RunLockHeld:
             return steps.fail(run_lock_refusal(f"link-revoke {host}") + edits_stand)
         except (RunLockUnusable, SignersUnreadable) as exc:
-            return steps.fail(f"{UNCONFIRMED} ({exc or SIGNERS_UNREADABLE})")
+            return steps.fail(f"{UNCONFIRMED} ({str(exc) or SIGNERS_UNREADABLE})")
         if host in listed:
             return steps.fail(_overtaken(host, listed[host].fingerprint))
         steps.done("no hub running: no link to drop")
