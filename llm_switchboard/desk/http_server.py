@@ -30,12 +30,15 @@ from .model import (
 )
 from .page_build import PageFiles
 from .refusals import Refusal
+from .shallow_json import loads_shallow
 
 log = logging.getLogger("llm_switchboard.desk")
 
 DESK_DIR = Path(__file__).resolve().parent
 STATIC_DIR = DESK_DIR / "static"
 BIND_HOST = "127.0.0.1"
+# Request bodies are flat objects.
+MAX_BODY_DEPTH = 4
 
 _HTML = "text/html; charset=utf-8"
 _JS = "text/javascript; charset=utf-8"
@@ -288,8 +291,8 @@ class _DeskHandler(BaseHTTPRequestHandler):
         if len(raw) != length:
             raise DeskError(400, Refusal.TRUNCATED_BODY)
         try:
-            body = json.loads(raw)
-        except (ValueError, RecursionError):
+            body = loads_shallow(raw, MAX_BODY_DEPTH)
+        except ValueError:
             raise DeskError(400, Refusal.BAD_JSON) from None
         if not isinstance(body, dict):
             raise DeskError(400, Refusal.BAD_JSON)

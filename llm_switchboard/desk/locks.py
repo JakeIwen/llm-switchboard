@@ -22,10 +22,13 @@ from .model import (
     CHANNEL_START_PATTERN, KNOWN_HOSTS, LOCK_ID_PATTERN, MAX_LOCK_FILE_BYTES, MAX_LOCKS, MAX_PID, SHA256_HEX_PATTERN,
     Lock, LockStoreError, is_request_id,
 )
+from .shallow_json import loads_shallow
 
 __all__ = ["LockStore", "LockStoreError"]
 
 FILE_VERSION = 1
+# {version, locks: [{...}]} nests three deep.
+MAX_LOCK_FILE_DEPTH = 4
 _STRING_FIELDS = ("lock_id", "host", "session_id", "request_id", "ticket_hash", "channel_start")
 
 
@@ -129,8 +132,8 @@ def _fsync_dir(directory: Path) -> None:
 
 def _parse(raw: bytes, max_locks: int) -> list[Lock]:
     try:
-        data = json.loads(raw)
-    except (ValueError, RecursionError) as exc:
+        data = loads_shallow(raw, MAX_LOCK_FILE_DEPTH)
+    except ValueError as exc:
         raise ValueError("not JSON") from exc
     if not isinstance(data, dict) or data.get("version") != FILE_VERSION or not isinstance(data.get("locks"), list):
         raise ValueError("wrong shape")

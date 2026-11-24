@@ -13,12 +13,13 @@ from the state long-poll.
 from collections import OrderedDict
 import contextlib
 from dataclasses import dataclass
-import json
 from pathlib import Path
 
 from ..transcripts import one_line, prompt_text
 from .config import DeskConfig
 from .model import LABEL_HEAD_BYTES, LABEL_TAIL_BYTES, MAX_LABEL_CACHE
+from .peer import MAX_SESSION_FILE_DEPTH
+from .shallow_json import loads_shallow
 
 # The same compact-JSON byte markers transcripts.summarize uses, so a line is
 # parsed only when it can matter.
@@ -29,6 +30,9 @@ _AI_TITLE = b'"type":"ai-title"'
 _SUMMARY = b'"type":"summary"'
 # Claude Code's session files are a few hundred bytes.
 _MAX_SESSION_FILE_BYTES = 64 * 1024
+# A transcript record nests a few levels (message, content, a tool's input);
+# a deeper line is skipped like any line this reader can't use.
+MAX_TRANSCRIPT_RECORD_DEPTH = 64
 
 
 def encodable(value: str) -> str:
@@ -39,8 +43,8 @@ def encodable(value: str) -> str:
 
 
 def _record(line: bytes) -> dict:
-    with contextlib.suppress(ValueError, RecursionError):
-        value = json.loads(line)
+    with contextlib.suppress(ValueError):
+        value = loads_shallow(line, MAX_TRANSCRIPT_RECORD_DEPTH)
         if isinstance(value, dict):
             return value
     return {}
@@ -140,7 +144,7 @@ class SessionLabels:
         return max(candidates)[1] if candidates else None
 
     def _session_cwd(self, claude_pid: int) -> str:
-        with contextlib.suppress(OSError, ValueError, RecursionError, TypeError, AttributeError):
+        with contextlib.suppress(OSError, ValueError, TypeError, AttributeError):
             with open(self.sessions_dir / f"{int(claude_pid)}.json", "rb") as f:
-                return str(json.loads(f.read(_MAX_SESSION_FILE_BYTES)).get("cwd") or "")
+                return str(loads_shallow(f.read(_MAX_SESSION_FILE_BYTES), MAX_SESSION_FILE_DEPTH).get("cwd") or "")
         return ""

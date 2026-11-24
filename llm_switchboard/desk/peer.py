@@ -12,7 +12,6 @@ Standard library only.
 """
 
 from dataclasses import dataclass
-import json
 import os
 from pathlib import Path
 import socket
@@ -23,9 +22,13 @@ from typing import Callable
 from .bounded_read import read_bounded
 from .config import DeskConfig
 from .model import CHANNEL_START_PATTERN, ChannelProcess
+from .shallow_json import loads_shallow
 
 # Claude's session files are a few hundred bytes.
 MAX_SESSION_FILE_BYTES = 64 * 1024
+# Claude's session file is a flat object; the slack keeps a nested field a
+# later Claude Code adds readable, and deeper content reads as no entry.
+MAX_SESSION_FILE_DEPTH = 16
 
 
 @dataclass(frozen=True)
@@ -154,8 +157,8 @@ def read_session_file(sessions_dir: Path, pid: int) -> dict | None:
     stdout lock, so the read must never block or grow with the file."""
     try:
         data = read_bounded(Path(sessions_dir) / f"{pid}.json", MAX_SESSION_FILE_BYTES)
-        entry = json.loads(data) if data is not None else None
-    except (OSError, ValueError, RecursionError):
+        entry = loads_shallow(data, MAX_SESSION_FILE_DEPTH) if data is not None else None
+    except (OSError, ValueError):
         return None
     return entry if isinstance(entry, dict) else None
 

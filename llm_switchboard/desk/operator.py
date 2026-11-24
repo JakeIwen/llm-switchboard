@@ -26,10 +26,14 @@ from typing import Callable
 from .enrollment import ensure_private_dir
 from .model import MAX_OPERATOR_CONNECTIONS, MAX_OPERATOR_LINE_BYTES
 from .protocol import FrameError, read_line
+from .shallow_json import loads_shallow
 
 log = logging.getLogger("llm_switchboard.desk")
 
 OPERATOR_TIMEOUT_SECONDS = 10
+# Requests are flat objects; an answer (the status snapshot) nests a few levels.
+MAX_OPERATOR_REQUEST_DEPTH = 4
+MAX_OPERATOR_RESPONSE_DEPTH = 16
 _ACCEPT_POLL_SECONDS = 0.5
 
 
@@ -171,10 +175,10 @@ class OperatorServer:
                     line = stream.readline(MAX_OPERATOR_LINE_BYTES + 1)
                 if len(line) > MAX_OPERATOR_LINE_BYTES:
                     raise FrameError("line too long")
-                message = json.loads(line)
+                message = loads_shallow(line, MAX_OPERATOR_REQUEST_DEPTH)
                 if not isinstance(message, dict):
                     raise ValueError("not an object")
-            except (OSError, FrameError, ValueError, RecursionError):
+            except (OSError, FrameError, ValueError):
                 _send(conn, {"ok": False, "error": "bad request"})
                 return
             try:
@@ -214,8 +218,8 @@ def operator_request(path: Path, op: OperatorOp, timeout: float = OPERATOR_TIMEO
     finally:
         client.close()
     try:
-        response = json.loads(line) if line else None
-    except (ValueError, RecursionError):
+        response = loads_shallow(line, MAX_OPERATOR_RESPONSE_DEPTH) if line else None
+    except ValueError:
         response = None
     # Only an answer saying whether it was applied acknowledges the request.
     if not isinstance(response, dict) or not isinstance(response.get("ok"), bool):

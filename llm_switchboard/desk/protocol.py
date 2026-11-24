@@ -22,8 +22,12 @@ Conversation, in order:
 from enum import Enum
 import json
 
+from .shallow_json import loads_shallow
+
 PROTOCOL_VERSION = 1
 MAX_LINE_BYTES = 64 * 1024
+# Frames are flat objects; one level of slack for a field holding a list.
+MAX_FRAME_DEPTH = 2
 HEARTBEAT_SECONDS = 15
 # No traffic for this long and either side drops the connection.
 IDLE_TIMEOUT_SECONDS = 45
@@ -63,8 +67,8 @@ def decode(line: bytes) -> tuple[MessageType, dict]:
     if len(line) > MAX_LINE_BYTES:
         raise FrameError("line too long")
     try:
-        message = json.loads(line)
-    except (ValueError, RecursionError) as exc:
+        message = loads_shallow(line, MAX_FRAME_DEPTH)
+    except ValueError as exc:
         raise FrameError("not JSON") from exc
     if not isinstance(message, dict) or message.get("v") != PROTOCOL_VERSION:
         raise FrameError("wrong version or shape")

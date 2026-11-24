@@ -22,6 +22,7 @@ from . import protocol
 from .config import DeskConfig
 from .peer import read_session_file
 from .protocol import MessageType
+from .shallow_json import loads_shallow
 
 VERSION = "0.1.0"
 FALLBACK_PROTOCOL_VERSION = "2025-06-18"
@@ -34,6 +35,9 @@ WELCOME_WAIT_SECONDS = 5
 POLL_SECONDS = 0.5
 # Concurrent tools/call handlers (each can wait REPLY_WAIT_SECONDS); more are refused.
 MAX_CONCURRENT_CALLS = 8
+# Claude's JSON-RPC messages (initialize's capabilities, a tool call's
+# arguments) nest a few levels; anything far deeper is not a request we answer.
+MAX_MCP_DEPTH = 64
 JSONRPC_BUSY = -32000
 # Cap on one MCP request line from Claude. Larger than the hub protocol's line cap
 # because a valid reply (32 KiB text) is JSON-escaped up to 6x on the way in, so
@@ -370,8 +374,8 @@ class McpServer:
 
     def handle_line(self, line: bytes) -> None:
         try:
-            message = json.loads(line)
-        except (ValueError, RecursionError):
+            message = loads_shallow(line, MAX_MCP_DEPTH)
+        except ValueError:
             return
         if not isinstance(message, dict) or not isinstance(message.get("method"), str):
             return

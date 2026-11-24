@@ -45,8 +45,12 @@ from ..json_file import JsonFile
 from ..session_id import is_session_id
 from .bounded_read import read_bounded
 from .model import MAX_DESK_FILE_BYTES, MAX_ENROLLED, DeskError
+from .shallow_json import loads_shallow
 
 log = logging.getLogger("llm_switchboard.desk")
+
+# {version, sessions: {id: {since}}} nests three deep; a per-host file adds one.
+MAX_DESK_FILE_DEPTH = 4
 
 
 def ensure_private_dir(path: Path) -> None:
@@ -149,7 +153,7 @@ class _CachedJson:
 
     def _read_json(self):
         raw = read_bounded(self.file.path, MAX_DESK_FILE_BYTES)
-        return {} if raw is None else json.loads(raw)
+        return {} if raw is None else loads_shallow(raw, MAX_DESK_FILE_DEPTH)
 
     def _load_for_edit(self) -> dict:
         try:
