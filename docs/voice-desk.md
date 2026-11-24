@@ -45,7 +45,7 @@ conversation mode has not been qualified for driving.
 | `launcher.py`, `supervisor.py` | runtime | Start a kept Pi session through `claudepd`, adding desk flags only if enrolled at launch |
 | `screen.py`, `supervisor_state.py` | rules | Identify the complete development-channel dialog and its selected option, and report `startup_blocked` without restarting the session |
 | `tmux.py` | adapter | `Tmux.panes()` (pane id, pid, copy mode, by `@car_session`; raises when tmux fails rather than reading as no panes), `capture(..., check=True)`, and `send_enter_if(pane_id, PaneGuard)`, the server-side guarded Enter the acknowledgement uses |
-| `desk/static/` | page | The tablet page: plain HTML/CSS/JS, no build step, Chrome 119. Scripts, in load order: `text_rule.js` (the text rule's mirror), `desk_logic.js` (the tap flow's pure decisions), `conversation_vocabulary.js` (conversation mode's vocabulary, declared once: phases, commands, cues, end reasons, limits, Start's blockers), `conversation_logic.js` (conversation mode's pure reducer, which re-exports that vocabulary, and `startBlocker`), `sound_tracker.js` (the page's own sound: every utterance it submitted until its end, error or the page's cancel, the guard's start, uncertain periods and the overdue watchdog), `conversation_answers.js` (what the hub's answers to a conversation's calls establish, for the controller), `conversation_timers.js` (the conversation's timers and its fetches' deadlines, each kept as the time it is due, so an answer is used only after every limit already due has applied), `conversation_fetches.js` (the controller's fetches in flight, one of each kind, which answer is still current, and the two answers an end still listens for), `conversation_recognition.js` (the conversation's speech recognizer, one at a time, its callbacks honored only while it is current), `conversation.js` (the conversation controller: every mic, sound and send effect, no DOM; `app.js` gives it every status line the hub sends, on any call, as it arrives (its `hubStatus()`, the gate), and every snapshot the page receives (its `snapshot(state, from)`, whichever call brought it)), `conversation_view.js` (the Start control and the overlay; renders only), `page_audio.js` (the tap flow's own sound: reply speech, Play and one-shot Dictate, deferring to the controller), `startup.js` (the startup-blocked view), `hub_api.js` (the page's one way to the hub: `app.js`'s `api`, through which every call goes), `app.js` (wiring and the tap flow). Node tests in `tests/js/` |
+| `desk/static/` | page | The tablet page: plain HTML/CSS/JS, no build step, Chrome 119. Scripts, in load order: `text_rule.js` (the text rule's mirror), `desk_logic.js` (the tap flow's pure decisions), `conversation_vocabulary.js` (conversation mode's vocabulary, declared once: phases, commands, cues, end reasons, limits, Start's blockers), `conversation_logic.js` (conversation mode's pure reducer, which re-exports that vocabulary, and `startBlocker`), `sound_tracker.js` (the page's own sound: every utterance it submitted until its end, error or the page's cancel, the guard's start, uncertain periods and the overdue watchdog), `conversation_answers.js` (what the hub's answers to a conversation's calls establish, for the controller), `conversation_timers.js` (the conversation's timers and its fetches' deadlines, each kept as the time it is due, and `heard()`, the one order every event from outside them is applied in: one that silences the page before any overdue timer, any other only after every limit already due has applied), `conversation_fetches.js` (the kinds of fetch a conversation can have and each one's own limit, the fetches in flight, one of each kind, which answer is still current, and the two answers an end still listens for), `conversation_recognition.js` (the conversation's speech recognizer, one at a time, its callbacks honored only while it is current), `conversation.js` (the conversation controller: every mic, sound and send effect, no DOM; `app.js` gives it every status line the hub sends, on any call, as it arrives (its `hubStatus()`, the gate), and every snapshot the page receives (its `snapshot(state, from)`, whichever call brought it)), `conversation_view.js` (the Start control and the overlay; renders only), `page_audio.js` (the tap flow's own sound: reply speech, Play and one-shot Dictate, deferring to the controller), `startup.js` (the startup-blocked view), `hub_api.js` (the page's one way to the hub: `app.js`'s `api`, through which every call goes), `app.js` (wiring and the tap flow). Node tests in `tests/js/` |
 | `bin/desk-channel` | entry | Pinned channel server entry (`.venv/bin/python -I -B bin/desk-channel`) |
 | `bin/desk-adb-link` | entry | The USB reverse-forward loop for one tablet serial |
 | `systemd/llm-switchboard-desk.service`, `systemd/llm-switchboard-desk-adb.service` | unit | Hub and adb link user units (templated by `install.sh`) |
@@ -754,12 +754,30 @@ may still be speaking; wait until it is quiet.
 - After the send is acknowledged, the request must appear in a snapshot
   within 30 s, and its reply must come within ten minutes.
 - Deadlines are absolute times. Each conversation timer
-  (`conversation_timers.js`) keeps the time it is due, and before an answer,
-  a status line, a lost body, a snapshot or a wake-lock result is used, every
-  timer already due runs first, in due order (`catchUp`). So an answer
-  handled after its call's limit is treated as that limit having passed,
-  whatever order the browser ran the callbacks in: a body that arrives after
-  a deadline that applied late is cut off and counts as lost. This covers
+  (`conversation_timers.js`) keeps the time it is due, and every event from
+  outside the timers (a status line, a body, a lost body, no answer at all,
+  a snapshot, a wake-lock result) enters the controller through one
+  function, `heard(silences, apply)`, in one of two orders. An event that
+  silences the page (a status other than 200, a lost body, a snapshot that
+  is missing or shows a target problem, an answer that fails its call's own
+  success check or came after its call's own limit, no answer, a failed
+  wake lock) is applied first, with no overdue timer run before it: some
+  overdue timers start things (the guard opens the mic, the idle, turn and
+  reply-wait limits and the start watchdog speak a closing cue), and the
+  end clears them all, so once the page knows it must go silent none of
+  them can open the mic, start a recognizer or speak on the way. Any other
+  event (a success, a usable snapshot, a granted wake lock) is applied only
+  after every timer already due has run, in due order (`catchUp`, reached
+  only through `heard`), so a limit that has passed wins over a late
+  success. Whether an answer came after its call's own limit is decided
+  from the clock: that call's own limits, its fetch deadline and the
+  controller timer bounding the same step (the step limit, or the beat's
+  abort), apply then, at its status line or its body, and no other overdue
+  timer does (`lapse`). So an answer handled after its call's limit is
+  treated as that limit having passed, whatever order the browser ran the
+  callbacks in: a body that arrives after a deadline that applied late is
+  cut off and counts as lost. A 200's status line establishes nothing and
+  runs no timer; its body is what is used. This covers
   the step limit (Start's snapshot, the wake lock, the grant, the ticket),
   the beat abort, the send deadline, the 30 s wait for the request to appear
   and the ten-minute reply wait; freshness, the turn limit and the idle limit
@@ -847,7 +865,12 @@ status cuts a closing cue that is playing (sound uncertain) and releases
 its grant, with nothing spoken in its place, and ends a running
 conversation, in any phase, silently and at once: the recognizer stopped,
 no cue, the grant released. So a hub hiccup on any call ends the
-conversation, and Start is tapped again. A response that never came (a
+conversation, and Start is tapped again. The status is applied before any
+timer already overdue (`heard`, under Limits), so an overdue guard, idle
+or turn limit never opens the mic or speaks first, and an overdue
+freshness check never replaces the status shown, or what the call's body
+then says, with "the hub stopped answering"; only that call's own limit,
+when it had passed before the status line, applies first. A response that never came (a
 network error, an abort before the headers) is no answer: freshness and
 the deadlines cover it. A non-200 to a grant request an earlier
 conversation gave up on proves it granted nothing, so Start stops waiting
@@ -860,7 +883,7 @@ call the page makes, current or abandoned, before any caller-specific code.
 A body that arrived but is empty or not JSON is not a lost body; it is
 content, judged by the call. A 200 is otherwise judged by the call that
 made it, and one that fails that call's success check silences the page the
-same way, whether the call is current
+same way, before any overdue timer (`heard`), whether the call is current
 or abandoned, and whether a conversation is running or only its closing
 cue plays (the page still beats the grant and reads every poll while the
 cue plays). The one function, `silence` in `conversation.js`, cuts a
