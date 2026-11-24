@@ -136,7 +136,12 @@ class FailedReads:
         with self._lock:
             if self._failing.pop(key, None) is None:
                 return
-        log.info("desk: %s reads again", path.name)
+        # A removed file also reads cleanly (as empty); say which it is, since
+        # a gone file means the defaults apply and sends stay off.
+        if path.exists():
+            log.info("desk: %s reads again", path.name)
+        else:
+            log.info("desk: %s is gone; defaults apply", path.name)
 
 
 # One per process, not per reader: the supervisor builds a reader per launch.

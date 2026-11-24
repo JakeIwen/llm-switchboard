@@ -448,6 +448,19 @@ class FailedReadLogTest(unittest.TestCase):
                     self.logged(reads)
 
 
+    def test_a_broken_file_that_is_removed_logs_that_it_is_gone_not_that_it_reads_again(self):
+        path = self.config.settings_file
+        read = lambda: DeskSettings(path).sends_enabled()
+        restore = corrupt_keeping_stat_key(path)
+        try:
+            self.logged([read])
+        finally:
+            restore()
+        path.unlink()
+        self.assertEqual(self.logged([read] * 5),
+                         [f"INFO desk: {path.name} is gone; defaults apply"])
+
+
 class HubFailedReadLogTest(MacTargetCase):
     def test_the_hub_s_rereads_of_a_file_that_stays_broken_log_once(self):
         for path in (self.config.enrolled_file, self.config.remote_enrolled_file, self.config.settings_file):
