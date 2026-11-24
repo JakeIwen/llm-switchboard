@@ -765,7 +765,17 @@ may still be speaking; wait until it is quiet.
   overdue timers start things (the guard opens the mic, the idle, turn and
   reply-wait limits and the start watchdog speak a closing cue), and the
   end clears them all, so once the page knows it must go silent none of
-  them can open the mic, start a recognizer or speak on the way. Any other
+  them can open the mic, start a recognizer or speak on the way. Applied
+  first is about order, not outcome: a beat that gets no answer at all
+  runs no overdue timer but ends nothing by itself, and is left to the
+  freshness deadline like every unanswered beat. And a snapshot silences in
+  this sense only when it is missing or shows a target problem: one whose
+  requests end the conversation for another reason (foreign activity, a
+  busy target, a request gone) is applied after the timers already due, so
+  a guard already due opens the mic for the instant before that snapshot
+  ends the conversation, and an idle or turn limit already due ends it
+  first with its own spoken cue, the order the timers would have given had
+  they run on time. Any other
   event (a success, a usable snapshot, a granted wake lock) is applied only
   after every timer already due has run, in due order (`catchUp`, reached
   only through `heard`), so a limit that has passed wins over a late
