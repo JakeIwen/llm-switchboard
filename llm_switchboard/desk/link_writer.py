@@ -23,7 +23,8 @@ shuts the target down before it sets the outcome, so no later byte can
 complete the frame, then stops: every queued frame becomes NOT_BEGUN and
 `on_failure` is told once. `retire()` from another thread shuts the target
 down and wakes the writer; only the writer thread closes the target's
-descriptor. Standard library only.
+descriptor. Once a frame's outcome is set, neither the frame nor the writer
+keeps its bytes. Standard library only.
 """
 
 from collections import deque
@@ -57,11 +58,15 @@ class SubmitRefusal(StrEnum):
 
 class Frame:
     """One frame and its outcome cell. `outcome` is None until set; after
-    that it never changes."""
+    that it never changes. `data` is emptied when the outcome is set: a
+    caller may keep the frame for its outcome long after (the relay keeps a
+    channel's events), and the bytes, a prompt among them, are no longer
+    needed by anyone."""
 
     def __init__(self, writer: "LinkWriter", data: bytes, deadline: float):
         self._writer = writer
         self.data = data
+        self.size = len(data)
         self.deadline = deadline
         self.begun = False
         self.outcome: WriteOutcome | None = None
@@ -193,15 +198,16 @@ class LinkWriter:
             if self._retired:
                 frame.refusal = SubmitRefusal.RETIRED
             elif self._open_frames >= self._max_frames or (
-                    self._max_bytes is not None and self._open_bytes + len(frame.data) > self._max_bytes):
+                    self._max_bytes is not None and self._open_bytes + frame.size > self._max_bytes):
                 frame.refusal = SubmitRefusal.FULL
             if frame.refusal is not None:
                 frame.outcome = WriteOutcome.NOT_BEGUN
+                frame.data = b""
                 frame._done.set()
                 return frame
             self._queue.append(frame)
             self._open_frames += 1
-            self._open_bytes += len(frame.data)
+            self._open_bytes += frame.size
             self._changed.notify_all()
         return frame
 
@@ -228,10 +234,12 @@ class LinkWriter:
         stop: WriterStop | None = None
         try:
             while True:
-                frame, stop = self._next_frame()
+                frame, data, stop = self._next_frame()
                 if frame is None:
                     break
-                if self._write(frame) is not WriteOutcome.WRITTEN:
+                outcome = self._write(frame, data)
+                data = b""  # hold no frame's bytes while waiting for the next
+                if outcome is not WriteOutcome.WRITTEN:
                     # A retirement asked for elsewhere is its caller's to report.
                     if not self.retired:
                         stop = WriterStop.DEADLINE if self._clock() >= frame.deadline else WriterStop.WRITE_FAILED
@@ -250,11 +258,15 @@ class LinkWriter:
         if stop is not None and self._on_failure is not None:
             self._on_failure(stop)
 
-    def _next_frame(self) -> tuple[Frame | None, WriterStop | None]:
+    def _next_frame(self) -> tuple[Frame | None, bytes, WriterStop | None]:
+        """The next frame to write, marked begun, with its bytes taken under
+        the lock: a waiter's guard may set its outcome (and empty `data`)
+        while it is being written, and the writer still decides from what
+        it wrote of the whole frame."""
         with self._lock:
             while True:
                 if self._retired:
-                    return None, None
+                    return None, b"", None
                 if not self._queue:
                     self._changed.wait()
                     continue
@@ -263,12 +275,12 @@ class LinkWriter:
                     continue  # a guard gave up on it: never begin it
                 if self._clock() >= frame.deadline:
                     self._settle_locked(frame, WriteOutcome.NOT_BEGUN)
-                    return None, WriterStop.DEADLINE
+                    return None, b"", WriterStop.DEADLINE
                 frame.begun = True
-                return frame, None
+                return frame, frame.data, None
 
-    def _write(self, frame: Frame) -> WriteOutcome:
-        view = memoryview(frame.data)
+    def _write(self, frame: Frame, data: bytes) -> WriteOutcome:
+        view = memoryview(data)
         while frame.accepted < len(view):
             if self.retired or self._clock() >= frame.deadline:
                 break
@@ -305,7 +317,8 @@ class LinkWriter:
             raise AssertionError("a frame marked begun is never not_begun")
         frame.outcome = outcome
         self._open_frames -= 1
-        self._open_bytes -= len(frame.data)
+        self._open_bytes -= frame.size
+        frame.data = b""
         frame._done.set()
 
     def _abandon_queue(self) -> None:

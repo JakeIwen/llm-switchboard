@@ -137,7 +137,8 @@ class _Channel:
         self.answered = threading.Event()
         self.refusal: str | None = None
         self.writer: LinkWriter | None = None
-        # Events queued to the writer, in order, for the report at close.
+        # Events queued to the writer, in order, for the report at close;
+        # decided ones are dropped as the next is queued (`_unresolved`).
         self.events: list[tuple[str, Frame]] = []
         self.recent: deque[str] = deque(maxlen=RELAY_REMEMBERED_REQUESTS)
         self.replies: set[str] = set()
@@ -161,6 +162,18 @@ def _clean_cwd(value) -> str:
             or any(c in _CONTROL for c in value)):
         return ""
     return value
+
+
+def _unresolved(events: list[tuple[str, Frame]]) -> list[tuple[str, Frame]]:
+    """The events whose evidence the close may still have to report: those
+    without an outcome yet, and `not_begun` ones (a writer that stopped
+    while another event was being queued). A `written` or `unfinished`
+    event needs nothing more from the relay. What is left is bounded by
+    the channel's queue (`CHANNEL_QUEUE_FRAMES`) plus one: the open frames,
+    and the queued frame a writer may have found past its deadline just
+    before it stopped (after that it accepts none)."""
+    return [(request_id, frame) for request_id, frame in events
+            if frame.outcome is None or frame.outcome is WriteOutcome.NOT_BEGUN]
 
 
 def _utf8(*values: str) -> bool:
@@ -537,7 +550,7 @@ class RelayChannels:
             ch.recent.append(request_id)
             frame = ch.writer.submit(data)
             if frame.refusal is None:
-                ch.events.append((request_id, frame))
+                ch.events = [*_unresolved(ch.events), (request_id, frame)]
                 ch.last_sent = self._clock()
         if frame.refusal is SubmitRefusal.FULL:
             self._undeliverable(uplink, chan, request_id, UndeliverableCode.CHANNEL_BUSY)

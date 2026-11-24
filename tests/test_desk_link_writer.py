@@ -199,6 +199,35 @@ class OutcomeTest(WriterCase):
         late = writer.submit(FRAME)
         self.assertEqual((late.outcome, late.refusal), (WriteOutcome.NOT_BEGUN, SubmitRefusal.RETIRED))
 
+    def test_decided_frame_keeps_no_payload(self):
+        # A caller may keep a frame for its outcome (the relay keeps a
+        # channel's events until the close); the bytes go once the outcome
+        # is set, however it was set, and the outcome and counts stay.
+        written_writer = self.writer(ScriptedTarget([]))
+        written = written_writer.submit(FRAME)
+        self.assertIs(written.wait(ALLOWANCE), WriteOutcome.WRITTEN)
+        self.assertEqual((written.data, written.accepted), (b"", len(FRAME)))
+        release = threading.Event()
+
+        def hold(view):
+            release.wait(ALLOWANCE)
+            raise BrokenPipeError("retired")
+        writer = self.writer(ScriptedTarget([hold]), max_frames=3)
+        begun = writer.submit(FRAME)
+        queued = writer.submit(FRAME)
+        guarded = writer.submit(FRAME)
+        full = writer.submit(FRAME)
+        _wait_for(lambda: begun.begun)
+        self.assertIs(guarded.wait(0.01), WriteOutcome.UNFINISHED)  # a waiter's guard
+        writer.retire()
+        release.set()
+        late = writer.submit(FRAME)
+        self.assertEqual([(f.wait(ALLOWANCE), f.refusal) for f in (begun, queued, full, late)],
+                         [(WriteOutcome.UNFINISHED, None), (WriteOutcome.NOT_BEGUN, None),
+                          (WriteOutcome.NOT_BEGUN, SubmitRefusal.FULL),
+                          (WriteOutcome.NOT_BEGUN, SubmitRefusal.RETIRED)])
+        self.assertEqual([f.data for f in (begun, queued, guarded, full, late)], [b""] * 5)
+
     def test_queued_frame_past_its_deadline_is_not_begun_and_stops_the_writer(self):
         clock = FakeClock()
         release = threading.Event()

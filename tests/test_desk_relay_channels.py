@@ -2,6 +2,7 @@
 behind peer_mac's reader, a fake hub end (`FakeUplink`), raw channel
 clients and the real `channel.HubLink`."""
 
+import gc
 import io
 import os
 import socket
@@ -16,9 +17,10 @@ from relay_fixture import EPOCH, FakeUplink, LinkFrameError, MacHome
 from llm_switchboard.desk import channel, protocol
 from llm_switchboard.desk.channel import HubLink, StdoutWriter, UndeliverableReason
 from llm_switchboard.desk.link_protocol import (
-    HEARTBEAT_SECONDS, IDLE_TIMEOUT_SECONDS, LINK_CODES, LinkType, UndeliverableCode, UnregisteredCode,
+    CHANNEL_QUEUE_FRAMES, HEARTBEAT_SECONDS, IDLE_TIMEOUT_SECONDS, LINK_CODES, LinkType, UndeliverableCode,
+    UnregisteredCode,
 )
-from llm_switchboard.desk.link_writer import SocketTarget
+from llm_switchboard.desk.link_writer import Frame, SocketTarget
 from llm_switchboard.desk.model import ReplyRefusal
 from llm_switchboard.desk.operator import bind_private_socket
 from llm_switchboard.desk.protocol import MessageType
@@ -299,6 +301,12 @@ class AdmissionTest(RelayCase):
         self.assertEqual(held.released, list(reversed(range(count))))
 
 
+def _live_frames() -> list[Frame]:
+    """Every writer frame still reachable in this process."""
+    gc.collect()
+    return [o for o in gc.get_objects() if isinstance(o, Frame)]
+
+
 class ReverseRelease:
     """Wraps `read_session_file`: holds its first `count` callers until all
     have arrived, then lets them return last-first, each once `registered()`
@@ -510,6 +518,34 @@ class WriterOutcomeTest(RelayCase):
                 self.assertEqual(self.undeliverable_ids(), {queued: "channel_not_written"})
                 self.assertNotIn(begun, self.undeliverable_ids())
                 self.assert_reports_before_unregistered()
+
+    def test_long_lived_channel_keeps_no_completed_event(self):
+        # A channel can live for days: an event written to it is decided and
+        # needs nothing more from the relay, so its prompt is not kept, and
+        # what the channel remembers stays within its queue. The evidence an
+        # unresolved event needs is still there at the close.
+        marker = "retained-prompt-marker"
+        clock = FakeClock()
+        self.start_relay(clock=clock, idle_seconds=3, write_deadline_seconds=60)
+        client = self.welcomed()
+        before = len(_live_frames())
+        for n in range(1, 33):
+            rid = self.event(n, f"prompt {n} {marker}")
+            self.assertEqual(client.read()[0], MessageType.EVENT)
+            client.send(MessageType.DELIVERED, request_id=rid)
+        self.uplink.wait_for(LinkType.DELIVERED, lambda f: f["request_id"] == request_id(32))
+        wait_until(lambda: not [f for f in _live_frames() if marker.encode() in f.data], GENEROUS)
+        self.assertLessEqual(len(_live_frames()) - before, CHANNEL_QUEUE_FRAMES)
+        target = self.targets[0]
+        target.budget = 0
+        attempts = target.attempts
+        begun = self.event(33, "x" * 2000)
+        wait_until(lambda: target.attempts > attempts)  # the event's frame is begun
+        queued = self.event(34)
+        clock.advance(3)
+        self.assertEqual(self.unregistered()["reason"], "channel_idle")
+        self.assertEqual(self.undeliverable_ids(), {queued: "channel_not_written"})
+        self.assertNotIn(begun, self.undeliverable_ids())
 
     def test_full_channel_queue_busy(self):
         clock = FakeClock()
