@@ -862,7 +862,9 @@ conversation started since never sees it. An answer that settles nothing
   build is refused (403 `page out of date; reload it`), so a tab loaded
   before an install can't pair. A grant is given only to a token that is the
   only valid token (409 `another page is paired; revoke its token first`);
-  closing a tab doesn't revoke its token. While a grant is live, pairing
+  expired tokens are deleted before that count, so a wall-clock step back
+  can't make one valid again during the grant. Closing a tab doesn't revoke
+  its token. While a grant is live, pairing
   claims are refused (409 `a conversation is in progress`).
 - **The grant** (`desk/grants.py`). `POST /desk/api/conversation {session_id,
   generation, epoch}` returns `{grant, expires_in: 15}`: a random id bound to

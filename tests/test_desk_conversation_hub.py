@@ -22,7 +22,7 @@ from llm_switchboard.desk.grants import (
 )
 from llm_switchboard.desk.hub_state import CHANNEL_UNVERIFIABLE, HubState
 from llm_switchboard.desk.locks import LockStore
-from llm_switchboard.desk.model import MAX_VOICE_TEXT_BYTES, ChannelProcess, ConfirmMode, DeskError, LockStoreError
+from llm_switchboard.desk.model import MAX_VOICE_TEXT_BYTES, TOKEN_TTL_SECONDS, ChannelProcess, ConfirmMode, DeskError, LockStoreError
 from llm_switchboard.desk.operator import OperatorOp, operator_request
 from llm_switchboard.desk.page_build import PAGE_OUT_OF_DATE
 from llm_switchboard.desk.protocol import DELIVERY_SUFFIX, VOICE_NOTICE, MessageType
@@ -119,6 +119,18 @@ class GrantTest(GrantStateCase):
         self.refused(409, ANOTHER_PAGE, self.grant, token=second)
         self.state.revoke(self.state.status()["tokens"][0]["token_id"])
         self.assertTrue(self.grant(token=second))
+
+    def test_a_token_left_out_of_the_one_page_rule_stays_gone_when_the_wall_clock_steps_back(self):
+        self.wait(60)
+        second = new_token(self.state)
+        # The first token has just expired and housekeeping hasn't run.
+        self.clock.advance(TOKEN_TTL_SECONDS - 60 + 1)
+        grant = self.grant(token=second)
+        self.clock.advance(-2)
+        self.assertFalse(self.state.authenticate(self.token))
+        self.assertEqual(len(self.state.status()["tokens"]), 1)
+        self.refused(401, "unauthorized", self.state.beat_grant, self.token, grant)
+        self.assertEqual(self.state.beat_grant(second, grant)["grant"], grant)
 
     def test_beats_renew_and_an_expired_grant_is_never_revived(self):
         grant = self.grant()

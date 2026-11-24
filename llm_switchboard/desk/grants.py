@@ -106,8 +106,13 @@ class ConversationGrants:
             token_hash = self._authorized_hash(token)
             if epoch != self.epoch:
                 raise DeskError(409, Refusal.STALE_EPOCH)
-            now = self._now()
-            if sum(1 for t in self._tokens.values() if now < t.expires_at) != 1:
+            # Expired tokens are deleted, as housekeeping does, before the
+            # count: one merely left out of it would become valid again if
+            # the wall clock stepped back, and a second page would hold a
+            # token during this grant.
+            if self._prune_tokens(self._now()):
+                self._changed.notify_all()
+            if len(self._tokens) != 1:
                 raise DeskError(409, Refusal.ANOTHER_PAGE)
             if not self._voice_enabled:
                 raise DeskError(403, Refusal.VOICE_OFF)
