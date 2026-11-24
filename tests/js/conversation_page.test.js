@@ -441,7 +441,8 @@ test("the draft and Test come back when dictation ends, by every route", async (
   const h = await paired();
   const routes = {
     "its own end": (rec) => rec.onend(),
-    "an error, then its end": (rec) => { rec.onerror({ error: "no-speech" }); rec.onend(); },
+    "an error, then its end": (rec) => { rec.onerror({ error: "no-speech" }); if (rec.onend) rec.onend(); },
+    "an error with no end": (rec) => rec.onerror({ error: "network" }),
     "a Stop tap": () => h.$("dictate").click(),
     "a Review tap": () => h.$("review-btn").click(),
     "the page hidden": () => { h.document.visibilityState = "hidden"; return h.fire("visibilitychange"); }
@@ -458,6 +459,22 @@ test("the draft and Test come back when dictation ends, by every route", async (
     assert.equal(h.$("draft").disabled, false, route);
     assert.equal(h.$("test-btn").disabled, false, route);
   }
+  // An errored recognizer's late end doesn't stop the next dictation.
+  h.$("dictate").click();
+  await settle();
+  const failed = h.rec();
+  failed.onerror({ error: "audio-capture" });
+  await settle();
+  assert.equal(h.$("compose-note").textContent, "Dictation stopped (audio-capture). You can type instead.");
+  assert.equal(failed.aborts, 1);
+  h.$("dictate").click();
+  await settle();
+  if (failed.onend) failed.onend();
+  await settle();
+  assert.equal(h.$("dictate").textContent, "Stop");
+  assert.equal(h.$("draft").disabled, true);
+  h.$("dictate").click();
+  await settle();
   // A recognizer that refuses to start never leaves them disabled.
   h.win.webkitSpeechRecognition.prototype.start = () => { throw new Error("not allowed"); };
   h.$("dictate").click();

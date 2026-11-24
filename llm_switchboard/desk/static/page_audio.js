@@ -136,9 +136,13 @@
         }
         $("interim").textContent = interim;
       };
+      // Every error ends a one-shot recognizer, and some browsers send no
+      // `end` after one: the dictation ends here, so the draft and Test come
+      // back, and a later `end` of this recognizer finds nothing to stop.
       rec.onerror = function (e) {
         if (rec !== recognition) return;
         opts.note("Dictation stopped (" + (e && e.error ? e.error : "error") + "). You can type instead.");
+        stopDictation();
       };
       rec.onend = function () {
         if (rec !== recognition) return;

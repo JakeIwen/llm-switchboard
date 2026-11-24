@@ -703,7 +703,9 @@ speaking; wait until it is quiet, or a conversation is in progress), and it
 comes back on its own when that passes. A dictation already running keeps
 its Stop. While it listens, the draft and Test (which rewrites the draft)
 are disabled, so only its own words change the draft; both come back when
-it ends, however it ends.
+it ends, however it ends. A recognition error ends it at once, with the
+note "Dictation stopped (<error>). You can type instead.", whether or not
+the browser follows the error with an `end`.
 
 **Start conversation** is enabled only when the snapshot has sends and voice
 confirm on and no lock-store error, the selected session is available with
