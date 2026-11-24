@@ -162,17 +162,18 @@ class LaunchLogTest(unittest.TestCase):
 
 class RelayLockTest(unittest.TestCase):
     def test_second_relay_refused_by_relay_lock(self):
-        """bin/desk-relay exits 3 while relay.lock is held, having bound
-        nothing and opened no log of its own."""
+        """bin/desk-relay and `desk relay` alike exit 3 while relay.lock is
+        held, having bound nothing and opened no log of their own."""
         home = make_home(self)
         config = desk_config(home)
         with probe(config.relay_lock):
             procs = [subprocess.Popen(argv, env=relay_env(home), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                       stderr=subprocess.PIPE)
-                     for argv in ([sys.executable, "-I", "-B", str(REPO / "bin" / "desk-relay")],)]
-            for proc in procs:
-                proc.communicate(timeout=GENEROUS)
-            self.assertEqual([proc.returncode for proc in procs], [3])
+                     for argv in ([sys.executable, "-I", "-B", str(REPO / "bin" / "desk-relay")],
+                                  [str(REPO / "bin" / "llm-switchboard"), "desk", "relay"])]
+            results = [proc.communicate(timeout=GENEROUS) for proc in procs]
+            self.assertEqual([proc.returncode for proc in procs], [3, 3])
+        self.assertIn(b"another desk relay holds relay.lock", results[1][1])
         self.assertIn(b"another desk relay holds relay.lock", config.relay_launch_log.read_bytes())
         self.assertFalse(config.channel_socket.exists())
         self.assertFalse(config.relay_log.exists())

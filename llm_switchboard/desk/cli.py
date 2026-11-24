@@ -29,6 +29,7 @@ from .enrollment import DeskSettings, ensure_private_dir
 from .model import HOST, DeskError
 from .operator import HubAbsent, HubResultUnknown, HubUnavailable, OperatorOp, operator_request
 from .protocol import SERVER_NAME
+from .relay_cli import relay as _relay
 from .refusals import Refusal
 from .remote_enrollment import ENROLL_NOW_NOTICE, check_mac_host, enroll_offline, unenroll_offline
 
@@ -85,6 +86,7 @@ def main(argv=None) -> int:
     ack.add_argument("--digest", metavar="HEX", help="the digest a previous `desk ack` printed; sends without asking")
     commands.add_parser("flags", help="print the claude launch flags for an enrolled session")
     commands.add_parser("install-config", help="write the pinned MCP config (mcp.json)")
+    commands.add_parser("relay", help="Mac: run the desk relay in the foreground (the launchd job runs bin/desk-relay)")
     args = parser.parse_args(argv)
     config = DeskConfig.from_env()
     try:
@@ -359,5 +361,5 @@ _COMMANDS = {
     "serve": _serve, "pair": _pair, "revoke": _revoke, "status": _status, "clear": _clear,
     "sends": _sends, "voice": _voice, "enroll": _enroll, "unenroll": _unenroll, "ack": _ack, "flags": _flags,
     "install-config": _install_config, "clear-stopped": _clear_stopped, "link-fence": _link_fence,
-    "link-authorize": _link_authorize, "link-revoke": _link_revoke,
+    "link-authorize": _link_authorize, "link-revoke": _link_revoke, "relay": _relay,
 }
