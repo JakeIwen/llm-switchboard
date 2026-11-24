@@ -214,7 +214,7 @@ class MacPresenceTest(MacTargetCase):
 
 
 class LinkWaitCapTest(MacTargetCase):
-    def test_link_waits_capped_leave_http_and_operator_slots(self):
+    def test_busy_send_expires_request_before_it_writes_lock(self):
         held = [self.hub.links.wait_slot(LinkWaitSurface.HTTP) for _ in range(4)]
         with self.assertRaises(DeskError) as raised:
             self.send_m()

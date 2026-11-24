@@ -27,6 +27,10 @@ MACHINE = "ab" * 16
 OTHER_MACHINE = "cd" * 16
 
 
+def numbered_session(n: int) -> str:
+    return f"{n:08x}-0000-4000-8000-{n:012x}"
+
+
 class KeyPair:
     """A throwaway Ed25519 link key in `directory`."""
 
@@ -117,7 +121,7 @@ class LinkPeer:
         while True:
             try:
                 kind, _ = self.read()
-            except OSError:
+            except (ConnectionResetError, BrokenPipeError):
                 return True
             if kind is None:
                 return True
