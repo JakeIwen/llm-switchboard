@@ -11,7 +11,7 @@ Beside the reviewed tap, the page offers **conversation mode** (below): one
 tap starts a hands-free conversation with one session, sent on a spoken
 "send it" and answered aloud.
 
-Phase 2 (the Mac link, below) is built but not installed on either machine.
+Phase 2 (the Mac link, below) was installed on the Pi and Mac on 2026-11-24.
 Phase 3 (a "prime" orchestrator) is not designed.
 Production sends are off (`desk sends off`, the default) until a live tablet
 round trip passes, and conversations are off (`desk voice off`, the default)
@@ -1140,9 +1140,12 @@ covers parked use only.
 
 ## Mac link (phase 2)
 
-The Mac relay, Pi hub, desk page and setup scripts are built. Phase 2 is
-not installed on either machine. Install it with the Pi's usual `install.sh`
-and `scripts/setup-mac-desk.sh` on the Mac. Everything above stays true for
+Phase 2 was installed on both machines on 2026-11-24 at `808fe58`, with the
+Pi's usual `install.sh` and `scripts/setup-mac-desk.sh` on the Mac. The live
+check confirmed the LAN link and a browser Test exchange with a real
+`claudep --desk` session. The physical tablet, off-LAN Tailscale, lid sleep
+and AirPods checks remain open; disruptive tests ran only in staging. See
+"Checks that only run live" below. Everything above stays true for
 Pi sessions except where a "Pi side" note below says otherwise. Here, `<mac>`
 is the Mac's host name from `local.env` (`LLM_SWITCHBOARD_MAC_NAME`, the same
 name the v1 host exchange uses), `pi` is the desk's fixed name for the Pi's
@@ -1197,10 +1200,11 @@ the following model.
     prompt may still run, mixed versions, sleep and wake, rollback,
     unbounded growth, a hub hang.
 - **What the off switches do** (commands in "Switching it off", below):
-  - *Stop the relay job (Mac)*: unloading the relay ends the Mac's link and
-    opens no new one until the relay is loaded again on the Mac. Since the
-    Mac opens every link, this is the switch the Mac enforces. The Pi's
-    signer line stays, so loading the relay again restores the link.
+  - *Stop the relay job (Mac)*: unload ends the relay's link and confirms
+    the launchd job is absent and the run lock is free at that moment.
+    Launchd won't restart the relay. Since the Mac opens every link, this is
+    the switch the Mac enforces. The credential stays valid: reloading the
+    job or running `desk relay` in the foreground can open a link again.
   - *Withdraw the Mac's credential (Pi)*: `desk link-revoke <mac>` removes
     the key's signer line and its `authorized_keys` line from the Pi's
     installation. An honest hub then retires the link that key holds and
@@ -1341,7 +1345,8 @@ the candidates list, the unattributed admission refusals.
      rule of Admission step 4) and reads `authorized_keys`. It refuses, with
      neither file changed, exit 1, when `link-signers` is unreadable or
      malformed ("link-signers is unreadable or malformed; nothing changed;
-     move it aside and run link-authorize again for each Mac"), when the
+     move it aside and run link-authorize again for each Mac"; for a
+     revoke, follow the recovery under Revocation below), when the
      key blob appears on any other `authorized_keys` line or on another
      host's `link-signers` line (so the v1 key or another host's key can't
      be reused), and when the host would be a fifth. It then builds the
@@ -1413,7 +1418,9 @@ the candidates list, the unattributed admission refusals.
      the host's line (temporary file, fsync, rename). An unreadable or
      malformed file is refused with the message above, the command stops
      with neither file changed, and while the file is so the hub admits no
-     link and retires every one.
+     link and retires every one. In a revoke, restore only the signers that
+     should stay, not the one being withdrawn, then rerun `link-revoke` for
+     the withdrawn host and confirm the cutoff in step 3.
   2. Remove exactly the `authorized_keys` line with that marker.
   3. **Confirm the cutoff**, holding no file lock: ask a running hub for
      the signer check (`link_drop {host}`). The hub rereads `link-signers`,
@@ -2386,9 +2393,11 @@ and is unchanged.
     `enrolled.json` publishes no enrollment at all, since no Mac id's
     single owner can then be checked. Either way the next good read
     publishes again, with no restart. A file that stays broken is logged
-    once when its read starts failing (or fails another way) and once when
-    it reads again, per file and per process (`desk/enrollment.py`'s
-    `FailedReads`, which `desk-settings.json` shares), never at every
+    once when its read starts failing (or fails another way) and once on
+    the next successful read: `desk: <file> reads again` if it exists, or
+    `desk: <file> is gone; defaults apply` if it was removed. This is per
+    file and per process (`desk/enrollment.py`'s `FailedReads`, which
+    `desk-settings.json` shares), never at every
     reread, so the Pi's log can't grow with the 5 s pass, the handoffs, the
     picker's polls or the supervisor's launches. A registration the view no longer
     names is dropped at the next pass, as after an unenroll, and locks stay
@@ -2608,16 +2617,16 @@ on the Pi.
 
 ### Readiness, Test, and the startup warning on the Mac
 
-- Readiness is the hub's, unchanged: a Mac registration shows `registered`
-  ("no desk reply verified yet") until an exchange Jacob tapped, or the
-  **Test** button, is answered through `reply` on that registration, then
-  `replied`. No hidden probe crosses the link; the heartbeats never reach
-  Claude.
+- Readiness is the hub's: a Mac registration shows `registered` (**Registered,
+  no desk reply yet**) until a desk exchange is answered through `reply` on
+  that registration, then `replied`. **Test** only fills the draft and opens
+  **Review**. With sends on, press **Send** in Review to request the reply.
+  No hidden probe crosses the link; the heartbeats never reach Claude.
 - The Mac combination (`claudep --desk` through the model gateway, tool search
   on, Jacob's hooks) counts as ready only after a disposable Mac session
-  answers Test through `reply` on that exact setup; the hub can't see the
-  model, so this is an operator gate written here and in the guide, repeated
-  for a model not yet tried.
+  answers the sent Test draft through `reply` on that exact setup; the hub
+  can't see the model, so the operator repeats this check for any model not
+  yet tried.
 - **Startup warning**: Claude shows "Loading development channels" at every
   `claudep --desk` launch, and Jacob presses Enter in his own Mac terminal.
   There is no tmux and no supervisor on the Mac, so the hub's startup
@@ -2633,7 +2642,9 @@ on the Pi.
 - Each target carries a host badge (`Pi`, or the Mac's name).
 - One line per listed host: **Mac link up**, **Mac link down since
   <time>**, or **Mac links unavailable: the Pi can't verify Mac keys
-  (OpenSSH 8.1 or later is needed)**. While a host's link is down its
+  (OpenSSH 8.1 or later is needed)**. If the verifier is unavailable, repair
+  OpenSSH, pass `desk link-authorize --self-test` on the Pi, then restart the
+  desk hub: it sets its verifier state at startup. While a host's link is down its
   targets are listed (enrolled, with any lock) but have no registration, so
   Dictate, Review, Send and Test are disabled for them; enroll, unenroll and
   clear still work (clear answers as above).
@@ -2740,16 +2751,17 @@ the same change adds
   llm_switchboard desk relay-install --unload` boots out the job and deletes
   its plist, so it doesn't return at login, and reports done only when
   `launchctl print` no longer finds the label and a non-blocking `flock` on
-  `relay.lock` succeeds, so no relay process is left. Bootout and confirmation
+  `relay.lock` succeeds, confirming the job is absent and the lock is free
+  at that moment. Bootout and confirmation
   share a 5 s deadline, including `launchctl print`. On timeout it exits 1
   and reports the unload unconfirmed: a timed-out bootout leaves the plist
   in place; once deleted, the command reports what still prevented confirmation.
-  After a confirmed unload the Mac has no link and opens none until the relay is
-  loaded again on the Mac; this is the switch the Mac enforces. The Pi's
-  signer line stays, so loading the relay again restores the link. Running
-  `--desk` sessions keep retrying the missing socket, each failure one line
-  in that channel's stderr (Claude's MCP log), backing off to every 30 s;
-  launching with `--desk` stays harmless while it's off. The installed relay
+  Launchd won't restart the relay after a confirmed unload. This is the
+  switch the Mac enforces, but it leaves the credential valid: reloading
+  the job or starting a foreground `desk relay` can open the link again.
+  While no relay is running, `--desk` sessions keep retrying the missing
+  socket, each failure one line in that channel's stderr (Claude's MCP log),
+  backing off to every 30 s. The installed relay
   pins `$HOME/.config` as its XDG config home. Install, unload, the foreground
   relay and Mac channels refuse a different `XDG_CONFIG_HOME` rather than use
   a different socket or lock. Leave it unset or set it to `$HOME/.config`
@@ -2815,6 +2827,10 @@ the same change adds
      inactive"); holding it, it reads `link-signers` through the hub's
      reader and `locks.json` through `inspect_lock_file`, with the same
      refusals (a missing file is empty to both), decides, and releases it.
+     If `locks.json` is unreadable or malformed, preserve it and repair or
+     restore it before retrying; don't move it aside. Both the inspector and
+     a starting hub read a missing `locks.json` as no locks, which is not
+     evidence that the recorded sessions exited.
      Any refusal exits 1 naming what is left; a handoff in progress reads "a
      Mac send is being handed off; run link-fence again". The fence never
      waits for a handoff or for the run lock (it takes the state's lock as
@@ -3026,7 +3042,7 @@ of honest misconfiguration and accidents.
 | Wire codes | `test_every_emitted_code_is_in_its_table` (each sender's code paths enumerated against `LINK_CODES`); `test_round_trip_lock_fields_and_null_reason` (the real `_handle_reply` result over the link); `test_successful_reply_null_reason` (end to end: an accepted reply reaches the channel as `reply_result {ok: true, reason: null}`); `test_final_check_reasons_mapped_to_codes` (the real channel's guard reasons, apostrophes included, after a simulated `/clear`); `test_every_reply_refusal_has_a_code`; `test_bad_or_unsolicited_request_id_refused_at_relay` (nothing forwarded); `test_free_text_never_on_wire_or_in_logs` |
 | Deadlines, heartbeats and slots | `test_relay_answers_channel_ping_locally`; `test_healthy_idle_channel_kept_by_relay_pings`; `test_channel_blocked_on_stdout_unregistered_within_45s` (the real channel with a stdout that never drains); `test_channel_write_deadline_includes_queue`; `test_queued_frame_past_its_deadline_is_not_begun_and_stops_the_writer` (writer queue time); `test_event_wait_includes_queue_wait` (end to end, on the hub's injected clock: a Mac send's event queued behind a frame the writer is still finishing is never begun once its 5 s pass, and the lock clears with no presence check); `test_link_waits_capped_leave_http_and_operator_slots` (a pump that stops reading; 4 Mac sends or clears hold their HTTP slots and 1 operator presence clear holds its slot, a fifth and a second are refused `busy` at once, and a Pi send, `desk status`, `desk revoke`, `link_drop` and a long poll each finish within their own bounds); `test_remote_close_never_blocks`; `test_register_unanswered_refused_slow_then_late_registered_unregistered` (shortened test timeout); `test_register_wait_3_5s_then_refused` (end to end with the real 3.5 s wait, under the channel's 5 s, through a stalled pump; the late `registered` is answered `unregistered`) |
 | Freshness and sleep | `test_freshness_from_time_read_before_ping_enqueued` (fake clocks); `test_suspension_between_kernel_accept_and_bookkeeping` (the ping's bytes are accepted by the kernel, the hub answers, and the relay is suspended for 50 s before its writer does anything more: `acked_at` is the time read before the ping was enqueued, so an `event` arriving after the suspension is not dispatched and the link is retired; the same for `link_proof` and `link_welcome`); `test_unmatched_ping_records_bounded_and_expire` (pongs withheld: at most 4 records, none older than 40 s); `test_pong_for_unsent_ping_closes_link`; `test_stale_pong_changes_nothing` (a pong for a matched or expired record leaves `acked_at` as it was); `test_relay_pings_every_15s_under_traffic`; `test_frames_not_dispatched_40s_after_ack` (an `event` and a `drop` arrive after a 50 s clock jump: neither acted on, the link retired); `test_short_jump_dispatches_in_order` (a 10 s jump); `test_awake_scheduling_delay_does_not_retire` (pongs delayed up to 20 s: frames still dispatched); `test_write_spanning_sleep_decided_by_writer` (the clock jumps while a channel write is in progress: its outcome comes from the bytes accepted, and its deadline on awake time doesn't expire from the jump) |
-| Disconnect | a link lost at the request table's rows, with the request state, the lock and the clear outcome asserted: before the handoff (`test_disconnect_before_handoff`), after the hub's frame outcomes (`test_hub_send_three_outcomes`: `not_begun`, `unfinished`), `written` with no report (`test_link_lost_after_written_needs_presence`), after each writer report (`test_disconnect_after_each_writer_report`), the relay's channel `unfinished` (`test_channel_write_unfinished_then_link_lost`), a sleep (`test_sleep_and_reply_on_successor`), a revocation (`test_revocation_does_not_clear_an_unreported_write`), a hub restart (`test_hub_restart_forgets_reports_not_locks`) and a reply in flight (`test_reply_in_flight_when_link_lost`); `test_link_lost_with_relay_side_asserted` (end to end, an event written: the relay's attempt ends, its channels close unreported and hellos are refused; the request is unknown, its lock stays until presence `gone`); `test_channel_disconnect_unregistered_unknown_presence_gone_clears` (channel disconnect -> `unregistered` -> unknown -> presence `gone` clears); `link_drop`; the pump's EOF on either side, a partial line never forwarded (`test_relay_eof_forwards_whole_lines_and_drops_the_partial_one`, `test_hub_eof_forwards_whole_lines_and_drops_the_partial_one`) |
+| Disconnect | a link lost at the request table's rows, with the request state, the lock and the clear outcome asserted: before the handoff (`test_disconnect_before_handoff`), after the hub's frame outcomes (`test_hub_send_three_outcomes`: `not_begun`, `unfinished`), `written` with no report (`test_link_lost_after_written_needs_presence`), after each writer report (`test_disconnect_after_each_writer_report`), the relay's channel `unfinished` (`test_channel_write_unfinished_then_link_lost`), a sleep (`test_sleep_and_reply_on_successor`), a revocation (`test_revocation_does_not_clear_an_unreported_write`), a hub restart (`test_hub_restart_forgets_reports_not_locks`) and a reply in flight (`test_reply_in_flight_when_link_lost`); `test_link_lost_with_relay_side_asserted` (end to end, an event written: the relay's attempt ends, its channels close unreported and hellos are refused; the request is unknown, its lock stays until presence `gone`); `test_channel_disconnect_unregistered_unknown_presence_gone_clears` (channel disconnect -> `unregistered` -> unknown -> presence `gone` clears); `link_drop`; the pump's EOF on either side, a partial line never forwarded (`test_relay_eof_forwards_whole_lines_and_drops_the_partial_one`, `test_hub_eof_forwards_whole_lines_and_drops_the_partial_one`); no request-table test for "Relay restarts or is unloaded" or "another Mac takes the name" |
 | Hosts and enrollment | `test_registration_host_must_match_enrollment` (a Mac `register` for a `pi` id, a Pi channel for a Mac id); `test_enrollment_published_atomically` (no reader sees one file's change alone); `test_id_in_both_files_enrolled_nowhere`; `test_id_under_two_remote_hosts_unroutable` (both nested records well formed: the id is in `conflicts`, no ticket or handoff for it, the target shows `enrolled on two hosts`); `test_a_file_that_fails_its_read_routes_nothing_it_governs_until_read_again` (each file in turn, read permission removed and rewritten in place with its mtime, size and inode kept: a ticket issued before is refused at handoff, nothing locked, and the next good read routes again without a restart); `test_an_unreadable_pi_file_routes_no_id_to_a_mac`; `test_a_settings_file_that_fails_its_read_is_sends_off_at_handoff_until_read_again` (`desk-settings.json` with sends on, read permission removed or rewritten in place with its mtime, size and inode kept: a tap and a voice send, each to a Pi and a Mac target, refused `sends off` at handoff with nothing locked, the snapshot and `desk status` showing sends off, and the next good read turning sends on again without a restart); `test_a_file_that_stays_broken_logs_once_until_it_reads_again` (each of the three files unreadable, rewritten in place keeping its stat, or JSON of another shape, read 50 times by each of its readers, a long-lived one and one built per read: one warning, then one `reads again` line, and a new break warns once more); `test_the_hub_s_rereads_of_a_file_that_stays_broken_log_once`; `test_a_failed_read_keeps_the_lock_of_a_prompt_that_may_still_run`; `test_enroll_refused_when_either_file_unreadable` (online and offline, for `pi` and for a Mac host, each file in turn); `test_enroll_checks_owners_registrations_and_locks` (online and offline; offline, a FIFO at `locks.json` refuses at once); `test_unenroll_needs_only_its_file`; `test_ticket_bound_to_host`; two Mac registrations for one id are ambiguous; unenroll enqueues `drop` and stops routing before it returns; the page's `desk_logic` tests: history and speech filter by host and session id; reassignment never shows the old host's reply |
 | Mac setup | `test_setup_uses_its_checkout_outside_cwd_and_ignores_pythonpath`; `test_wrong_config_home_refuses_install_and_removal_before_changes`; `test_setup_reports_which_install_steps_completed_on_failure`; `test_remove_reports_partial_key_file_deletion_after_cutoff` |
 | Mac relay location | `test_relay_job_runs_the_checkout_relay`; `test_relay_install_refuses_mismatched_config_home`; `test_relay_unload_refuses_mismatched_config_home_with_default_lock_held`; `test_mac_channel_and_foreground_relay_refuse_other_config_home` |
@@ -3035,55 +3051,65 @@ of honest misconfiguration and accidents.
 | Bounds | `test_pending_admissions_capped`; `test_accept_rate_capped`; `test_worst_case_status_fits_operator_line`; `test_unenrolled_channels_throttled_without_dropping_link` (16 channels retrying; established registrations and their requests untouched); `test_relay_launch_log_capped_across_crash_loop` (`bin/desk-relay` run repeatedly with a failing import); `test_launch_log_closed_after_logging_starts` (a relay that has started raises in a thread and writes to fd 2: the traceback lands in the rotating log, the launch log's size is unchanged); frame limits at the hub, relay and pump; a line exactly at the cap passes; bad field shapes refused; memory stays within the caps under a flood |
 | Privacy | `test_marker_absent_from_desk_logs_and_files` (a marker phrase in a prompt and its reply through a whole exchange: absent from the hub's, relay's and pump's captured logs, the relay launch log, `locks.json`, `enrolled-hosts.json`, `link-signers` and the v1 hosts directory); `test_desk_adds_no_v1_frame_fields` (a v1 exchange's frames for a session have the same fields before and after a desk exchange); `test_desk_first_prompt_title_follows_v1_rule` (skipped, naming the reason, until its live fixture exists: a transcript whose first user record is the record Claude Code wrote for a real desk event, captured from a desk session and scrubbed, committed as a fixture: the v1 row's title equals what `transcripts.prompt_text` and v1's title rule yield for that transcript, whatever that is, and the row carries no other prompt or reply text) |
 
-**Checks that only run live**, before the review that gates install. First
-with isolated, staged credentials, policy files and sessions (a separate
-HOME on each machine, a throwaway desk key and signer line), then again after
-the reviewed installation:
+**Checks that only run live.** Status as of 2026-11-24; staging used
+isolated policy files, throwaway credentials and a disposable session.
 
-- **Pi**: the verifier self-test through `/dev/fd` pipes on the Pi's
-  OpenSSH; the real `authorized_keys` line with `restrict` and the forced
-  command, with a positive case (the desk key gets the pump and a link) and
-  negative cases (a throwaway key not listed is refused by sshd; the v1 key
-  runs `host-exchange`, never the pump; an ordinary `ssh` login that runs
-  `bin/desk-link` by hand gets no link at the proof); `link-revoke` with the
-  hub not answering `link_drop` (the command exits 1, cutoff not confirmed,
-  and the link retires at the next housekeeping pass);
-  `link-fence` on the staged hub.
-- **Mac, adapter facts the build depends on**: `LOCAL_PEERPID` and
-  `LOCAL_PEERCRED` on the relay's accepted connections, the `proc_bsdinfo`
-  and `proc_uniqidentifierinfo` layouts, `KERN_PROCARGS2` argv, against a
-  real `claudep --desk` session and the launchd relay; the
-  framework-interpreter rule against the checkout's `.venv`; `procStart`
-  for a session started on a day 1 to 9; the session file's mtime against
-  the process start. Already checked on 2026-11-23, by the facts noted in
-  place: Claude's executable path and argv shape, the session file being
-  rewritten, `CLOCK_MONOTONIC` counting sleep, the `ssh -G` output shape.
-- **Mac, ssh, on both routes** (on the van LAN, and off it over Tailscale),
-  from the launchd job itself, so the environment is the real one: the
-  relay connects with strict host-key checking intact; `ssh -v` with the
-  relay's argv shows only the desk key offered and the host key found under
-  the alias; with the desk line removed on the Pi, the login fails with no
-  fallback to another key.
-- **Mac, launch log**: after the relay has run with a forced thread
-  exception, the launch log is unchanged and the rotating log has the
-  traceback.
-- A disposable `claudep --desk` session: the startup Enter, registration,
-  the Test round trip through `reply`, a tapped exchange, **Enroll now** on a
-  running candidate, unenroll from the tablet while it runs, `/clear` (the
-  registration drops); the record Claude Code writes for the desk event,
-  captured (scrubbed) as the privacy test's fixture.
-- **Sleep, on the real lid**: lid closed about 10 s with a tapped send made
-  while closed (the event waits in the stream): on wake the relay delivers
-  it. Lid closed about 90 s with the same: on wake the relay retires the
-  link without delivering (the session's transcript has no such prompt),
-  the request stays unknown with its lock, and the link comes back. A
-  closure between these may go either way; both outcomes are consistent with
-  the hub's state.
-- The relay unloaded and reloaded, a hub restart, `link-revoke`, a key
-  rotation with a lock outstanding (presence refused, `clear-stopped`
-  works).
-- No marker text in the Mac's relay logs, the Pi's journal, or the v1
-  snapshot after a full exchange.
+- **Pi — confirmed live:** the verifier self-test passes on the Pi's
+  OpenSSH (the `/dev/fd` pipes were traced in staging); the installed
+  `authorized_keys` line has `restrict` and the forced command, and the desk
+  key gets the pump and a link. With no signer, link, handoff or lock,
+  `link-fence` passes before Mac setup; its refusal with a signer present was
+  checked in staging only.
+- **Pi negative SSH and unresponsive hub — staged only:** sshd refuses an
+  unlisted key; the v1 key runs `host-exchange`, never the pump; an ordinary
+  SSH login that runs `bin/desk-link` by hand gets no link without the proof.
+  When the hub doesn't answer `link_drop`, `link-revoke` exits 1 without
+  confirming cutoff, and the link retires at the next housekeeping pass.
+- **Mac adapter facts — checked in staging:** `LOCAL_PEERPID` and
+  `LOCAL_PEERCRED` on accepted connections, the `proc_bsdinfo` and
+  `proc_uniqidentifierinfo` layouts, `KERN_PROCARGS2` argv, the framework
+  interpreter for the checkout's `.venv`, and the session file's mtime and
+  `procStart` against the process start. The installed relay accepted a real
+  `claudep --desk` session on 2026-11-24; the detailed probes were not rerun.
+  The exact `procStart` format Claude writes on a day 1 to 9 still needs a
+  live observation. Other facts checked on 2026-11-23: Claude's executable
+  path and argv shape, the session file being rewritten, `CLOCK_MONOTONIC`
+  counting sleep and the `ssh -G` output shape.
+- **Mac SSH — LAN confirmed live:** the installed launchd relay connected
+  with strict host-key checking and an argv restricted to the desk identity.
+  In staging on the LAN, both the LAN and Tailscale routes passed: `ssh -v`
+  with the relay's argv showed only the desk key offered and the host key
+  found under the alias, and removing the desk line made login fail with
+  no fallback. The Tailscale route still needs the same connection check
+  with the Mac off the LAN.
+- **Mac launch log — staged only:** after a forced thread exception the
+  launch log is unchanged and the rotating log has the traceback. The launch
+  log was empty on the real install without forcing an exception.
+- **Disposable `claudep --desk` session — confirmed live in a browser:**
+  startup Enter, browser pairing, **Enroll now** and registration for a
+  running candidate, the reviewed Test draft sent and answered through
+  `reply`, `/clear` dropping the registration, and unenroll from the page.
+  Staging also exercised a separate tapped exchange and unenroll while the
+  registration was still live; the desk event in the session's transcript
+  was captured and scrubbed as the privacy test's fixture. Pairing, tap flow
+  and conversation mode on the physical tablet still need the tablet.
+- **Sleep — waits for the real lid and tablet:** close the lid for about 10 s
+  and make a tapped send while closed (the event waits in the stream); on
+  wake the relay delivers it. At about 90 s the relay instead retires the
+  link without delivering (no such prompt in the session's transcript), the
+  request stays unknown with its lock, and the link comes back. A closure
+  between those times can go either way, consistent with the hub's state.
+- **Relay unload/reload, hub restart, `link-revoke`, and key rotation with a
+  lock — staged only:** check that the attached session loses its registration
+  on disconnect, the lock survives the hub restart, revoke cuts the link,
+  and rotation refuses presence for the old lock but `clear-stopped` works.
+- **Privacy — confirmed live with distinctive exchange text:** no match in
+  the Mac relay logs, Pi journal or v1 snapshot after the exchange. A shorter,
+  generic draft fragment also matched unrelated titles in the v1 snapshot.
+- **AirPods and audio routing — waits for the tablet:** check the tablet's
+  audio setup and the speaker-only conversation readiness check above. The
+  page can't verify the output route; conversation mode is not qualified
+  with AirPods.
 
 ### Decisions made here
 
