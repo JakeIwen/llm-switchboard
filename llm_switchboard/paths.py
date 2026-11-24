@@ -3,6 +3,8 @@
 from pathlib import Path
 import os
 
+# The noninteractive environment of the Mac launchd jobs and their SSH children.
+MAC_JOB_PATH = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 HOME = Path.home()
 CLAUDE_DIR = HOME / ".claude"
 # Claude Code's own settings and per-folder state, including folder trust.

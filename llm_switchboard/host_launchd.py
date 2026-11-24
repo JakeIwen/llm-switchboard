@@ -7,12 +7,13 @@ import subprocess
 import sys
 import time
 
+from .paths import MAC_JOB_PATH as PATH
+
 LABEL = "dev.llm-switchboard.host-agent"
 # The Mac has no `serve`, so launchd runs the transcript indexer that serve's child runs on the Pi.
 SEARCH_LABEL = "dev.llm-switchboard.search-index"
 HOST_SEARCH_LABEL = "dev.llm-switchboard.host-search"
 SEARCH_INTERVAL_S = 30
-PATH = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 
 def _logs(home: Path) -> Path:
