@@ -118,7 +118,10 @@ class OtherUidTest(LinkHubCase, HubCase):
 
     def test_other_uid_refused(self):
         peer = self.link_peer()
-        peer.send(LinkType.LINK_HELLO, versions=[1], relay_build="", host=MAC, machine=MACHINE)
+        try:
+            peer.send(LinkType.LINK_HELLO, versions=[1], relay_build="", host=MAC, machine=MACHINE)
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # The hub checks the uid at accept and may close before the hello is sent.
         self.assertTrue(peer.closed())
         self.assertEqual(self.refusals(), {})
         self.assertNotEqual(self.links()[MAC]["state"], "up")

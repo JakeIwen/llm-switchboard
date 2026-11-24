@@ -578,7 +578,10 @@ class BoundsTest(RelayCase):
         self.assertEqual(len(padded), protocol.MAX_LINE_BYTES)
         client.send_raw(padded)
         self.assertEqual(client.read()[0], MessageType.PONG)
-        client.send_raw(b"x" * (protocol.MAX_LINE_BYTES + 1))
+        try:
+            client.send_raw(b"x" * (protocol.MAX_LINE_BYTES + 1))
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # The relay may close once the cap is passed, before the rest is sent.
         self.assertEqual(self.unregistered()["reason"], "channel_closed")
 
     def test_channel_connections_capped_at_accept(self):
