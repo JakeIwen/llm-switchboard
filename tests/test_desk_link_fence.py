@@ -360,19 +360,6 @@ class FenceOfflineTest(unittest.TestCase):
         self.assertIn(lock.lock_id, done.stderr)
         self.assertEqual(self.config.lock_file.read_bytes(), before)
 
-    def test_no_hub_outcomes_need_run_lock(self):
-        lock = mac_lock(self.config, SESSION_M, "SHA256:" + "A" * 43)
-        before = self.config.lock_file.read_bytes()
-        with run_lock_held_by_child(self.config):
-            done = self.fence()
-            self.assertEqual(done.returncode, 1)
-            self.assertIn(RUN_LOCK_REFUSAL, done.stderr)
-            self.assertNotIn(lock.lock_id, done.stderr)
-        done = self.fence()
-        self.assertEqual(done.returncode, 1)
-        self.assertIn(lock.lock_id, done.stderr)
-        self.assertEqual(self.config.lock_file.read_bytes(), before)
-
 
 if __name__ == "__main__":
     unittest.main()

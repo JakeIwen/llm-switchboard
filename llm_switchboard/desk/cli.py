@@ -12,8 +12,9 @@ host-qualified ops, never the phase 1 ones, so a phase 1 hub refuses them
 (`unknown op`) instead of editing the Pi's file; offline, both forms check
 both enrollment files and `locks.json` first (remote_enrollment.py).
 `clear-stopped` has no offline form: a hub rewrites `locks.json` whole from
-its own list. `link-fence` (link_authorize.py) asks the hub, and with none
-answering decides from the files under the run lock (`hub.lock`). `flags` and `install-config` work on files only.
+its own list. `link-authorize`, `link-revoke` and `link-fence` (link_authorize.py) ask
+the hub, and with none answering decide from the files under the run lock
+(`hub.lock`). `flags` and `install-config` work on files only.
 """
 
 import argparse
@@ -69,6 +70,14 @@ def main(argv=None) -> int:
     stopped.add_argument("session_id")
     stopped.add_argument("lock_id")
     stopped.add_argument("--confirm", metavar="LOCK_ID", help="off a terminal: the lock id again")
+    authorize = commands.add_parser("link-authorize", help="list a Mac's desk link key (one public-key line on "
+                                    "stdin) and let it log in to the forced command")
+    authorize.add_argument("host", nargs="?", metavar="MAC")
+    authorize.add_argument("--self-test", action="store_true", help="only check that ssh-keygen can verify "
+                           "signatures; changes nothing")
+    link_revoke = commands.add_parser("link-revoke", help="withdraw a Mac's desk link credential and confirm the "
+                                      "cutoff")
+    link_revoke.add_argument("host", metavar="MAC")
     commands.add_parser("link-fence", help="before rolling the Pi back: confirm no Mac signer, link, handoff or "
                         "lock is left")
     ack = commands.add_parser("ack", help="show a session's startup warning, then press Enter once to accept it")
@@ -268,6 +277,24 @@ def _clear_stopped(args, config):
     return 0
 
 
+def _link_authorize(args, config):
+    from .link_authorize import MAX_KEY_LINE_BYTES, run_authorize, run_self_test
+    if args.self_test:
+        if args.host is not None:
+            print("desk: link-authorize --self-test takes no host and reads no key", file=sys.stderr)
+            return EXIT_SETUP
+        return run_self_test()
+    if args.host is None:
+        print("desk: link-authorize needs the Mac's host name, and its public key on stdin", file=sys.stderr)
+        return EXIT_SETUP
+    return run_authorize(config, args.host, sys.stdin.buffer.read(MAX_KEY_LINE_BYTES + 1))
+
+
+def _link_revoke(args, config):
+    from .link_authorize import run_revoke
+    return run_revoke(config, args.host)
+
+
 def _link_fence(args, config):
     from .link_authorize import run_fence
     return run_fence(config)
@@ -332,4 +359,5 @@ _COMMANDS = {
     "serve": _serve, "pair": _pair, "revoke": _revoke, "status": _status, "clear": _clear,
     "sends": _sends, "voice": _voice, "enroll": _enroll, "unenroll": _unenroll, "ack": _ack, "flags": _flags,
     "install-config": _install_config, "clear-stopped": _clear_stopped, "link-fence": _link_fence,
+    "link-authorize": _link_authorize, "link-revoke": _link_revoke,
 }
