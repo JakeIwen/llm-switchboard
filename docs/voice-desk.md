@@ -45,7 +45,7 @@ conversation mode has not been qualified for driving.
 | `launcher.py`, `supervisor.py` | runtime | Start a kept Pi session through `claudepd`, adding desk flags only if enrolled at launch |
 | `screen.py`, `supervisor_state.py` | rules | Identify the complete development-channel dialog and its selected option, and report `startup_blocked` without restarting the session |
 | `tmux.py` | adapter | `Tmux.panes()` (pane id, pid, copy mode, by `@car_session`; raises when tmux fails rather than reading as no panes), `capture(..., check=True)`, and `send_enter_if(pane_id, PaneGuard)`, the server-side guarded Enter the acknowledgement uses |
-| `desk/static/` | page | The tablet page: plain HTML/CSS/JS, no build step, Chrome 119. Scripts, in load order: `text_rule.js` (the text rule's mirror), `desk_logic.js` (the tap flow's pure decisions), `conversation_logic.js` (conversation mode's pure reducer and its vocabulary: phases, commands, cues, end reasons, limits, `startBlocker`), `sound_tracker.js` (the page's own sound: every utterance it submitted until its end, error or the page's cancel, the guard's start, uncertain periods and the overdue watchdog), `conversation_answers.js` (what the hub's answers to a conversation's calls establish, for the controller), `conversation.js` (the conversation controller: every mic, sound and send effect, no DOM), `conversation_view.js` (the Start control and the overlay; renders only), `page_audio.js` (the tap flow's own sound: reply speech, Play and one-shot Dictate, deferring to the controller), `startup.js` (the startup-blocked view), `app.js` (wiring and the tap flow). Node tests in `tests/js/` |
+| `desk/static/` | page | The tablet page: plain HTML/CSS/JS, no build step, Chrome 119. Scripts, in load order: `text_rule.js` (the text rule's mirror), `desk_logic.js` (the tap flow's pure decisions), `conversation_vocabulary.js` (conversation mode's vocabulary, declared once: phases, commands, cues, end reasons, limits, Start's blockers), `conversation_logic.js` (conversation mode's pure reducer, which re-exports that vocabulary, and `startBlocker`), `sound_tracker.js` (the page's own sound: every utterance it submitted until its end, error or the page's cancel, the guard's start, uncertain periods and the overdue watchdog), `conversation_answers.js` (what the hub's answers to a conversation's calls establish, for the controller), `conversation.js` (the conversation controller: every mic, sound and send effect, no DOM), `conversation_view.js` (the Start control and the overlay; renders only), `page_audio.js` (the tap flow's own sound: reply speech, Play and one-shot Dictate, deferring to the controller), `startup.js` (the startup-blocked view), `app.js` (wiring and the tap flow). Node tests in `tests/js/` |
 | `bin/desk-channel` | entry | Pinned channel server entry (`.venv/bin/python -I -B bin/desk-channel`) |
 | `bin/desk-adb-link` | entry | The USB reverse-forward loop for one tablet serial |
 | `systemd/llm-switchboard-desk.service`, `systemd/llm-switchboard-desk-adb.service` | unit | Hub and adb link user units (templated by `install.sh`) |
@@ -249,8 +249,8 @@ the key shares that status.
 
 Unauthenticated:
 - `GET /desk`, `/desk/app.js`, `/desk/app.css`, `/desk/text_rule.js`,
-  `/desk/desk_logic.js`, `/desk/conversation_logic.js`,
-  `/desk/sound_tracker.js`, `/desk/conversation_answers.js`,
+  `/desk/desk_logic.js`, `/desk/conversation_vocabulary.js`,
+  `/desk/conversation_logic.js`, `/desk/sound_tracker.js`, `/desk/conversation_answers.js`,
   `/desk/conversation.js`, `/desk/conversation_view.js`, `/desk/page_audio.js`,
   `/desk/startup.js`, `/desk/text_rule_cases.json`: the
   page (`STATIC_ROUTES`), read once at hub start and served from memory;
