@@ -228,6 +228,31 @@ test("an end the hub's silence brings is silent, and the page's own ends still s
   }
 });
 
+// A beat given up on at its abort deadline whose answer still arrives, as
+// when the abort lands while its body is being read (the page's fetch then
+// resolves with the status and no body): an answer, and no renewal.
+test("an abandoned beat's answer while the closing cue plays cuts it, unless it is the renewal", async () => {
+  for (const [status, data, keeps] of [[200, null, false], [409, { error: "target changed" }, false],
+    [200, { grant: G.g1, expires_in: 15 }, true]]) {
+    const label = what(status, data);
+    const h = harness();
+    h.honorAbort = false;
+    await listening(h);
+    await h.advance(LIMITS.BEAT_MS - 100);
+    h.ctl.endTap();
+    const said = playing(h, label);
+    await h.advance(100 + LIMITS.BEAT_ABORT_MS);
+    assert.equal(h.synth.speaking, true, label + ": the cue ended before the beat was given up on");
+    await h.answer(PATH.BEAT, status, data);
+    if (keeps) {
+      assert.equal(h.synth.speaking, true, label);
+      assert.deepEqual(releases(h), [], label);
+    } else {
+      cut(h, said, label);
+    }
+  }
+});
+
 // The page's own poll, through app.js: an answer that is not a snapshot
 // (another status, a body that never came) cuts the closing cue too.
 test("a poll answered with anything but a snapshot cuts the closing cue", async () => {

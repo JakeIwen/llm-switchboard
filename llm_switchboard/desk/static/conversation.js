@@ -381,7 +381,9 @@
       var named = grant;
       setTimer(TIMER.BEAT_ABORT, LIMITS.BEAT_ABORT_MS);
       api("POST", PATH.BEAT, { grant: named }, signal(FETCH.BEAT)).then(function (r) {
-        if (!settle(FETCH.BEAT, id)) return;
+        // A beat given up on can still answer (an abort while its body is
+        // read resolves with no body): it renews nothing, but it is an answer.
+        if (!settle(FETCH.BEAT, id)) return answered(A.renewed(r, named));
         clearTimer(TIMER.BEAT_ABORT);
         if (unauthorized(r)) return;
         if (A.renewed(r, named)) beatOk(startedAt);
