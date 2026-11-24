@@ -98,6 +98,15 @@ function page(opts) {
         call.done = true;
         resolve({ status, text: () => Promise.resolve(data === undefined ? "" : JSON.stringify(data)) });
       };
+      // The status line arrives; the body read waits until `lose()` makes it
+      // fail, as on a connection cut mid-response.
+      call.headers = (status) => {
+        call.done = true;
+        let lose;
+        const body = new Promise((_, reject) => { lose = () => reject(new Error("connection reset")); });
+        resolve({ status, text: () => body });
+        return { lose: async () => { lose(); await settle(); } };
+      };
       if (init.signal) init.signal.addEventListener("abort", () => { if (!call.done) { call.done = true; reject(new Error("abort")); } });
       h.calls.push(call);
       if (url === "/desk/pair/start") call.answer(200, { pair_id: "p1", code: "ABC-DEF", expires_in: 300 });
@@ -131,6 +140,13 @@ function page(opts) {
     call.answer(status, data);
     await settle();
     return call;
+  };
+  h.headers = async (p, status) => {
+    const call = h.pending(p)[0];
+    assert.ok(call, "no pending call to " + p);
+    const body = call.headers(status);
+    await settle();
+    return body;
   };
   h.advance = async (ms) => {
     const end = h.t + ms;

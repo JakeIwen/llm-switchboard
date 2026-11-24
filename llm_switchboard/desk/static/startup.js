@@ -130,6 +130,9 @@
         var why = (r.data && r.data.error) || "HTTP " + r.status;
         if (r.status === 200 && r.data && r.data.sent === true) settle(s, OUTCOME.sent(label));
         else if (r.status === 200 || (r.data && r.data.delivery === "unknown")) settle(s, OUTCOME.unknown(label, "tmux did not confirm the Enter."));
+        // A 5xx shares its status with the outcome that may have typed the
+        // key, so without its body it can't show that nothing was typed.
+        else if (r.status >= 500 && !r.data) settle(s, OUTCOME.unknown(label, "the hub's answer (" + why + ") could not be read."));
         else settle(s, OUTCOME.refused(label, why));
       }, function () {
         if (timeout) clearTimeout(timeout);

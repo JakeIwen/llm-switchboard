@@ -238,6 +238,15 @@ process can't be checked, tmux didn't answer). A 503 whose body also has
 `"delivery": "unknown"` (only from the startup acknowledgement) means tmux
 may have typed the key; every other error means nothing was typed.
 
+The page acts on an answer's status line as soon as it arrives: a 401 on
+any protected request drops its token and returns it to pairing at the
+headers. An answer whose body then fails to arrive, or doesn't parse, is
+still the hub's answer, with its status and no body, never "the hub could
+not be reached": a ticket is refused, a send's delivery is unknown unless
+the status settles it (a tapped send's 401 is not sent), and a startup
+acknowledgement's 5xx is unknown, since the outcome that may have typed
+the key shares that status.
+
 Unauthenticated:
 - `GET /desk`, `/desk/app.js`, `/desk/app.css`, `/desk/text_rule.js`,
   `/desk/desk_logic.js`, `/desk/conversation_logic.js`,

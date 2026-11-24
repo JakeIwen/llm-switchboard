@@ -55,7 +55,10 @@
   function NetworkError(message) { this.message = message; }
 
   // Resolves {status, data}; rejects with NetworkError when no response came.
-  // 401 on any protected request drops the token and returns to pairing.
+  // The status line is the hub's answer even if the body never arrives: a
+  // 401 on any protected request drops the token and returns to pairing at
+  // the headers, and a body that can't be read or parsed resolves with data
+  // null (answered, body unavailable), never as no answer.
   function api(method, path, body, opts) {
     opts = opts || {};
     var headers = {};
@@ -66,12 +69,12 @@
     if (opts.signal) init.signal = opts.signal;
     var mySession = session;
     return fetch(path, init).then(function (res) {
+      if (res.status === 401 && opts.auth !== false && mySession === session) {
+        dropToken("The hub no longer accepts this tablet.");
+      }
       return res.text().then(function (raw) {
-        var data = null;
-        try { data = raw ? JSON.parse(raw) : null; } catch (e) { data = null; }
-        if (res.status === 401 && opts.auth !== false && mySession === session) {
-          dropToken("The hub no longer accepts this tablet.");
-        }
+        try { return raw ? JSON.parse(raw) : null; } catch (e) { return null; }
+      }, function () { return null; }).then(function (data) {
         return { status: res.status, data: data };
       });
     }, function () {
