@@ -31,7 +31,7 @@ import threading
 from . import mac_machine
 from .checkout_build import checkout_build
 from .config import DeskConfig
-from .operator import SocketInUse
+from .private_socket import SocketInUse
 from .relay_channels import RelayChannels
 from .relay_link import RelayConnector
 from .run_lock import START_WAIT_SECONDS, RunLockHeld, RunLockUnusable, hold_for_process

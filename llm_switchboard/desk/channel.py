@@ -20,8 +20,8 @@ import time
 
 from . import protocol
 from .config import DeskConfig
-from .peer import read_session_file
 from .protocol import MessageType
+from .session_identity import read_session_file
 from .shallow_json import loads_shallow
 
 VERSION = "0.1.0"

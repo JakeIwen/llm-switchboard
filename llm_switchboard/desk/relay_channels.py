@@ -53,7 +53,7 @@ from .link_protocol import (
 )
 from .link_writer import Frame, LinkWriter, SocketTarget, SubmitRefusal
 from .model import HELLO_TIMEOUT_SECONDS, RECHECK_SECONDS, ReplyRefusal, WriteOutcome, is_request_id
-from .operator import bind_private_socket
+from .private_socket import bind_private_socket
 from .protocol import MessageType
 from .rate_log import RateLog
 from .refusals import Refusal

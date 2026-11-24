@@ -27,8 +27,8 @@ DESK_PI = {
 }
 DESK_SHARED = {
     "__init__", "bounded_read", "channel", "child_process", "cli", "config", "enrollment",
-    "link_proof", "link_protocol", "link_writer", "model", "peer_credentials", "protocol",
-    "refusals", "run_lock", "session_identity", "shallow_json",
+    "link_proof", "link_protocol", "link_writer", "model", "peer_credentials", "private_socket",
+    "protocol", "refusals", "run_lock", "session_identity", "shallow_json",
 }
 DESK_PREFIX = "llm_switchboard.desk."
 
@@ -106,15 +106,10 @@ class DeskDependencyBoundaryTest(unittest.TestCase):
         self.assertFalse({name for name in desk_imports("cli")
                           if name.split(".", 1)[0] in DESK_MAC - {"relay_cli"}})
 
-    def test_mac_desk_does_not_import_pi_desk(self):
-        # The relay uses the socket binder, not the Pi's operator protocol or server.
-        socket_imports = {
-            "relay": {"operator.SocketInUse"},
-            "relay_channels": {"operator.bind_private_socket"},
-        }
-        for module in sorted(DESK_MAC):
+    def test_mac_desk_and_channel_do_not_import_pi_desk(self):
+        for module in sorted(DESK_MAC | {"channel"}):
             with self.subTest(module=module):
-                self.assertFalse({name for name in desk_imports(module) - socket_imports.get(module, set())
+                self.assertFalse({name for name in desk_imports(module)
                                   if name.split(".", 1)[0] in DESK_PI})
 
     def test_desk_runtimes_do_not_import_other_hosts_v1_runtime(self):
