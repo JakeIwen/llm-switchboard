@@ -117,7 +117,7 @@
     var seq = 0;
     var utt = null;          // {id, u, kind, estimate}
     var timers = {};         // TIMER name -> {id, handle}
-    var clock = TM.create(env); // every timer below; each limit is the time it is due (catchUp)
+    var clock = TM.create(env); // every timer below; each limit is the time it is due (heard)
     var fetches = F.create(nextId, env.AbortController, clock, bodyLost); // FETCH kind -> the one in flight
     var settle = fetches.settle, abandon = fetches.abandon;
     var wake = null;         // {id, sentinel}
@@ -184,6 +184,7 @@
 
     // ---- timers -----------------------------------------------------------
 
+    // Returns the clock's handle, the `bound` of a fetch this timer limits.
     function setTimer(name, ms) {
       clearTimer(name);
       var id = nextId();
@@ -193,6 +194,7 @@
         onTimer(name);
       }, ms);
       timers[name] = { id: id, handle: handle };
+      return handle;
     }
 
     function clearTimer(name) {
@@ -227,11 +229,16 @@
     // reducer shows the status until this conversation's own call's
     // answer, if the status was one, settles what the end says (late). A
     // grant request answered so granted nothing, so Start stops waiting.
-    // Limits already due apply first, a 200's too: past its call's own
-    // deadline, the abort then due loses its body.
+    // A call's own limits that passed before its status line apply first
+    // (statusArrived); then a status that silences is applied before any
+    // other overdue timer (heard). A 200's status line establishes nothing:
+    // its body is what is used, or lost (bodyLost).
     function hubStatus(status, call) {
-      clock.catchUp();
-      if (status === 200) return;
+      fetches.statusArrived(call);
+      if (status !== 200) clock.heard(true, function () { gate(status, call); });
+    }
+
+    function gate(status, call) {
       stopClosing();
       fetches.failed(call);
       var kind = fetches.kindOf(call);
@@ -266,8 +273,7 @@
     // nothing, and it silences. A send's own answer, which follows, still
     // settles what became of the prompt (late): delivery unknown.
     function bodyLost() {
-      clock.catchUp();
-      silence(REASON.UNUSABLE);
+      clock.heard(true, function () { silence(REASON.UNUSABLE); });
     }
 
     // Every snapshot the page receives from the hub, whichever call brought
@@ -276,10 +282,14 @@
     // one from an earlier pairing only for the target problem it shows,
     // never as state; and only one that shows the target usable leaves a
     // closing cue playing. The poll's alone can end the wait for an
-    // abandoned grant request, by showing a new hub epoch.
+    // abandoned grant request, by showing a new hub epoch. Only a usable
+    // one waits for the timers already due (heard).
     function snapshot(state, from) {
-      clock.catchUp();
-      from = from || SNAPSHOT_FROM.POLL;
+      var usable = !!state && !(c.dest && L.targetProblem(c.dest, state));
+      clock.heard(!usable, function () { took(state, from || SNAPSHOT_FROM.POLL); });
+    }
+
+    function took(state, from) {
       if (from === SNAPSHOT_FROM.POLL && state && straggler && state.epoch !== straggler.epoch) {
         forgetStraggler(straggler.id);
       }
@@ -301,14 +311,23 @@
       }
     }
 
+    // A start step or the ticket: its fetch, limited by the step timer too,
+    // which it names as its `bound` (conversation_fetches.js, lapse).
+    function step(kind, call, on) {
+      var bound = setTimer(TIMER.STEP, LIMITS.STEP_MS);
+      return fetches.run(kind, Object.assign({ bound: bound }, SPEC[kind]), call, on);
+    }
+
     function fetchStartSnapshot() {
       var askedIn = pairing;
-      setTimer(TIMER.STEP, LIMITS.STEP_MS);
-      var f = fetches.run(FETCH.SNAPSHOT, SPEC[FETCH.SNAPSHOT], function (o) {
-        return api("GET", PATH.STATE, undefined, o);
-      });
-      var id = f.id;
-      f.answer.then(function (r) {
+      var id = step(FETCH.SNAPSHOT, function (o) { return api("GET", PATH.STATE, undefined, o); }, {
+        fails: function (r) { return !(r.status === 200 && r.data) || !!L.targetProblem(c.dest, r.data); },
+        answer: answered, none: function () {
+          if (!settle(FETCH.SNAPSHOT, id)) return;
+          clearTimer(TIMER.STEP);
+          dispatch({ type: EV.FAIL, reason: REASON.HUB_UNREACHABLE });
+        } });
+      function answered(r) {
         var ev = r.status === 200 && r.data ? { type: EV.SNAPSHOT_FETCHED, snapshot: r.data }
           : { type: EV.FAIL, reason: REASON.HUB_UNREACHABLE };
         if (!settle(FETCH.SNAPSHOT, id)) {
@@ -319,11 +338,7 @@
         }
         clearTimer(TIMER.STEP);
         dispatch(ev);
-      }, function () {
-        if (!settle(FETCH.SNAPSHOT, id)) return;
-        clearTimer(TIMER.STEP);
-        dispatch({ type: EV.FAIL, reason: REASON.HUB_UNREACHABLE });
-      });
+      }
     }
 
     function takeWakeLock() {
@@ -331,26 +346,30 @@
       var id = fetches.begin(FETCH.WAKE, SPEC[FETCH.WAKE]);
       setTimer(TIMER.STEP, LIMITS.STEP_MS);
       Promise.resolve().then(function () { return env.wakeLock.request("screen"); }).then(function (sentinel) {
-        clock.catchUp();
-        if (!settle(FETCH.WAKE, id)) {
-          releaseSentinel(sentinel);
-          return;
-        }
-        clearTimer(TIMER.STEP);
-        var wid = nextId();
-        wake = { id: wid, sentinel: sentinel };
-        sentinel.addEventListener("release", function () {
-          if (!wake || wake.id !== wid) return;
-          wake = null;
-          dispatch({ type: EV.END, reason: REASON.WAKE });
-        });
-        dispatch({ type: EV.WAKE_OK });
+        clock.heard(false, function () { woke(id, sentinel); });
       }, function () {
-        clock.catchUp();
-        if (!settle(FETCH.WAKE, id)) return;
-        clearTimer(TIMER.STEP);
-        dispatch({ type: EV.FAIL, reason: REASON.NO_WAKE });
+        clock.heard(true, function () {
+          if (!settle(FETCH.WAKE, id)) return;
+          clearTimer(TIMER.STEP);
+          dispatch({ type: EV.FAIL, reason: REASON.NO_WAKE });
+        });
       });
+    }
+
+    function woke(id, sentinel) {
+      if (!settle(FETCH.WAKE, id)) {
+        releaseSentinel(sentinel);
+        return;
+      }
+      clearTimer(TIMER.STEP);
+      var wid = nextId();
+      wake = { id: wid, sentinel: sentinel };
+      sentinel.addEventListener("release", function () {
+        if (!wake || wake.id !== wid) return;
+        wake = null;
+        dispatch({ type: EV.END, reason: REASON.WAKE });
+      });
+      dispatch({ type: EV.WAKE_OK });
     }
 
     function releaseSentinel(sentinel) {
@@ -370,12 +389,11 @@
     function requestGrant() {
       var startedAt = env.now();
       var d = c.dest;
-      setTimer(TIMER.STEP, LIMITS.STEP_MS);
-      var f = fetches.run(FETCH.GRANT, SPEC[FETCH.GRANT], function (o) {
+      var id = step(FETCH.GRANT, function (o) {
         return api("POST", PATH.GRANT, { session_id: d.session_id, generation: d.generation, epoch: d.epoch }, o);
-      });
-      var id = f.id;
-      f.answer.then(function (r) {
+      }, { fails: function (r) { return !A.grantOf(r) || !fetches.isCurrent(FETCH.GRANT, id); },
+        answer: granted, none: grantUnanswered });
+      function granted(r) {
         var got = A.grantOf(r);
         var refused = { type: EV.FAIL, reason: REASON.REFUSED, detail: detail(r) };
         // An abandoned request's 200 may carry a grant, which replaced
@@ -391,7 +409,8 @@
         setTimer(TIMER.BEAT, LIMITS.BEAT_MS);
         dispatch({ type: EV.GRANT_OK, startedAt: startedAt,
           ctx: { selectedId: deps.selectedId(), visible: deps.visible() } });
-      }, function () {
+      }
+      function grantUnanswered() {
         // No response is no proof the hub never read the request: the
         // acquisition is unknown, like one the page gave up on, so it
         // stays a straggler whether this or the step deadline came first.
@@ -399,7 +418,7 @@
         clearTimer(TIMER.STEP);
         abandonGrant();
         dispatch({ type: EV.FAIL, reason: REASON.HUB_UNREACHABLE });
-      });
+      }
     }
 
     // The grant request is left open when the conversation gives up on it,
@@ -442,10 +461,11 @@
       if (fetches.get(FETCH.BEAT) || !grant) return;
       var startedAt = env.now();
       var named = grant;
-      setTimer(TIMER.BEAT_ABORT, LIMITS.BEAT_ABORT_MS);
-      var f = fetches.run(FETCH.BEAT, SPEC[FETCH.BEAT], function (o) { return api("POST", PATH.BEAT, { grant: named }, o); });
-      var id = f.id;
-      f.answer.then(function (r) {
+      var spec = Object.assign({ bound: setTimer(TIMER.BEAT_ABORT, LIMITS.BEAT_ABORT_MS) }, SPEC[FETCH.BEAT]);
+      var id = fetches.run(FETCH.BEAT, spec, function (o) { return api("POST", PATH.BEAT, { grant: named }, o); }, {
+        fails: function (r) { return !A.renewed(r, named); }, answer: beaten,
+        none: function () { if (settle(FETCH.BEAT, id)) clearTimer(TIMER.BEAT_ABORT); } });
+      function beaten(r) {
         var ok = A.renewed(r, named);
         // A beat given up on can still answer: it renews nothing, and a 200
         // that renews nothing silences the page (one whose body was lost
@@ -457,9 +477,7 @@
         clearTimer(TIMER.BEAT_ABORT);
         if (ok) beatOk(startedAt);
         else silence(REASON.GRANT_LOST);
-      }, function () {
-        if (settle(FETCH.BEAT, id)) clearTimer(TIMER.BEAT_ABORT);
-      });
+      }
     }
 
     function beatOk(startedAt) {
@@ -475,12 +493,14 @@
 
     function requestTicket() {
       var d = c.dest;
-      setTimer(TIMER.STEP, LIMITS.STEP_MS);
-      var f = fetches.run(FETCH.TICKET, SPEC[FETCH.TICKET], function (o) {
+      var id = step(FETCH.TICKET, function (o) {
         return api("POST", PATH.TICKET, { session_id: d.session_id, generation: d.generation, epoch: d.epoch }, o);
-      });
-      var id = f.id;
-      f.answer.then(function (r) {
+      }, { fails: function (r) { return !A.ticketOf(r); }, answer: ticketed, none: function () {
+        if (!settle(FETCH.TICKET, id)) return;
+        clearTimer(TIMER.STEP);
+        dispatch({ type: EV.TICKET_FAIL, reason: UNREACHABLE });
+      } });
+      function ticketed(r) {
         var ticket = A.ticketOf(r);
         var ev = ticket ? { type: EV.TICKET_OK, ticket: ticket } : { type: EV.TICKET_FAIL, reason: detail(r) };
         if (!settle(FETCH.TICKET, id)) {
@@ -489,11 +509,7 @@
         }
         clearTimer(TIMER.STEP);
         dispatch(ev);
-      }, function () {
-        if (!settle(FETCH.TICKET, id)) return;
-        clearTimer(TIMER.STEP);
-        dispatch({ type: EV.TICKET_FAIL, reason: UNREACHABLE });
-      });
+      }
     }
 
     // Unknown is never retried; a refusal before handoff is final. The
@@ -507,16 +523,14 @@
         if (settle(FETCH.SEND, id) || fetches.takeLate(id).send) dispatch({ type: EV.SEND_UNKNOWN });
       }
       var body = { ticket: ticket, text: text, confirm: L.CONFIRM.VOICE, grant: grant };
-      var f = fetches.run(FETCH.SEND, Object.assign({ onDeadline: unanswered }, SPEC[FETCH.SEND]), function (o) {
+      id = fetches.run(FETCH.SEND, Object.assign({ onDeadline: unanswered }, SPEC[FETCH.SEND]), function (o) {
         return api("POST", PATH.SEND, body, o);
-      });
-      id = f.id;
-      f.answer.then(function (r) {
+      }, { fails: function (r) { return sendEvent(r).type !== EV.SEND_OK; }, answer: function (r) {
         var ev = sendEvent(r);
         if (settle(FETCH.SEND, id)) dispatch(ev);
         else late(id, ev, r);
         if (r.status === 200 && ev.type !== EV.SEND_OK) silence(REASON.UNUSABLE);
-      }, unanswered);
+      }, none: unanswered });
     }
 
     // ---- speech -----------------------------------------------------------

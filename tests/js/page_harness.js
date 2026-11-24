@@ -43,7 +43,8 @@ function page(opts) {
   opts = opts || {};
   // honorAbort false: an abort the page issues is lost, as when the answer
   // was already on its way, and the call stays open for the test to answer.
-  const h = { t: 0, handle: 0, timers: [], calls: [], said: [], recs: [], sentinels: [], honorAbort: true };
+  // deaf: a recognizer started now never reports audiostart (a hung start).
+  const h = { t: 0, handle: 0, timers: [], calls: [], said: [], recs: [], sentinels: [], honorAbort: true, deaf: false };
   const byId = {};
   for (const m of HTML.matchAll(/<(\w+)\s([^>]*?)\bid="([^"]+)"([^>]*)>/g)) {
     const el = new El(m[1]);
@@ -85,7 +86,10 @@ function page(opts) {
   };
   class Recognition {
     constructor() { this.starts = 0; this.aborts = 0; h.recs.push(this); }
-    start() { this.starts++; queueMicrotask(() => this.onaudiostart && this.onaudiostart({})); }
+    start() {
+      this.starts++;
+      if (!h.deaf) queueMicrotask(() => this.onaudiostart && this.onaudiostart({}));
+    }
     abort() { this.aborts++; }
     hear(text) {
       const result = [{ transcript: text }];
@@ -96,9 +100,10 @@ function page(opts) {
   function fetch(url, init) {
     return new Promise((resolve, reject) => {
       const call = { path: url, method: init.method, body: init.body ? JSON.parse(init.body) : undefined,
-        auth: init.headers.Authorization || null, done: false };
+        auth: init.headers.Authorization || null, done: false, at: h.t };
       call.answer = (status, data) => {
         call.done = true;
+        call.sent = data;
         resolve({ status, text: () => Promise.resolve(data === undefined ? "" : JSON.stringify(data)) });
       };
       // The status line arrives; the body read waits until `arrive(data)`
@@ -140,7 +145,7 @@ function page(opts) {
       h.sentinels.push(s);
       return Promise.resolve(s);
     } } },
-    setTimeout: (fn, ms) => { const id = ++h.handle; h.timers.push({ id, at: h.t + (ms || 0), fn }); return id; },
+    setTimeout: (fn, ms) => { const id = ++h.handle; h.timers.push({ id, at: h.t + (ms || 0), ms, fn }); return id; },
     clearTimeout: (id) => { h.timers = h.timers.filter((x) => x.id !== id); },
     addEventListener: (name, fn) => { (docListeners["window:" + name] = docListeners["window:" + name] || []).push(fn); }
   };
@@ -181,6 +186,15 @@ function page(opts) {
     await settle();
   };
   h.fire = async (name) => { (docListeners[name] || []).forEach((fn) => fn({})); await settle(); };
+  // When the newest timer still pending that was set for `ms` is due.
+  h.dueOf = (ms) => {
+    const t = h.timers.filter((x) => x.ms === ms).sort((a, b) => b.id - a.id)[0];
+    assert.ok(t, "no timer of " + ms + " ms is pending");
+    return t.at;
+  };
+  // What the page has started so far: recognizers made, start() calls on
+  // them, and utterances it submitted to speech synthesis.
+  h.counts = () => ({ recs: h.recs.length, starts: h.recs.reduce((n, r) => n + r.starts, 0), said: h.said.length });
   h.state = () => h.$("conv-state").textContent;
   h.utt = () => h.said[h.said.length - 1];
   h.rec = () => h.recs[h.recs.length - 1];

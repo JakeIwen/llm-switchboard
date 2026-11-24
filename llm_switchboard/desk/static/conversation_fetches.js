@@ -5,8 +5,9 @@
 // end, two abandoned fetches may still be heard (`late`): the one whose
 // status line ended the conversation, and the send POST the end left open.
 // Each fetch keeps its own deadline, whatever becomes of the conversation,
-// as an absolute time: an answer is used only after every deadline already
-// due has been applied (conversation_timers.js, catchUp).
+// as an absolute time: an answer that came after it finds it applied, and
+// every answer enters the controller in the order heard() gives it
+// (conversation_timers.js).
 // No I/O of its own, so node can load it; the controller's tests in
 // tests/js/ drive it.
 (function (root) {
@@ -41,12 +42,15 @@
     var live = {};           // id -> every fetch whose answer hasn't settled yet
     var late = { cause: null, send: null };
 
-    // spec: {abort, ms, onDeadline}. `abort`: the conversation aborts it when
-    // it gives up on it. `ms`: a hub call's own limit, kept whatever becomes
-    // of the conversation (deadline below); the wake lock has none.
+    // spec: {abort, ms, onDeadline, bound}. `abort`: the conversation aborts
+    // it when it gives up on it. `ms`: a hub call's own limit, kept whatever
+    // becomes of the conversation (deadline below); the wake lock has none.
+    // `bound`: the controller's timer that limits the same step, if any
+    // (its clock handle), applied with the deadline to a late answer (lapse).
     function begin(kind, spec) {
       var f = { id: nextId(), ctl: AbortCtl ? new AbortCtl() : null, abortable: !!spec.abort, failed: false,
-        expired: false, cutLate: false, timer: null, onDeadline: spec.onDeadline || null };
+        expired: false, lapsed: false, cutLate: false, timer: null, bound: spec.bound || null,
+        onDeadline: spec.onDeadline || null };
       current[kind] = f;
       if (spec.ms) {
         f.timer = clock.setTimeout(function (late) { deadline(f, late); }, spec.ms);
@@ -55,31 +59,48 @@
       return f.id;
     }
 
-    // Issues fetch `kind`: `call(opts)` makes its api call. Returns {id,
-    // answer}, `answer` being that call's promise, settled only once every
-    // deadline due by then has been applied, this one's included; the
-    // deadline is disarmed once it settles, body read and all.
-    function run(kind, spec, call) {
+    // Issues fetch `kind`: `call(opts)` makes its api call, and returns its
+    // id. Its answer goes to `on.answer(r)`, or `on.none()` when no response
+    // came, once the call's own limits that had passed by then are applied
+    // (lapse), and through heard(): it silences when the call's limit had
+    // passed before it, or `on.fails(r)`, the call's own success check,
+    // holds; no answer at all silences. The deadline is disarmed once the
+    // answer settles, body read and all.
+    function run(kind, spec, call, on) {
       var id = begin(kind, spec);
       var f = live[id];
-      var answer = call(opts(kind)).then(function (r) {
-        clock.catchUp();
+      call(opts(kind)).then(function (r) {
+        lapse(f);
         done(f);
-        return f.cutLate && r.data !== null && r.data !== undefined ? cutOff(r) : r;
-      }, function (e) {
-        clock.catchUp();
+        var got = f.cutLate && r.data !== null && r.data !== undefined ? cutOff(r) : r;
+        clock.heard(f.lapsed || on.fails(got), function () { on.answer(got); });
+      }, function () {
+        lapse(f);
         done(f);
-        throw e;
+        clock.heard(true, on.none);
       });
-      return { id: id, answer: answer };
+      return id;
+    }
+
+    // An answer to fetch `f` that came after its own limits: they apply
+    // now, as their timers would have before it, and no other overdue timer
+    // runs (conversation_timers.js, lapse).
+    function lapse(f) {
+      if (f.timer !== null) clock.lapse(f.bound !== null ? [f.bound, f.timer] : [f.timer]);
+    }
+
+    // The status line of call `id` arrived: its own limits, when they had
+    // passed before it, apply first, so its body is treated as cut off.
+    function statusArrived(id) {
+      if (live[id]) lapse(live[id]);
     }
 
     // A body that arrived after its deadline, which was applied only once it
-    // had (catchUp): what the abort at the deadline would have left, the
-    // status with no body, and for a 200 a lost body (bodyLost). A body the
-    // read had already lost was reported where it was lost. One that arrives
-    // after an abort made on time was read before that abort landed, and is
-    // the answer it is.
+    // had (lapse, or another event's catchUp): what the abort at the
+    // deadline would have left, the status with no body, and for a 200 a
+    // lost body (bodyLost). A body the read had already lost was reported
+    // where it was lost. One that arrives after an abort made on time was
+    // read before that abort landed, and is the answer it is.
     function cutOff(r) {
       if (r.status === 200) bodyLost();
       return { status: r.status, data: null };
@@ -99,6 +120,7 @@
     function deadline(f, late) {
       f.timer = null;
       f.expired = true;
+      f.lapsed = !!late;
       if (f.onDeadline) f.onDeadline();
       if (!(f.abortable || f.failed)) return;
       f.cutLate = !!late;
@@ -158,8 +180,8 @@
     }
 
     return {
-      begin: begin, run: run, failed: failed, isCurrent: isCurrent, kindOf: kindOf, settle: settle,
-      abandon: abandon, takeLate: takeLate,
+      begin: begin, run: run, statusArrived: statusArrived, failed: failed, isCurrent: isCurrent, kindOf: kindOf,
+      settle: settle, abandon: abandon, takeLate: takeLate,
       get: function (kind) { return current[kind] || null; },
       kinds: function () { return Object.keys(current); },
       // The fetch whose status line is ending the conversation; the send POST an end left open.
