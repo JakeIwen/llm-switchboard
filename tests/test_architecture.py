@@ -53,7 +53,7 @@ class DependencyBoundaryTest(unittest.TestCase):
         }
         pi_modules = {
             "host_authorize", "host_exchange", "host_import", "host_queue",
-            "host_web", "hosts",
+            "host_web", "hosts", "ssh_authorized_keys",
         }
         for module in mac_modules:
             with self.subTest(side="mac", module=module):

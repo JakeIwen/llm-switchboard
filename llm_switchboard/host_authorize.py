@@ -1,14 +1,12 @@
 """Install one restricted public key, preserving every unrelated authorized_keys line."""
 
 import base64
-import os
 from pathlib import Path
 import shlex
 import struct
-import tempfile
 
+from . import ssh_authorized_keys
 from .host_protocol import host_name
-from .json_file import JsonFile
 
 KEY_TYPES = {"ssh-ed25519", "ssh-rsa", "ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521"}
 
@@ -57,26 +55,7 @@ def authorize(host: str, raw: bytes, home: Path | None = None, executable: Path 
     command = command.replace("\\", "\\\\").replace('"', '\\"')
     marker = f"llm-switchboard-host:{host}".encode()
     new = f'restrict,command="{command}" {kind} {blob} '.encode() + marker + b"\n"
-    ssh = home / ".ssh"
-    ssh.mkdir(mode=0o700, parents=True, exist_ok=True)
-    path = ssh / "authorized_keys"
-    if path.is_symlink():
-        raise ValueError("authorized_keys must not be a symlink")
-    with JsonFile(path).locked():
-        original = path.read_bytes() if path.exists() else b""
-        lines = original.splitlines(keepends=True)
-        # Only our final comment is a marker; a substring in someone else's line isn't.
-        kept = [line for line in lines if not line.rstrip(b"\r\n").endswith(b" " + marker)]
-        content = b"".join(kept)
-        if content and not content.endswith(b"\n"):
-            content += b"\n"
-        fd, tmp = tempfile.mkstemp(dir=ssh, prefix=".authorized_keys-")
-        try:
-            with os.fdopen(fd, "wb") as f:
-                f.write(content + new)
-                f.flush()
-                os.fsync(f.fileno())
-            os.replace(tmp, path)
-        finally:
-            Path(tmp).unlink(missing_ok=True)
+    path = ssh_authorized_keys.authorized_keys_path(home)
+    with ssh_authorized_keys.locked(path):
+        ssh_authorized_keys.replace_marked_line(path, marker, new)
     return path
