@@ -20,8 +20,12 @@ import struct
 import sys
 from typing import Callable
 
+from .bounded_read import read_bounded
 from .config import DeskConfig
 from .model import CHANNEL_START_PATTERN, ChannelProcess
+
+# Claude's session files are a few hundred bytes.
+MAX_SESSION_FILE_BYTES = 64 * 1024
 
 
 @dataclass(frozen=True)
@@ -144,8 +148,13 @@ def process_presence(proc_dir: Path, pid: int, start: str) -> ChannelProcess:
 
 
 def read_session_file(sessions_dir: Path, pid: int) -> dict | None:
+    """The session file's object, or None when it is missing, unreadable,
+    not a regular file (a FIFO, a symlink), over `MAX_SESSION_FILE_BYTES`
+    or not a JSON object. The channel's final guard runs this under its
+    stdout lock, so the read must never block or grow with the file."""
     try:
-        entry = json.loads((Path(sessions_dir) / f"{pid}.json").read_text())
+        data = read_bounded(Path(sessions_dir) / f"{pid}.json", MAX_SESSION_FILE_BYTES)
+        entry = json.loads(data) if data is not None else None
     except (OSError, ValueError, RecursionError):
         return None
     return entry if isinstance(entry, dict) else None

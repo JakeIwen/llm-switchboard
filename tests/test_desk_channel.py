@@ -284,6 +284,16 @@ class ChannelServerTest(unittest.TestCase):
                 self.channels, self.hubs = [], []
                 self.config.channel_socket.unlink(missing_ok=True)
 
+    def test_session_file_fifo_does_not_block_channel_guard(self):
+        # A FIFO with no writer in the session file's place: an open that
+        # waited for a writer would hold the guard (and the stdout lock)
+        # forever, so the event would be neither written nor reported.
+        _, channel, conn = self.connected()
+        path = self.config.claude_sessions_dir / f"{os.getpid()}.json"
+        path.unlink()
+        os.mkfifo(path)
+        self.assert_event_undeliverable(conn, channel, "r-1")
+
     def test_pings_are_answered_without_reaching_claude(self):
         _, channel, conn = self.connected()
         conn.send(MessageType.PING)

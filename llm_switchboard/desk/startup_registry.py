@@ -14,10 +14,8 @@ import json
 from pathlib import Path
 
 from .bounded_read import read_bounded
+from .peer import MAX_SESSION_FILE_BYTES
 from .startup_identity import StartupRefusal
-
-# Claude's entries are a few hundred bytes.
-MAX_SESSION_FILE_BYTES = 64 * 1024
 
 
 def read_session_entry(sessions_dir: Path, pid: int) -> tuple[bool, dict | None] | StartupRefusal:

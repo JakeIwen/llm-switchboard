@@ -9,7 +9,9 @@ import tempfile
 import unittest
 
 from llm_switchboard.desk.config import DeskConfig
-from llm_switchboard.desk.peer import PeerIdentity, PeerRefused, recheck, socket_peer_pid, verify_peer
+from llm_switchboard.desk.peer import (
+    MAX_SESSION_FILE_BYTES, PeerIdentity, PeerRefused, read_session_file, recheck, socket_peer_pid, verify_peer,
+)
 
 CHANNEL_PID, CLAUDE_PID, SESSION = 4001, 3001, "sess-aaa"
 CHANNEL_START, CLAUDE_START = "900100", "800200"
@@ -207,6 +209,42 @@ class RecheckTest(unittest.TestCase):
     def test_unenrolled(self):
         self.system.enrolled.clear()
         self.assertEqual(self.system.recheck(self.identity), "session is not enrolled")
+
+
+class SessionFileReadTest(unittest.TestCase):
+    """`read_session_file` is bounded: anything that isn't a regular file of
+    at most MAX_SESSION_FILE_BYTES reads as no session file, so the hub
+    refuses the channel at hello and drops it at recheck."""
+
+    def setUp(self):
+        self.system = FakeSystem()
+        self.addCleanup(shutil.rmtree, self.system.root, True)
+        self.path = self.system.config.claude_sessions_dir / f"{CLAUDE_PID}.json"
+        self.identity = self.system.verify()
+
+    def assert_reads_none_everywhere(self):
+        self.assertIsNone(read_session_file(self.system.config.claude_sessions_dir, CLAUDE_PID))
+        with self.assertRaises(PeerRefused) as caught:
+            self.system.verify()
+        self.assertIn("no session file", caught.exception.args[0])
+        self.assertIn("session file", self.system.recheck(self.identity))
+
+    def test_oversize_session_file_reads_none(self):
+        entry = {"pid": CLAUDE_PID, "procStart": CLAUDE_START, "sessionId": SESSION}
+        entry["pad"] = "x" * (MAX_SESSION_FILE_BYTES - len(json.dumps(entry)) - len(', "pad": ""'))
+        self.path.write_text(json.dumps(entry))
+        self.assertEqual(self.path.stat().st_size, MAX_SESSION_FILE_BYTES)
+        # At the cap it is still read; one byte over, it is not.
+        self.assertEqual(read_session_file(self.system.config.claude_sessions_dir, CLAUDE_PID)["sessionId"], SESSION)
+        self.path.write_text(json.dumps(entry) + " ")
+        self.assert_reads_none_everywhere()
+
+    def test_session_file_symlink_reads_none(self):
+        target = self.system.root / "elsewhere.json"
+        target.write_bytes(self.path.read_bytes())
+        self.path.unlink()
+        self.path.symlink_to(target)
+        self.assert_reads_none_everywhere()
 
 
 class SocketPeerPidTest(unittest.TestCase):
