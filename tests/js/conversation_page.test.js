@@ -37,21 +37,33 @@ test("a Start tap stops one-shot dictation", async () => {
   assert.notEqual(h.rec(), dictation, "the conversation opens its own recognizer");
 });
 
-test("selecting another target ends the conversation, and its closing cue is not cut", async () => {
+test("selecting another target ends the conversation silently, and doesn't cut a closing cue", async () => {
   const two = () => snap({ targets: [target("s1"), target("s2")] });
   const h = await paired(two());
   h.target("s1").click();
   await converse(h, two());
-  const cancels = h.synth.cancels;
+  const said = h.said.length;
   h.target("s2").click();
   await settle();
   assert.equal(h.state(), ended(REASON.RETARGET));
-  assert.equal(h.utt().text, ended(REASON.RETARGET));
-  assert.equal(h.synth.cancels, cancels, "the page cancelled the controller's closing cue");
-  assert.deepEqual(releases(h), []);
-  h.utt().fire("end");
-  await settle();
+  assert.equal(h.said.length, said);
   assert.deepEqual(releases(h), [G.g1]);
+
+  // A selection during the cue End brought leaves the cue to the controller.
+  const e = await paired(two());
+  e.target("s1").click();
+  await converse(e, two());
+  e.$("conv-end").click();
+  await settle();
+  assert.equal(e.utt().text, ended(REASON.END_TAPPED));
+  const cancels = e.synth.cancels;
+  e.target("s2").click();
+  await settle();
+  assert.equal(e.synth.cancels, cancels, "the page cancelled the controller's closing cue");
+  assert.deepEqual(releases(e), []);
+  e.utt().fire("end");
+  await settle();
+  assert.deepEqual(releases(e), [G.g1]);
 });
 
 test("hiding the page ends the conversation without a cue", async () => {

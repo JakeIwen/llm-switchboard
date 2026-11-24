@@ -1,19 +1,17 @@
-// The controller's closing cue after the hub answered a turn's ticket or
-// send with something other than success: only a refusal that keeps
-// ownership speaks; an answer the page can't use is as unknown as a
-// refusal it has never seen. Run by tests/test_desk_conversation_js.py
-// with `node --test`.
+// What the controller makes of the hub's answers to a conversation's
+// calls when they are not their call's success, or never come: the
+// conversation ends silently and the grant is let go, an answer the page
+// can't use included; a send's answer still settles what the screen says.
+// Run by tests/test_desk_conversation_js.py with `node --test`.
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { G } = require("./grant_ids.js");
 const L = require("../../llm_switchboard/desk/static/conversation_logic.js");
 const C = require("../../llm_switchboard/desk/static/conversation.js");
-const { REASON, CUE, LIMITS } = L;
+const { REASON, LIMITS } = L;
 const { PATH } = C;
-const { DEST, flush, snap, harness, listening, texts, releases } = require("./controller_harness.js");
-
-const cue = (reason) => [CUE.ENDED + ": " + reason + "."];
+const { DEST, flush, snap, harness, listening, releases } = require("./controller_harness.js");
 
 // Through "send it"; with `posted`, the ticket is answered and the send POST is out.
 async function turn(posted) {
@@ -24,45 +22,47 @@ async function turn(posted) {
   return h;
 }
 
-test("a 200 ticket answer without a ticket ends the conversation as lost, with no cue", async () => {
+test("a 200 ticket answer without a ticket ends the conversation silently", async () => {
   for (const data of [{}, null, { ticket: 7 }]) {
     const h = await turn(false);
     await h.answer(PATH.TICKET, 200, data);
     assert.equal(h.view().reason, L.withDetail(REASON.NOT_SENT, "HTTP 200"), JSON.stringify(data));
-    assert.equal(h.view().lost, true, JSON.stringify(data));
     assert.equal(h.said.length, 0, JSON.stringify(data));
     assert.deepEqual(releases(h), [G.g1], JSON.stringify(data));
   }
 });
 
-test("a 200 send answer the page can't use ends the conversation as lost, with no cue", async () => {
+test("a 200 send answer the page can't use ends the conversation silently", async () => {
   for (const data of [{}, null, { request_id: "r1", state: "queued" }, { state: "handed_off" }]) {
     const h = await turn(true);
     await h.answer(PATH.SEND, 200, data);
     assert.equal(h.view().reason, REASON.UNKNOWN, JSON.stringify(data));
-    assert.equal(h.view().lost, true, JSON.stringify(data));
     assert.equal(h.said.length, 0, JSON.stringify(data));
     assert.deepEqual(releases(h), [G.g1], JSON.stringify(data));
   }
 });
 
-test("a refusal that keeps ownership still speaks, and no answer at all is left to freshness", async () => {
-  for (const posted of [false, true]) {
-    const k = await turn(posted);
-    await k.answer(posted ? PATH.SEND : PATH.TICKET, 409, { error: "busy" });
-    assert.equal(k.view().lost, false);
-    assert.deepEqual(texts(k), cue(L.withDetail(REASON.NOT_SENT, "busy")));
-  }
+test("a ticket or send that gets no answer ends the conversation silently, the grant let go at once", async () => {
+  const silent = (h, reason, what) => {
+    assert.equal(h.view().reason, reason, what);
+    assert.equal(h.said.length, 0, what);
+    assert.equal(h.synth.speaking, false, what);
+    assert.deepEqual(releases(h), [G.g1], what);
+  };
   const t = await turn(false);
   t.pending(PATH.TICKET)[0].fail();
   await flush();
-  assert.equal(t.view().lost, false);
-  assert.deepEqual(texts(t), cue(L.withDetail(REASON.NOT_SENT, "the hub could not be reached")));
+  silent(t, L.withDetail(REASON.NOT_SENT, "the hub could not be reached"), "ticket failed");
+  const tt = await turn(false);
+  await tt.alive(LIMITS.STEP_MS);
+  silent(tt, L.withDetail(REASON.NOT_SENT, "the hub could not be reached"), "ticket timed out");
   const s = await turn(true);
   s.pending(PATH.SEND)[0].fail();
   await flush();
-  assert.equal(s.view().lost, false);
-  assert.deepEqual(texts(s), cue(REASON.UNKNOWN));
+  silent(s, REASON.UNKNOWN, "send failed");
+  const sd = await turn(true);
+  await sd.alive(LIMITS.SEND_DEADLINE_MS);
+  silent(sd, REASON.UNKNOWN, "send reached its deadline");
 });
 
 test("an unusable 200 for a send an end left open settles nothing and speaks nothing", async () => {
@@ -124,14 +124,13 @@ test("an acquisition's 200 without a grant in the hub's shape fails silently and
   }
 });
 
-test("a beat's 200 that doesn't name the grant beaten renews nothing: the conversation ends as lost", async () => {
+test("a beat's 200 that doesn't name the grant beaten renews nothing: the conversation ends silently", async () => {
   for (const data of [null, {}, { grant: G.g2, expires_in: 15 }]) {
     const h = await listening(harness());
     await h.advance(LIMITS.BEAT_MS);
     await h.answer(PATH.BEAT, 200, data);
     assert.equal(h.phase(), L.PHASE.ENDED, JSON.stringify(data));
     assert.equal(h.view().reason, REASON.GRANT_LOST, JSON.stringify(data));
-    assert.equal(h.view().lost, true, JSON.stringify(data));
     assert.equal(h.said.length, 0, JSON.stringify(data));
     assert.deepEqual(releases(h), [G.g1], JSON.stringify(data));
   }

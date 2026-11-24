@@ -1,9 +1,10 @@
 // What the hub's answers to a conversation's calls establish, for the
-// controller (conversation.js): the reason an answer shows, the refusal its
-// words make, whether a grant or a beat succeeded, and a send's answer as a
-// reducer event, including whether a refusal proves the prompt was not
-// sent. Pure, so node can
-// load it; the controller's tests in tests/js/ drive it.
+// controller (conversation.js): the reason an answer shows, whether a
+// grant, a beat or a ticket succeeded, and a send's answer as a reducer
+// event, including whether a refusal proves the prompt was not sent. None
+// of them permits speech: an answer is either its call's validated
+// success or something that silences the page. Pure, so node can load it;
+// the controller's tests in tests/js/ drive it.
 (function (root) {
   "use strict";
 
@@ -16,8 +17,8 @@
 
   // The send refusals that prove nothing was handed off: refusals.py's
   // NOT_SENT (`Delivery.NOT_SENT`), which tests/test_desk_conversation_js.py
-  // holds this list equal to. Whether the page may speak after one is a
-  // separate question, conversation_logic.js's OWNERSHIP_KEPT.
+  // holds this list equal to. It decides only what the screen says; the
+  // page speaks after none of them.
   var NOT_SENT = Object.freeze([
     "ambiguous", "bad confirm", "bad json", "bad request", "bad ticket", "body too large", "busy",
     "channel identity unusable; not sent", "content type must be application/json", "control character",
@@ -34,8 +35,7 @@
   }
 
   // The hub's refusal in an answer that is not a success: its words, or ""
-  // when it gave none (a 200 the page can't use among them), which the
-  // reducer judges as a refusal it doesn't know.
+  // when it gave none (a 200 the page can't use among them).
   function refusalOf(r) {
     return r && r.data && typeof r.data.error === "string" ? r.data.error : "";
   }
@@ -48,9 +48,15 @@
     return typeof g === "string" && L.GRANT_ID.test(g) ? g : null;
   }
 
-  // and a beat renews only the very grant it named.
+  // a beat renews only the very grant it named;
   function renewed(r, grant) {
     return r.status === 200 && !!r.data && r.data.grant === grant;
+  }
+
+  // and a ticket is a 200 naming one.
+  function ticketOf(r) {
+    var t = r.status === 200 && r.data ? r.data.ticket : null;
+    return typeof t === "string" ? t : null;
   }
 
   // A send answer proves nothing was handed off when it is a 401 (the token
@@ -64,13 +70,11 @@
   function sendEvent(r) {
     var k = D.classifySend(r);
     var type = SEND_EVENT[k.outcome] || (notSent(r) ? EV.SEND_REFUSED : EV.SEND_UNKNOWN);
-    var ev = { type: type, request_id: k.request_id, state: r.data && r.data.state, reason: detail(r) };
-    if (ev.type !== EV.SEND_OK) ev.refusal = refusalOf(r);
-    return ev;
+    return { type: type, request_id: k.request_id, state: r.data && r.data.state, reason: detail(r) };
   }
 
   var api = {
-    NOT_SENT: NOT_SENT, detail: detail, refusalOf: refusalOf, grantOf: grantOf, renewed: renewed, sendEvent: sendEvent
+    NOT_SENT: NOT_SENT, detail: detail, grantOf: grantOf, renewed: renewed, ticketOf: ticketOf, sendEvent: sendEvent
   };
   root.DeskConversationAnswers = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;

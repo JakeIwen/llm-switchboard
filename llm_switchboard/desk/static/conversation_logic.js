@@ -24,14 +24,17 @@
     "read it back": COMMAND.READBACK, "stop listening": COMMAND.STOP
   });
 
-  // The hub's refusals of a ticket or a send that leave this page's sound
-  // slot intact (refusals.py, Ownership.INTACT): the hub gives each only
-  // after checking, in the same call, the epoch, the target's one
-  // registration at the frozen generation and, on a send, the grant. Any
-  // other refusal, one this page has never seen included, may mean another
-  // page owns the slot now. tests/test_desk_conversation_js.py checks this
-  // equals the hub's set and drives the hub into each class.
-  var OWNERSHIP_KEPT = Object.freeze(["busy", "ticket table full", "too many outstanding requests"]);
+  // The ends the page decides by itself, the only ones its closing cue may
+  // follow (the controller adds that the grant is held and fresh, the page
+  // visible, the voice there and nothing cut off). Every other end is
+  // silent, whatever brought it: what the hub answers, shows or fails to
+  // answer can only stop this page speaking, never permit it, since another
+  // page may own the sound slot by then. A reason added to REASON is silent
+  // until it is added here.
+  var SPOKEN_ENDS = Object.freeze([
+    REASON.STOPPED, REASON.END_TAPPED, REASON.IDLE, REASON.TURN, REASON.REPLY_TIMEOUT,
+    REASON.REC_FAILED, REASON.REC_HUNG, REASON.REC_LOOP
+  ]);
 
   var OUTSTANDING = {};
   OUTSTANDING[REQUEST_STATE.PENDING] = true;
@@ -61,7 +64,7 @@
       quickEnds: 0, listenAt: null, freshUntil: 0, snap: null,
       // The drafting deadlines as absolute times; their timers may fire late.
       turnAt: null, idleAt: null,
-      reason: null, lost: false,
+      reason: null,
       // After an end that left a send POST unanswered: the end's own cause,
       // and whether the POST's answer may still settle what the reason says.
       cause: null, deliveryOpen: false
@@ -120,39 +123,18 @@
     return ((snap && snap.requests) || []).filter(function (rq) { return rq.session_id === id; });
   }
 
-  function problem(reason, lost) { return { reason: reason, lost: !!lost }; }
-
-  // Whether this page no longer owns the sound slot for `dest`: its grant
-  // is gone, or bound to a registration that is. `proof` is the hub's
-  // refusal of a ticket or a send, {refusal}, or a snapshot, {snapshot}. A
-  // refusal keeps ownership only when it is in OWNERSHIP_KEPT; a refusal
-  // with no words ("") is unknown, so it loses it too. A snapshot loses it
-  // with another epoch (the grant died with that hub process), or the
-  // target absent or at another generation (the hub drops a grant when its
-  // registration goes). Neither, as when no answer came at all, proves
-  // nothing: freshness decides. Decided apart from the reason shown: a
-  // snapshot with voice confirm off and a new generation loses ownership
-  // whatever it says first. A page that lost it never speaks again: a
-  // successor may be listening.
-  function ownershipLost(dest, proof) {
-    if (typeof proof.refusal === "string") return OWNERSHIP_KEPT.indexOf(proof.refusal) === -1;
-    var snap = proof.snapshot;
-    if (!snap) return false;
-    if (snap.epoch !== dest.epoch) return true;
+  // Ends that hold in every phase: the epoch, the switches and the target
+  // (absent, at another generation, unenrolled or unregistered), as the
+  // first REASON that holds for `dest` in snapshot `snap`, or null when it
+  // is usable. The controller asks the same of every poll while the
+  // closing cue plays.
+  function targetProblem(dest, snap) {
+    if (snap.epoch !== dest.epoch) return REASON.EPOCH;
+    if (snap.sends_enabled !== true) return REASON.SENDS_OFF;
+    if (snap.voice_confirm_enabled !== true) return REASON.VOICE_OFF;
+    if (snap.lock_store_error) return REASON.LOCK_STORE;
     var t = findTarget(snap, dest.session_id);
-    return !t || t.generation !== dest.generation;
-  }
-
-  // Ends that hold in every phase: the target, the epoch and the switches.
-  // The reason shown is the first that holds; `lost` is ownershipLost's.
-  function targetProblem(c, snap) {
-    var lost = ownershipLost(c.dest, { snapshot: snap });
-    if (snap.epoch !== c.dest.epoch) return problem(REASON.EPOCH, lost);
-    if (snap.sends_enabled !== true) return problem(REASON.SENDS_OFF, lost);
-    if (snap.voice_confirm_enabled !== true) return problem(REASON.VOICE_OFF, lost);
-    if (snap.lock_store_error) return problem(REASON.LOCK_STORE, lost);
-    var t = findTarget(snap, c.dest.session_id);
-    if (lost || t.enrolled !== true || !USABLE[t.registration]) return problem(REASON.TARGET, lost);
+    if (!t || t.generation !== dest.generation || t.enrolled !== true || !USABLE[t.registration]) return REASON.TARGET;
     return null;
   }
 
@@ -161,12 +143,12 @@
   // controller for every event), the target available, and the turn's
   // absolute deadlines not passed, whether or not their timers have run.
   function admissionProblem(c, ev) {
-    if (!fresh(c, ev.now)) return problem(REASON.HUB_LOST, true);
-    if (!ev.voice) return problem(REASON.NO_VOICE);
-    var why = targetProblem(c, c.snap);
+    if (!fresh(c, ev.now)) return REASON.HUB_LOST;
+    if (!ev.voice) return REASON.NO_VOICE;
+    var why = targetProblem(c.dest, c.snap);
     if (why) return why;
-    if (c.turnAt !== null && ev.now >= c.turnAt) return problem(REASON.TURN);
-    if (c.idleAt !== null && ev.now >= c.idleAt) return problem(REASON.IDLE);
+    if (c.turnAt !== null && ev.now >= c.turnAt) return REASON.TURN;
+    if (c.idleAt !== null && ev.now >= c.idleAt) return REASON.IDLE;
     return null;
   }
 
@@ -219,25 +201,25 @@
   function clearTimer(name) { return { fx: FX.CLEAR_TIMER, name: name }; }
 
   // The controller's END effect tears down every effect; the reducer only
-  // forgets what the conversation held.
-  // `lost`: the grant is gone; `silent`: the page is leaving. Either way the
-  // controller speaks no closing cue.
+  // forgets what the conversation held. `reason` is a REASON, shown with
+  // its `detail` if any; the effect's `cue` is whether it is a SPOKEN_ENDS
+  // reason, the only ends the controller may speak.
   // An end that abandons a send POST issued and never answered says so
   // after its cause, the prompt may have been delivered, until that POST's
   // own answer settles it (settleDelivery).
-  function finish(c, fx, reason, lost, silent) {
-    c.cause = reason;
+  function finish(c, fx, reason, detail) {
+    var shown = withDetail(reason, detail);
+    c.cause = shown;
     c.deliveryOpen = c.phase === PHASE.SENDING && c.posted && reason !== REASON.UNKNOWN;
-    if (c.deliveryOpen) reason = reason + "; " + REASON.UNKNOWN;
+    if (c.deliveryOpen) shown = shown + "; " + REASON.UNKNOWN;
     c.posted = false;
     c.phase = PHASE.ENDED;
-    c.reason = reason;
-    c.lost = !!lost;
+    c.reason = shown;
     c.draft = "";
     c.frozenText = null;
     c.pendingReply = null;
     c.guardFor = null;
-    fx.push({ fx: FX.END, reason: reason, lost: !!lost, silent: !!silent });
+    fx.push({ fx: FX.END, reason: shown, cue: SPOKEN_ENDS.indexOf(reason) !== -1 });
   }
 
   // Every mic opening: only while admissionProblem finds nothing, and never
@@ -246,7 +228,7 @@
   // listening between recognizers).
   function toListening(c, ev, fx, newTurn) {
     var why = admissionProblem(c, ev);
-    if (why) return finish(c, fx, why.reason, why.lost);
+    if (why) return finish(c, fx, why);
     var wait = ev.quietAt + LIMITS.GUARD_MS - ev.now;
     if (wait > 0) {
       c.guardFor = newTurn ? "turn" : "resume";
@@ -345,8 +327,8 @@
   }
 
   function recheck(c, fx) {
-    var why = targetProblem(c, c.snap);
-    if (why) return finish(c, fx, why.reason, why.lost);
+    var why = targetProblem(c.dest, c.snap);
+    if (why) return finish(c, fx, why);
     // Until the start's snapshot is taken there is no history to compare
     // with. Only while the POST itself is unresolved do the request and lock
     // checks wait, with what they saw kept; before it, the ticket fetch
@@ -363,8 +345,8 @@
     if (c.phase !== PHASE.STARTING || c.historyTaken) return;
     var snap = ev.snapshot;
     if (newer(c, snap)) c.snap = snap;
-    var why = targetProblem(c, snap);
-    if (why) return finish(c, fx, why.reason, why.lost);
+    var why = targetProblem(c.dest, snap);
+    if (why) return finish(c, fx, why);
     var t = findTarget(snap, c.dest.session_id);
     var mine = requestsFor(snap, c.dest.session_id);
     if (t.lock || mine.some(function (rq) { return OUTSTANDING[rq.state]; })) return finish(c, fx, REASON.BUSY);
@@ -383,14 +365,14 @@
   function onGrant(c, fx, ev) {
     if (c.phase !== PHASE.STARTING) return;
     c.freshUntil = ev.startedAt + LIMITS.FRESH_MS;
-    if (!fresh(c, ev.now)) return finish(c, fx, REASON.HUB_LOST, true);
+    if (!fresh(c, ev.now)) return finish(c, fx, REASON.HUB_LOST);
     fx.push(timer(TIMER.TICK, LIMITS.TICK_MS));
     var ctx = ev.ctx || {};
     if (ctx.selectedId !== c.dest.session_id) return finish(c, fx, REASON.RETARGET);
     if (!ctx.visible) return finish(c, fx, REASON.HIDDEN);
     if (!ev.voice) return finish(c, fx, REASON.NO_VOICE);
-    var why = targetProblem(c, c.snap);
-    if (why) return finish(c, fx, why.reason, why.lost);
+    var why = targetProblem(c.dest, c.snap);
+    if (why) return finish(c, fx, why);
     if (foreign(c, c.snap)) return finish(c, fx, REASON.BUSY);
     toListening(c, ev, fx, true);
   }
@@ -399,7 +381,7 @@
     if (c.phase !== PHASE.LISTENING) return;
     if (!ev.final) { fx.push({ fx: FX.INTERIM, text: String(ev.text || "") }); return; }
     var why = admissionProblem(c, ev);
-    if (why) return finish(c, fx, why.reason, why.lost);
+    if (why) return finish(c, fx, why);
     c.quickEnds = 0;
     c.idleAt = ev.now + LIMITS.IDLE_MS;
     fx.push({ fx: FX.INTERIM, text: "" }, timer(TIMER.IDLE, LIMITS.IDLE_MS));
@@ -452,7 +434,7 @@
   // A no-speech error is not a failure: its `end` brings the restart.
   function onRecError(c, fx, ev) {
     if (c.phase !== PHASE.LISTENING || ev.error === "no-speech") return;
-    finish(c, fx, withDetail(REASON.REC_FAILED, ev.error));
+    finish(c, fx, REASON.REC_FAILED, ev.error);
   }
 
   function onRecStartFailed(c, fx) {
@@ -520,7 +502,7 @@
 
   function onTick(c, fx, ev) {
     if (c.freshUntil === 0) return;
-    if (!fresh(c, ev.now)) return finish(c, fx, REASON.HUB_LOST, true);
+    if (!fresh(c, ev.now)) return finish(c, fx, REASON.HUB_LOST);
     fx.push(timer(TIMER.TICK, LIMITS.TICK_MS));
   }
 
@@ -532,8 +514,8 @@
   }
 
   var HANDLERS = {};
-  HANDLERS[EV.END] = function (c, fx, ev) { finish(c, fx, ev.reason, ev.lost, ev.silent); };
-  HANDLERS[EV.FAIL] = function (c, fx, ev) { if (c.phase === PHASE.STARTING) finish(c, fx, ev.reason, ev.lost); };
+  HANDLERS[EV.END] = function (c, fx, ev) { finish(c, fx, ev.reason, ev.detail); };
+  HANDLERS[EV.FAIL] = function (c, fx, ev) { if (c.phase === PHASE.STARTING) finish(c, fx, ev.reason, ev.detail); };
   HANDLERS[EV.SNAPSHOT_FETCHED] = onStartSnapshot;
   HANDLERS[EV.WAKE_OK] = onWake;
   HANDLERS[EV.GRANT_OK] = onGrant;
@@ -554,13 +536,12 @@
     c.evidence = { requests: {}, locks: {} };
     fx.push({ fx: FX.SEND, ticket: ev.ticket, text: c.frozenText });
   };
-  // A ticket or send that failed before handoff. `ev.reason` is shown;
-  // `ev.refusal`, the hub's own words when it answered with a refusal, is
-  // judged by ownershipLost: unless it keeps ownership, the conversation
-  // ends as lost, with no closing cue.
+  // A ticket or send that failed before handoff: `ev.reason`, the hub's
+  // words or what became of the call, is shown after "not sent", and the
+  // end is silent like every end the hub brings.
   function refused(c, fx, ev) {
     c.posted = false; // answered: nothing was handed off
-    finish(c, fx, withDetail(REASON.NOT_SENT, ev.reason), ownershipLost(c.dest, { refusal: ev.refusal }));
+    finish(c, fx, REASON.NOT_SENT, ev.reason);
   }
 
   HANDLERS[EV.TICKET_FAIL] = function (c, fx, ev) {
@@ -571,11 +552,9 @@
   HANDLERS[EV.SEND_REFUSED] = function (c, fx, ev) {
     if (c.phase === PHASE.SENDING) refused(c, fx, ev);
   };
-  // An answer that leaves delivery open is judged by its refusal like any
-  // other (one the page can't use carries ""); with no answer at all there
-  // is no refusal, and freshness decides.
-  HANDLERS[EV.SEND_UNKNOWN] = function (c, fx, ev) {
-    if (c.phase === PHASE.SENDING) finish(c, fx, REASON.UNKNOWN, ownershipLost(c.dest, { refusal: ev.refusal }));
+  // An answer that leaves delivery open, or none at all: silent too.
+  HANDLERS[EV.SEND_UNKNOWN] = function (c, fx) {
+    if (c.phase === PHASE.SENDING) finish(c, fx, REASON.UNKNOWN);
   };
 
   var SEND_ANSWER = {};
@@ -632,7 +611,7 @@
     if (ev.type !== EV.END && c.freshUntil > 0 && !fresh(c, ev.now)) {
       // The send's own answer, come too late to act on, still says what
       // became of the prompt.
-      finish(c, fx, REASON.HUB_LOST, true);
+      finish(c, fx, REASON.HUB_LOST);
       settleDelivery(c, ev);
       fx.forEach(function (f) { if (f.fx === FX.END) f.reason = c.reason; });
     } else {
@@ -644,8 +623,8 @@
   var api = {
     PHASE: PHASE, CONFIRM: CONFIRM, REQUEST_STATE: REQUEST_STATE, REGISTRATION: REGISTRATION,
     LIMITS: LIMITS, TIMER: TIMER, SAY: SAY, FX: FX, EV: EV, COMMAND: COMMAND, CUE: CUE, REASON: REASON,
-    BLOCKER: BLOCKER, SPEECH_DEADLINE_FACTOR: SPEECH_DEADLINE_FACTOR, OWNERSHIP_KEPT: OWNERSHIP_KEPT,
-    GRANT_ID: GRANT_ID, ownershipLost: ownershipLost,
+    BLOCKER: BLOCKER, SPEECH_DEADLINE_FACTOR: SPEECH_DEADLINE_FACTOR, SPOKEN_ENDS: SPOKEN_ENDS,
+    GRANT_ID: GRANT_ID, targetProblem: targetProblem,
     initial: initial, reduce: reduce, active: active, fresh: fresh, renew: renew, withDetail: withDetail,
     startBlocker: startBlocker, currentReply: currentReply, forget: forget,
     command: command, appendDraft: appendDraft, draftProblem: draftProblem, estimateMs: estimateMs

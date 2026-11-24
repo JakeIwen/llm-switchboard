@@ -218,6 +218,7 @@
           try { applyState(r.data, startSeq); } catch (e) { pageFault(e); }
           once();
         } else {
+          conv.pollUnusable();
           retry();
         }
       }, function () {

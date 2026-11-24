@@ -356,7 +356,7 @@ test("freshness is checked before every mic opening and every final result", () 
   m.now += LIMITS.FRESH_MS + 1;
   say(m, "hello");
   ended(m, REASON.HUB_LOST);
-  assert.equal(m.c().lost, true);
+  assert.ok(has(m.fx, FX.END, { cue: false }));
 
   const n = listening();
   n.now += LIMITS.FRESH_MS + 1;
@@ -392,7 +392,7 @@ test("past the freshness deadline no event acts or renews, before the tick has r
     late(m);
     act(m);
     ended(m, REASON.HUB_LOST);
-    assert.equal(m.c().lost, true, name);
+    assert.ok(has(m.fx, FX.END, { cue: false }), name);
     assert.ok(!m.fx.some((f) => f.fx === FX.LISTEN || f.fx === FX.SAY || f.fx === FX.TICKET), name);
   }
   // A ticket or send answer after the deadline posts and speaks nothing.
@@ -412,7 +412,7 @@ test("past the freshness deadline no event acts or renews, before the tick has r
   // Handed off, but the conversation won't follow it: the session says what
   // happened, and the reason says the prompt reached it.
   ended(s, REASON.HUB_LOST + "; " + REASON.HANDED_OFF);
-  assert.equal(s.c().lost, true);
+  assert.ok(has(s.fx, FX.END, { cue: false }));
   assert.ok(!has(s.fx, FX.SAY));
   const n = listening();
   say(n, "x");
@@ -505,7 +505,7 @@ test("every mic opening and final rechecks the voice and the target, enrolled in
   const e = listening();
   e.ev(EV.SNAPSHOT, { snapshot: snap({ version: 2, targets: [target({ enrolled: false })] }) });
   ended(e, REASON.TARGET);
-  assert.equal(e.c().lost, false);
+  assert.ok(has(e.fx, FX.END, { cue: false }));
   const s = machine();
   s.ev(EV.START, { dest: DEST });
   s.ev(EV.SNAPSHOT_FETCHED, { snapshot: snap({ targets: [target({ enrolled: false })] }) });
@@ -622,27 +622,69 @@ test("the end conditions hold while sending, and refusals end it without a retry
   ended(t, L.withDetail(REASON.NOT_SENT, "too many tickets"));
 });
 
-test("a refusal keeps ownership only when it is on the allow-list, whatever event carries it", () => {
-  assert.equal(L.ownershipLost(DEST, { refusal: "busy" }), false);
-  assert.equal(L.ownershipLost(DEST, { refusal: "never heard of it" }), true);
-  assert.equal(L.ownershipLost(DEST, { refusal: "" }), true);
-  assert.equal(L.ownershipLost(DEST, {}), false);
-  for (const type of [EV.TICKET_FAIL, EV.SEND_REFUSED, EV.SEND_UNKNOWN]) {
-    for (const [fields, lost] of [
-      [{ reason: "busy", refusal: "busy" }, false],
-      [{ reason: "not registered", refusal: "not registered" }, true],
-      [{ reason: "HTTP 502", refusal: "" }, true],
-      // No answer at all carries no refusal.
-      [{ reason: "the hub could not be reached" }, false],
-    ]) {
-      const n = listening();
-      say(n, "x");
-      say(n, "send it");
-      if (type !== EV.TICKET_FAIL) n.ev(EV.TICKET_OK, { ticket: "t" });
-      n.ev(type, fields);
-      assert.equal(n.c().phase, PHASE.ENDED, type);
-      assert.ok(has(n.fx, FX.END, { lost: lost }), type + " " + fields.reason);
+// Which ends may be spoken, over the whole reason vocabulary: only these,
+// the ends the page decides by itself. A reason added to REASON fails here
+// until it is placed on one side.
+const SPOKEN = [REASON.STOPPED, REASON.END_TAPPED, REASON.IDLE, REASON.TURN, REASON.REPLY_TIMEOUT,
+  REASON.REC_FAILED, REASON.REC_HUNG, REASON.REC_LOOP];
+const SILENT = [REASON.HIDDEN, REASON.EXITED, REASON.RETARGET, REASON.UNPAIRED, REASON.WAKE, REASON.NO_WAKE,
+  REASON.NO_VOICE, REASON.HUB_LOST, REASON.GRANT_LOST, REASON.REFUSED, REASON.HUB_UNREACHABLE, REASON.ECHO,
+  REASON.SPEECH, REASON.EPOCH, REASON.TARGET, REASON.SENDS_OFF, REASON.VOICE_OFF, REASON.LOCK_STORE, REASON.BUSY,
+  REASON.FOREIGN, REASON.NOT_SENT, REASON.UNKNOWN, REASON.HANDED_OFF, REASON.NO_REPLY];
+
+test("only the ends the page decides itself may be spoken, over the whole reason vocabulary", () => {
+  assert.deepEqual([...SPOKEN, ...SILENT].sort(), Object.values(REASON).sort());
+  assert.deepEqual([...L.SPOKEN_ENDS].sort(), [...SPOKEN].sort());
+  // Ended through the page's own END event, with and without a detail.
+  for (const reason of Object.values(REASON)) {
+    for (const detail of [undefined, "x"]) {
+      const m = listening();
+      m.ev(EV.END, { reason: reason, detail: detail });
+      ended(m, L.withDetail(reason, detail));
+      assert.ok(has(m.fx, FX.END, { cue: SPOKEN.includes(reason) }), reason);
     }
+  }
+});
+
+test("every end the hub brings is silent, whatever event carries it", () => {
+  const sending = (posted) => {
+    const m = listening();
+    say(m, "x");
+    say(m, "send it");
+    if (posted) m.ev(EV.TICKET_OK, { ticket: "t" });
+    return m;
+  };
+  const cases = [
+    ["a ticket refusal", () => sending(false), (m) => m.ev(EV.TICKET_FAIL, { reason: "busy" })],
+    ["a ticket that never came", () => sending(false), (m) => m.ev(EV.TICKET_FAIL, { reason: "the hub could not be reached" })],
+    ["a send refusal", () => sending(true), (m) => m.ev(EV.SEND_REFUSED, { reason: "busy" })],
+    ["a send answer that settles nothing", () => sending(true), (m) => m.ev(EV.SEND_UNKNOWN, { reason: "HTTP 503" })],
+    ["a send 200 of the wrong shape", () => sending(true), (m) => m.ev(EV.SEND_OK, { request_id: "r1", state: "queued" })],
+    ["a start that failed", () => { const m = machine(); m.ev(EV.START, { dest: DEST }); return m; },
+      (m) => m.ev(EV.FAIL, { reason: REASON.REFUSED, detail: "busy" })],
+    ["unenrolled at the same generation", () => listening(),
+      (m) => m.ev(EV.SNAPSHOT, { snapshot: snap({ version: 2, targets: [target({ enrolled: false })] }) })],
+    ["unregistered", () => listening(),
+      (m) => m.ev(EV.SNAPSHOT, { snapshot: snap({ version: 2, targets: [target({ registration: "none" })] }) })],
+    ["sends off", () => listening(), (m) => m.ev(EV.SNAPSHOT, { snapshot: snap({ version: 2, sends_enabled: false }) })],
+    ["voice confirm off", () => listening(),
+      (m) => m.ev(EV.SNAPSHOT, { snapshot: snap({ version: 2, voice_confirm_enabled: false }) })],
+    ["the lock store failed", () => listening(),
+      (m) => m.ev(EV.SNAPSHOT, { snapshot: snap({ version: 2, lock_store_error: "full" }) })],
+    ["foreign activity", () => listening(),
+      (m) => m.ev(EV.SNAPSHOT, { snapshot: snap({ version: 2, requests: [rq("f1", "pending")] }) })],
+    ["the request ended unknown", () => waiting(listening()),
+      (m) => m.ev(EV.SNAPSHOT, { snapshot: snap({ version: 2, requests: [rq("r1", "unknown")] }) })],
+    ["the request expired", () => waiting(listening()),
+      (m) => m.ev(EV.SNAPSHOT, { snapshot: snap({ version: 2, requests: [rq("r1", "expired")] }) })],
+    ["the request never appeared", () => waiting(listening()), (m) => m.ev(EV.TIMEOUT, { name: TIMER.ACK })],
+    ["freshness lapsed", () => listening(), (m) => { m.now = m.c().freshUntil + 1; m.ev(EV.TICK); }],
+  ];
+  for (const [name, setup, act] of cases) {
+    const m = setup();
+    act(m);
+    assert.equal(m.phase(), PHASE.ENDED, name);
+    assert.ok(has(m.fx, FX.END, { cue: false }), name + " " + JSON.stringify(m.fx));
   }
 });
 
@@ -729,15 +771,16 @@ test("two spoken turns on a target that already had an answered request", () => 
   }
 });
 
-test("an end from the page ends any phase, and a lost grant is marked", () => {
+test("an end from the page ends any phase, and only a spoken end's effect permits the cue", () => {
   const m = listening();
-  m.ev(EV.END, { reason: REASON.GRANT_LOST, lost: true });
+  m.ev(EV.END, { reason: REASON.GRANT_LOST });
   ended(m, REASON.GRANT_LOST);
-  assert.equal(m.c().lost, true);
+  assert.ok(has(m.fx, FX.END, { cue: false }));
   const s = machine();
   s.ev(EV.START, { dest: DEST });
   s.ev(EV.END, { reason: REASON.END_TAPPED });
   ended(s, REASON.END_TAPPED);
+  assert.ok(has(s.fx, FX.END, { cue: true }));
   // A new tap starts afresh.
   assert.deepEqual(s.ev(EV.START, { dest: DEST }), [{ fx: FX.SNAPSHOT }]);
   assert.equal(s.c().reason, null);

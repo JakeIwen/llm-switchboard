@@ -12,7 +12,6 @@ const { PATH } = C;
 
 const { DEST, flush, target, snap, rq, harness, listening, sent, texts, releases } = require("./controller_harness.js");
 
-function failCall(h, path) { h.pending(path)[0].fail(); }
 
 test("a stale callback inside the current turn is dropped", async () => {
   const h = await listening(harness());
@@ -153,7 +152,8 @@ test("a retarget during starting ends it, at the tap or when the grant arrives",
   assert.equal(h.sentinels.length, 0);
 
   // Selection changed without a notice: the grant's own check catches it,
-  // and the page, still holding a fresh grant, says why and then releases it.
+  // and the page, though it holds a fresh grant, shows why and releases it
+  // at once: a retarget is not among the ends the page speaks.
   const g = harness();
   g.ctl.start(DEST);
   await flush();
@@ -162,10 +162,7 @@ test("a retarget during starting ends it, at the tap or when the grant arrives",
   await g.answer(PATH.GRANT, 200, { grant: G.g1 });
   assert.equal(g.view().reason, REASON.RETARGET);
   assert.equal(g.recs.length, 0);
-  assert.deepEqual(texts(g), [CUE.ENDED + ": " + REASON.RETARGET + "."]);
-  assert.deepEqual(releases(g), []);
-  assert.equal(g.ctl.canStart(), false);
-  await g.finish();
+  assert.deepEqual(texts(g), []);
   assert.deepEqual(releases(g), [G.g1]);
 });
 
@@ -212,7 +209,6 @@ test("a late beat success does not renew the grant", async () => {
   assert.equal(h.phase(), PHASE.LISTENING);
   await h.advance(LIMITS.TICK_MS);
   assert.equal(h.view().reason, REASON.HUB_LOST);
-  assert.equal(h.view().lost, true);
   // A page that lost its grant says nothing and still lets go of it.
   assert.equal(h.said.length, 0);
   assert.deepEqual(releases(h), [G.g1]);
@@ -229,7 +225,6 @@ test("a beat success that arrives after the deadline revives nothing", async () 
   second[0].answer(200, { grant: G.g1, expires_in: 15 });
   await flush();
   assert.equal(h.view().reason, REASON.HUB_LOST);
-  assert.equal(h.view().lost, true);
   assert.equal(h.rec().aborts, 1);
   assert.equal(h.said.length, 0);
 });
@@ -329,7 +324,6 @@ test("an end that abandons an unanswered send POST also says delivery is unknown
   assert.equal(h.pending(PATH.SEND).length, 1);
   await h.advance(LIMITS.FRESH_MS + LIMITS.TICK_MS);
   assert.equal(h.view().reason, unknown(REASON.HUB_LOST));
-  assert.equal(h.view().lost, true);
   assert.equal(h.said.length, 0);
   assert.equal(h.all(PATH.SEND).length, 1);
   assert.equal(h.all(PATH.TICKET).length, 1);
@@ -389,20 +383,17 @@ test("the send's own answer, come after the end, settles what the end says about
   assert.equal(f.view().reason, unknown(REASON.HUB_LOST));
   await f.answer(PATH.SEND, 409, { error: "busy" });
   assert.equal(f.view().reason, REASON.HUB_LOST + "; " + L.withDetail(REASON.NOT_SENT, "busy"));
-  assert.equal(f.view().lost, true);
   assert.equal(f.said.length, 0);
   // Past the deadline before the tick has run: the answer itself ends it.
   const s = await out();
   s.t += LIMITS.FRESH_MS + 1;
   await s.answer(PATH.SEND, 200, { request_id: "r1", state: "handed_off" });
   assert.equal(s.view().reason, handedOff(REASON.HUB_LOST));
-  assert.equal(s.view().lost, true);
   assert.equal(s.said.length, 0);
   // A 401 ends it as unpaired, and is itself a definitive refusal.
   const u = await out();
   await u.answer(PATH.SEND, 401, { error: "unauthorized" });
   assert.equal(u.view().reason, REASON.UNPAIRED + "; " + L.withDetail(REASON.NOT_SENT, "unauthorized"));
-  assert.equal(u.view().lost, true);
   assert.equal(u.said.length, 0);
   // An answer that settles nothing leaves it unknown.
   const n = await out();
@@ -418,118 +409,6 @@ test("the send's own answer, come after the end, settles what the end says about
   await g.answer(PATH.SEND, 200, { request_id: "r1", state: "handed_off" });
   assert.equal(g.phase(), PHASE.LISTENING);
   assert.equal(g.view().reason, null);
-});
-
-test("only a refusal that keeps ownership gets a closing cue; any other ends it silently on both paths", async () => {
-  for (const [path, status, error] of [
-    [PATH.SEND, 409, "conversation grant not current"],
-    [PATH.SEND, 409, "conversation grant not for this target"],
-    [PATH.SEND, 409, "stale epoch"],
-    [PATH.TICKET, 409, "stale generation"],
-    [PATH.TICKET, 409, "not registered"],
-    [PATH.TICKET, 409, "ambiguous"],
-    [PATH.SEND, 409, "not registered"],
-    [PATH.SEND, 409, "ambiguous"],
-    [PATH.SEND, 403, "sends off"],
-    // Words the page has never seen, on either path.
-    [PATH.TICKET, 409, "a refusal from a newer hub"],
-    [PATH.SEND, 409, "a refusal from a newer hub"],
-  ]) {
-    const h = await listening(harness());
-    await h.hear("x");
-    await h.hear("send it");
-    if (path === PATH.SEND) await h.answer(PATH.TICKET, 200, { ticket: "t" });
-    await h.answer(path, status, { error: error });
-    assert.equal(h.view().lost, true, error);
-    assert.equal(h.said.length, 0, error);
-    assert.deepEqual(releases(h), [G.g1], error);
-  }
-  // A refusal with no words at all is as unknown as new words.
-  const w = await listening(harness());
-  await w.hear("x");
-  await w.hear("send it");
-  await w.answer(PATH.TICKET, 502, null);
-  assert.equal(w.view().reason, L.withDetail(REASON.NOT_SENT, "HTTP 502"));
-  assert.equal(w.view().lost, true);
-  assert.equal(w.said.length, 0);
-  // A ticket that got no answer proves nothing either way: freshness decides.
-  const n = await listening(harness());
-  await n.hear("x");
-  await n.hear("send it");
-  failCall(n, PATH.TICKET);
-  await flush();
-  assert.equal(n.view().lost, false);
-  assert.deepEqual(texts(n), [CUE.ENDED + ": " + L.withDetail(REASON.NOT_SENT, "the hub could not be reached") + "."]);
-  // A busy ticket, like a busy send below, keeps ownership.
-  const k = await listening(harness());
-  await k.hear("x");
-  await k.hear("send it");
-  await k.answer(PATH.TICKET, 409, { error: "busy" });
-  assert.equal(k.view().lost, false);
-  assert.deepEqual(texts(k), [CUE.ENDED + ": " + L.withDetail(REASON.NOT_SENT, "busy") + "."]);
-  // A poll showing a new epoch or generation: the grant died with it.
-  for (const s of [() => snap({ epoch: "e2" }), () => snap({ targets: [target({ generation: 4 })] })]) {
-    const h = await listening(harness());
-    h.ctl.snapshot(s());
-    await flush();
-    assert.equal(h.view().lost, true);
-    assert.equal(h.said.length, 0);
-    assert.deepEqual(releases(h), [G.g1]);
-  }
-  // A refusal the hub gives only after checking the grant and registration.
-  const b = await listening(harness());
-  await b.hear("x");
-  await b.hear("send it");
-  await b.answer(PATH.TICKET, 200, { ticket: "t" });
-  await b.answer(PATH.SEND, 409, { error: "busy" });
-  assert.equal(b.view().lost, false);
-  assert.deepEqual(texts(b), [CUE.ENDED + ": " + L.withDetail(REASON.NOT_SENT, "busy") + "."]);
-});
-
-test("losing the sound slot is decided apart from the reason shown, and nothing is spoken after it", async () => {
-  // The hub's own handoff refusal for a changed registration.
-  const r = await listening(harness());
-  await r.hear("x");
-  await r.hear("send it");
-  await r.answer(PATH.TICKET, 200, { ticket: "t" });
-  await r.answer(PATH.SEND, 409, { error: "target changed; not sent" });
-  assert.equal(r.view().reason, L.withDetail(REASON.NOT_SENT, "target changed; not sent"));
-  assert.equal(r.view().lost, true);
-  assert.equal(r.said.length, 0);
-  assert.deepEqual(releases(r), [G.g1]);
-
-  for (const [name, s, reason] of [
-    ["the target gone altogether", () => snap({ targets: [] }), REASON.TARGET],
-    ["a new generation with voice confirm off", () => snap({ voice_confirm_enabled: false, targets: [target({ generation: 4 })] }),
-      REASON.VOICE_OFF],
-    ["a new epoch with sends off", () => snap({ epoch: "e2", sends_enabled: false }), REASON.EPOCH],
-  ]) {
-    const h = await listening(harness());
-    await h.hear("half a thought");
-    h.ctl.snapshot(s());
-    await flush();
-    assert.equal(h.view().reason, reason, name);
-    assert.equal(h.view().lost, true, name);
-    assert.equal(h.said.length, 0, name);
-    assert.deepEqual(releases(h), [G.g1], name);
-
-    // The same snapshot during the closing cue cuts it: uncertain, and let go.
-    const g = await listening(harness());
-    await g.hear("stop listening");
-    assert.equal(g.said.length, 1, name);
-    g.ctl.snapshot(s());
-    await flush();
-    assert.equal(g.synth.cancels, 1, name);
-    assert.deepEqual(releases(g), [G.g1], name);
-    assert.equal(g.ctl.canStart(), false, name);
-    assert.equal(g.said.length, 1, name);
-  }
-  // A switch turned off with the registration intact keeps the cue.
-  const v = await listening(harness());
-  v.ctl.snapshot(snap({ voice_confirm_enabled: false }));
-  await flush();
-  assert.equal(v.view().lost, false);
-  assert.deepEqual(texts(v), [CUE.ENDED + ": " + REASON.VOICE_OFF + "."]);
 });
 
 test("an utterance that never ends is cancelled, ends it, and holds Start for the quiet period", async () => {
@@ -586,7 +465,7 @@ test("a target with an answered request completes two spoken turns", async () =>
   assert.deepEqual(texts(h), [CUE.SENT, "Reply r1.", CUE.SENT, "Reply r2."]);
 });
 
-test("new foreign activity during a turn ends it, closes the mic and says why", async () => {
+test("new foreign activity during a turn ends it, closes the mic and shows why, silently", async () => {
   const h = await listening(harness());
   await h.hear("half a thought");
   h.ctl.snapshot(snap({ requests: [rq("r9", "answered", "Someone else.")] }));
@@ -594,8 +473,7 @@ test("new foreign activity during a turn ends it, closes the mic and says why", 
   assert.equal(h.view().reason, REASON.FOREIGN);
   assert.equal(h.view().draft, "");
   assert.equal(h.rec().aborts, 1);
-  assert.deepEqual(texts(h), [CUE.ENDED + ": " + REASON.FOREIGN + "."]);
-  await h.finish();
+  assert.deepEqual(texts(h), []);
   assert.deepEqual(releases(h), [G.g1]);
 });
 

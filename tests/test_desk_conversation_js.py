@@ -20,7 +20,7 @@ from llm_switchboard.desk.locks import LockStore
 from llm_switchboard.desk.model import (
     MAX_TICKETS, MAX_VOICE_TEXT_BYTES, ConfirmMode, DeskError, RegistrationState, RequestState,
 )
-from llm_switchboard.desk.refusals import NOT_SENT, OWNERSHIP_KEPT, Delivery, Ownership, Refusal
+from llm_switchboard.desk.refusals import NOT_SENT, Delivery, Ownership, Refusal
 
 ROOT = Path(__file__).resolve().parents[1]
 STATIC = ROOT / "llm_switchboard" / "desk" / "static"
@@ -35,7 +35,7 @@ process.stdout.write(JSON.stringify({
   paths: C.PATH,
   confirm: L.CONFIRM, request: L.REQUEST_STATE, registration: L.REGISTRATION, limits: L.LIMITS,
   tooLong: L.draftProblem("a".repeat(L.LIMITS.MAX_DRAFT_BYTES + 1)), refusals: D.REFUSALS,
-  ownershipKept: L.OWNERSHIP_KEPT, notSent: A.NOT_SENT, grantId: L.GRANT_ID.source,
+  notSent: A.NOT_SENT, grantId: L.GRANT_ID.source,
 }));
 """
 
@@ -90,10 +90,6 @@ class ConversationMirrorTests(unittest.TestCase):
         self.assertEqual(paths.pop("STATE"), STATE_PATH)
         for name, path in paths.items():
             self.assertIn(path, POST_ROUTES, name)
-
-    def test_the_page_speaks_after_exactly_the_refusals_the_hub_says_keep_ownership(self):
-        self.assertEqual(sorted(self.js["ownershipKept"]), sorted(OWNERSHIP_KEPT))
-        self.assertTrue(OWNERSHIP_KEPT)
 
     def test_refusals_that_end_the_grant_or_registration_do_not_keep_ownership(self):
         for reason in (Refusal.GRANT_NOT_CURRENT, Refusal.GRANT_WRONG_TARGET, Refusal.TARGET_CHANGED,
@@ -217,7 +213,7 @@ def _refused(case: unittest.TestCase, names) -> list[dict]:
         reason = caught.exception.reason
         case.assertIsInstance(reason, Refusal, name)
         cases.append({"name": name, "path": path, "status": caught.exception.status, "reason": str(reason),
-                      "kept": reason in OWNERSHIP_KEPT, "not_sent": path == "ticket" or reason in NOT_SENT})
+                      "not_sent": path == "ticket" or reason in NOT_SENT})
     return cases
 
 
@@ -235,8 +231,7 @@ LATE_SETTLED = ("send, not enrolled", "send, channel identity unusable", "send, 
 
 class HubRefusalOnThePageTests(unittest.TestCase):
     """Each refusal the hub gives the page's ticket or send, fed to the
-    controller: a refusal that keeps ownership ends with the closing cue,
-    and every other ends the conversation as lost, in silence; the reason
+    controller: every one ends the conversation in silence, and the reason
     says "not sent" exactly when the hub's refusal proves it."""
 
     def test_the_page_acts_on_the_hub_s_class_of_each_refusal(self):
@@ -248,12 +243,11 @@ class HubRefusalOnThePageTests(unittest.TestCase):
         self.assertEqual(reasons["send, registration gone at handoff"], Refusal.REQUEST_NOT_PENDING)
         self.assertEqual(reasons["send, not enrolled"], Refusal.NOT_ENROLLED)
         self.assertEqual(reasons["send, channel identity unusable"], Refusal.CHANNEL_IDENTITY_UNUSABLE)
-        self.assertTrue(any(c["kept"] for c in cases) and not all(c["kept"] for c in cases))
         for case, page in zip(cases, _probe(self, cases), strict=True):
             with self.subTest(case["name"], reason=case["reason"]):
                 self.assertEqual(page["phase"], "ended")
-                self.assertEqual(page["lost"], not case["kept"])
-                self.assertEqual(page["cue"], case["kept"])
+                self.assertFalse(page["cue"])
+                self.assertFalse(page["speaking"])
                 self.assertEqual(page["notSent"], case["not_sent"], page["reason"])
                 self.assertEqual(page["unknown"], not case["not_sent"], page["reason"])
 
