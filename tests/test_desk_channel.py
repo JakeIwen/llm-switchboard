@@ -191,7 +191,12 @@ class ChannelServerTest(unittest.TestCase):
     def connected(self, refuse=0):
         hub = self.start_hub(refuse)
         channel = self.start_channel()
-        return hub, channel, hub.next_connection()
+        conn = hub.next_connection()
+        # A reply sent before the channel consumed WELCOME is refused locally; the PONG
+        # shows its link thread has read WELCOME and now serves the connection.
+        conn.send(MessageType.PING)
+        self.assertEqual(conn.receive()[0], MessageType.PONG)
+        return hub, channel, conn
 
     def call_reply(self, channel, rpc_id, arguments):
         return channel.request(rpc_id, "tools/call", {"name": "reply", "arguments": arguments})
