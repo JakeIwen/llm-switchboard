@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 import unittest
 
-from llm_switchboard.desk.refusals import NOT_SENT, OWNERSHIP_KEPT, Delivery, Ownership, Refusal
+from llm_switchboard.desk.refusals import NOT_SENT, Delivery, Refusal
 from llm_switchboard.desk.text_rule import check_text
 
 DESK = Path(__file__).resolve().parents[1] / "llm_switchboard" / "desk"
@@ -105,17 +105,18 @@ class RefusalVocabularyTests(unittest.TestCase):
         self.assertTrue(all(r is None or isinstance(r, Refusal) for r in reasons))
         self.assertGreater(len({r for r in reasons if r is not None}), 3)
 
-    def test_every_refusal_states_its_ownership_class(self):
-        self.assertTrue(all(isinstance(r.ownership, Ownership) for r in Refusal))
-        self.assertEqual(OWNERSHIP_KEPT, {r for r in Refusal if r.ownership is Ownership.INTACT})
+    def test_every_refusal_states_its_delivery_class(self):
         self.assertTrue(all(isinstance(r.delivery, Delivery) for r in Refusal))
         self.assertEqual(NOT_SENT, {r for r in Refusal if r.delivery is Delivery.NOT_SENT})
-        # A member added without its class doesn't import.
+        self.assertIs(Refusal.NOT_FOUND.delivery, Delivery.UNPROVEN)
+        self.assertIs(Refusal.UNAUTHORIZED.delivery, Delivery.NOT_SENT)
+        # A member whose class is not a Delivery doesn't import.
         source = (DESK / "refusals.py").read_text(encoding="utf-8")
-        anchor = '    NOT_FOUND = "not found", Ownership.UNPROVEN\n'
+        anchor = '    NOT_FOUND = "not found"\n'
         self.assertIn(anchor, source)
         with self.assertRaises(TypeError):
-            exec(compile(source.replace(anchor, anchor + '    NEW_REFUSAL = "new refusal"\n'), "refusals.py", "exec"), {})
+            exec(compile(source.replace(anchor, anchor + '    NEW_REFUSAL = "new refusal", "not sent"\n'),
+                         "refusals.py", "exec"), {})
 
     def test_a_refusal_is_its_reason(self):
         self.assertEqual(Refusal.BUSY, "busy")

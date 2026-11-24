@@ -20,7 +20,7 @@ from llm_switchboard.desk.locks import LockStore
 from llm_switchboard.desk.model import (
     MAX_TICKETS, MAX_VOICE_TEXT_BYTES, ConfirmMode, DeskError, RegistrationState, RequestState,
 )
-from llm_switchboard.desk.refusals import NOT_SENT, Delivery, Ownership, Refusal
+from llm_switchboard.desk.refusals import NOT_SENT, Delivery, Refusal
 
 ROOT = Path(__file__).resolve().parents[1]
 STATIC = ROOT / "llm_switchboard" / "desk" / "static"
@@ -90,12 +90,6 @@ class ConversationMirrorTests(unittest.TestCase):
         self.assertEqual(paths.pop("STATE"), STATE_PATH)
         for name, path in paths.items():
             self.assertIn(path, POST_ROUTES, name)
-
-    def test_refusals_that_end_the_grant_or_registration_do_not_keep_ownership(self):
-        for reason in (Refusal.GRANT_NOT_CURRENT, Refusal.GRANT_WRONG_TARGET, Refusal.TARGET_CHANGED,
-                       Refusal.STALE_EPOCH, Refusal.STALE_GENERATION, Refusal.TARGET_CHANGED_NOT_SENT,
-                       Refusal.NOT_REGISTERED, Refusal.AMBIGUOUS, Refusal.NOT_ENROLLED, Refusal.UNAUTHORIZED):
-            self.assertIs(reason.ownership, Ownership.UNPROVEN, reason)
 
     def test_the_voice_flow_reads_not_sent_from_exactly_the_hub_s_delivery_class(self):
         self.assertEqual(sorted(self.js["notSent"]), sorted(NOT_SENT))
