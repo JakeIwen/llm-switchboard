@@ -2,7 +2,7 @@
 "Admission and proof of possession"): the peer's uid, the hello and
 version negotiation, the signer line the hello's host names, the
 challenge and the proof. Publication (step 7, the reread under the links
-lock) is `link_hub.LinkHub`'s.
+lock) is `link_hub.LinkHub`'s, within the same deadline (`Admitted.deadline`).
 
 Nothing here is attributed to a host: the hello's `host` only says which
 signer line to try. Every refusal is a `link_refused` code, counted in
@@ -48,6 +48,9 @@ class Admitted:
     version: int
     # Bytes the peer sent after its proof (a whole-line reader's remainder).
     splitter: LineSplitter
+    # The admission's one deadline from accept, on the hub's clock:
+    # publication (step 7) must also land before it.
+    deadline: float
 
 
 # How a verification's result becomes the refusal the relay sees. A
@@ -71,13 +74,13 @@ class _DeadlineIO:
 
     def __init__(self, sock: socket.socket, deadline: float, clock: Callable[[], float]):
         self._sock = sock
-        self._deadline = deadline
+        self.deadline = deadline
         self._clock = clock
         self.splitter = LineSplitter()
         self._lines: list[bytes] = []
 
     def remaining(self) -> float:
-        remaining = self._deadline - self._clock()
+        remaining = self.deadline - self._clock()
         if remaining <= 0:
             raise AdmissionRefused(RefusedCode.ADMISSION_TIMEOUT)
         return remaining
@@ -152,7 +155,7 @@ def admit(sock: socket.socket, *, epoch: str, signers_path, verifier_available: 
     io.remaining()  # a proof verified after the deadline is not admitted
     if check is not ProofCheck.PROOF_OK:
         raise AdmissionRefused(_PROOF_REFUSALS[check])
-    return Admitted(signer, hello["machine"], version, io.splitter)
+    return Admitted(signer, hello["machine"], version, io.splitter, io.deadline)
 
 
 class AdmissionRefusals:

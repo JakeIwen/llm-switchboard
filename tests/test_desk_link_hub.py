@@ -8,10 +8,12 @@ import os
 import socket
 import threading
 import unittest
+from unittest import mock
 
 from desk_fixtures import SESSION_A, Clock, HubCase, wait_until
 from link_peer import MAC, MAC2, MACHINE, OTHER_MACHINE, LinkHubCase, LinkPeer, fake_signature, write_signers
 
+from llm_switchboard.desk import link_hub
 from llm_switchboard.desk.link_admission import AdmissionRefusals
 from llm_switchboard.desk.link_proof import ProofCheck, Signer, proof_message, verify_proof
 from llm_switchboard.desk.link_protocol import (
@@ -111,6 +113,39 @@ class PublicationTest(LinkHubCase, HubCase):
             self.assertEqual((fields["type"], fields["reason"]), (LinkType.LINK_REFUSED, RefusedCode.NOT_AUTHORIZED))
             self.assertTrue(peer.closed())
             self.assertNotEqual(self.links().get(MAC, {}).get("state"), "up")
+
+
+class PublicationDeadlineTest(LinkHubCase, HubCase):
+    def setUp(self):
+        self.clock = Clock(1000.0)
+        self.link_options = {"clock": self.clock, "tick_seconds": 3600}
+        super().setUp()
+
+    def test_publication_after_admission_deadline_refused(self):
+        # Steps 2 to 7 share one deadline from accept. The publication's
+        # reread under the links lock moves the hub's clock to `at`, standing
+        # for a wait on that lock which ends there: at the deadline nothing
+        # is published; just before it the link is.
+        deadline = self.clock.now + self.hub.links.admission_seconds
+        reread, at = link_hub.read_signers, []
+
+        def waited(path):
+            listed = reread(path)
+            if threading.current_thread().name == "desk-link":
+                self.clock.now = at[-1]
+            return listed
+        with mock.patch.object(link_hub, "read_signers", waited):
+            at.append(deadline)
+            fields = self.link_peer().handshake(lambda _: fake_signature(self.key("mac").signer))
+            self.assertEqual((fields["type"], fields.get("reason")),
+                             (LinkType.LINK_REFUSED.value, RefusedCode.ADMISSION_TIMEOUT))
+            self.assertEqual(self.refusals()[RefusedCode.ADMISSION_TIMEOUT]["count"], 1)
+            self.assertNotEqual(self.links()[MAC]["state"], "up")
+            self.clock.now = 1000.0
+            at.append(deadline - 0.5)
+            fields = self.link_peer().handshake(lambda _: fake_signature(self.key("mac").signer))
+            self.assertEqual(fields["type"], LinkType.LINK_WELCOME.value)
+        self.assertEqual(self.links()[MAC]["state"], "up")
 
 
 class OtherUidTest(LinkHubCase, HubCase):

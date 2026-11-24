@@ -247,8 +247,9 @@ class LinkHub:
 
     def _publish(self, admitted: Admitted, sock: socket.socket) -> LinkSession:
         """Step 7, one hold of the links lock: the signer line still carries
-        the verified blob, the per-host rate, the host cap, replacement,
-        then the new link and its `link_welcome`."""
+        the verified blob, the admission's deadline not passed, the per-host
+        rate, the host cap, replacement, then the new link and its
+        `link_welcome`."""
         host = admitted.signer.host
         with self._lock:
             try:
@@ -257,8 +258,12 @@ class LinkHub:
                 raise AdmissionRefused(RefusedCode.SIGNERS_UNREADABLE) from None
             if listed.get(host) != admitted.signer:
                 raise AdmissionRefused(RefusedCode.NOT_AUTHORIZED)
-            times = self._host_admissions.setdefault(host, deque())
             now = self._clock()
+            # Steps 2 to 7 share one deadline: a wait for the links lock
+            # that outlasts it publishes nothing.
+            if now >= admitted.deadline:
+                raise AdmissionRefused(RefusedCode.ADMISSION_TIMEOUT)
+            times = self._host_admissions.setdefault(host, deque())
             while times and now - times[0] >= _MINUTE:
                 times.popleft()
             if len(times) >= MAX_ADMISSIONS_PER_HOST_PER_MINUTE:
