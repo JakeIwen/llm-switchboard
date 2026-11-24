@@ -385,14 +385,15 @@ class HubRefusalOnThePageTests(unittest.TestCase):
                 self.assertTrue(page["notSent"], page["reason"])
 
     def test_any_refusal_s_words_silence_every_path(self):
-        # Whatever its class, and at the status the hub gives it or any
-        # other: no member's words start a cue on any call, or leave one playing.
+        # Whatever its class, and at the status the hub gives it, a 409 or
+        # a 500: no member's words start a cue on any call, or leave one
+        # playing, and a beat answered with any of them ends the conversation.
         statuses = {}
         for c in _refused(self, HUB_REFUSALS):
             statuses.setdefault(c["reason"], set()).add(c["status"])
         cases = [{"name": f"{path} {mode} {status} {reason}", "path": path, "mode": mode, "status": status,
                   "reason": str(reason)}
-                 for reason in Refusal for status in sorted({409} | statuses.get(reason, set()))
+                 for reason in Refusal for status in sorted({409, 500} | statuses.get(reason, set()))
                  for path in PATHS for mode in MODES]
         for case, page in zip(cases, _probe(self, cases), strict=True):
             with self.subTest(case["name"]):
